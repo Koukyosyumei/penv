@@ -17,6 +17,19 @@ const fn stamp(
 
 const STAMPS: &[TypeStamp<'static>] = &[
     stamp("System.Object", &[]),
+    stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
+    stamp("Hashtable", &[("items", FieldKind::Reference)]),
+    stamp(
+        "Dictionary<string,string>",
+        &[("items", FieldKind::Reference)],
+    ),
+    stamp("Dictionary<int,string>", &[("items", FieldKind::Reference)]),
+    stamp(
+        "ConcurrentDictionary<int,int>",
+        &[("items", FieldKind::Reference)],
+    ),
+    stamp("Queue<int>", &[("items", FieldKind::Reference)]),
+    stamp("HashSet<int>", &[("items", FieldKind::Reference)]),
     stamp("List<int>", &[("items", FieldKind::Reference)]),
     stamp("List<List<int>>", &[("items", FieldKind::Reference)]),
     stamp("List<Box>", &[("items", FieldKind::Reference)]),
@@ -998,3 +1011,199 @@ stamp_modes!(
 );
 stamp_modes!(boxed_identity_plain, boxed_identity_stamped, boxed_identity);
 stamp_modes!(list_with_null_plain, list_with_null_stamped, list_with_null);
+
+fn dictionary(
+    graph: &mut Graph,
+    class: &str,
+    entries: impl IntoIterator<Item = (Value, Value)>,
+) -> ObjectId {
+    list(
+        graph,
+        class,
+        entries
+            .into_iter()
+            .flat_map(|(key, value)| [key, value])
+            .collect(),
+    )
+}
+
+fn dictionary_entries<'a>(
+    graph: &'a Graph,
+    root: ObjectId,
+    class: &str,
+) -> impl Iterator<Item = (&'a Value, &'a Value)> {
+    let items = list_values(graph, root, class);
+    assert_eq!(items.len() % 2, 0);
+    items.chunks_exact(2).map(|entry| (&entry[0], &entry[1]))
+}
+
+fn integer_value(graph: &Graph, item: &Value) -> i64 {
+    let value = match item {
+        Value::Ref(id) => {
+            let object = graph.get(*id).unwrap();
+            let Object::Record { class, .. } = object else {
+                panic!("expected boxed integer")
+            };
+            assert_eq!(class, "System.Int32");
+            &fields(object)[0]
+        }
+        value => value,
+    };
+    let Value::Integer(value) = value else {
+        panic!("expected integer")
+    };
+    *value
+}
+
+fn string_value<'a>(graph: &'a Graph, value: &Value) -> &'a str {
+    let Some(Object::String(text)) = graph.get(reference(value)) else {
+        panic!("expected string")
+    };
+    text
+}
+
+fn integer_dictionary(
+    stamped: bool,
+    class: &str,
+    size: i32,
+    values: impl Fn(i32) -> i32,
+    boxed: bool,
+) {
+    let mut graph = Graph::default();
+    let expected: std::collections::BTreeMap<_, _> = (0..size)
+        .map(|i| (i64::from(i), i64::from(values(i))))
+        .collect();
+    let entries: Vec<_> = (0..size)
+        .map(|i| {
+            if boxed {
+                (
+                    boxed_integer(&mut graph, i),
+                    boxed_integer(&mut graph, values(i)),
+                )
+            } else {
+                (
+                    Value::Integer(i64::from(i)),
+                    Value::Integer(i64::from(values(i))),
+                )
+            }
+        })
+        .collect();
+    let root = dictionary(&mut graph, class, entries);
+    let (reader, root) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let actual: Vec<_> = dictionary_entries(graph, root, class)
+        .map(|(key, value)| (integer_value(graph, key), integer_value(graph, value)))
+        .collect();
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(
+        actual
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        expected
+    );
+}
+
+fn string_dictionary(stamped: bool) {
+    let mut graph = Graph::default();
+    let expected = [("Ball", "Piłka"), ("Cat", "Kot"), ("Line", "Linia")];
+    let entries = expected.map(|(key, value)| {
+        (
+            Value::Ref(graph.insert(string(key))),
+            Value::Ref(graph.insert(string(value))),
+        )
+    });
+    let class = "Dictionary<string,string>";
+    let root = dictionary(&mut graph, class, entries);
+    let (reader, root) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let actual: Vec<_> = dictionary_entries(graph, root, class)
+        .map(|(key, value)| (string_value(graph, key), string_value(graph, value)))
+        .collect();
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(
+        actual
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        expected.into_iter().collect()
+    );
+}
+
+fn dictionary_identity(stamped: bool) {
+    let mut graph = Graph::default();
+    let word = graph.insert(string("Word"));
+    let one = graph.insert(string("One"));
+    let class = "Dictionary<int,string>";
+    let root = dictionary(
+        &mut graph,
+        class,
+        [
+            (Value::Integer(10), Value::Ref(word)),
+            (Value::Integer(20), Value::Ref(one)),
+            (Value::Integer(30), Value::Ref(word)),
+        ],
+    );
+    let (reader, root) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let restored: Vec<_> = dictionary_entries(graph, root, class).collect();
+    assert_eq!(restored.len(), 3);
+    let by_key: std::collections::BTreeMap<_, _> = restored
+        .into_iter()
+        .map(|(key, value)| (integer_value(graph, key), value))
+        .collect();
+    let values: Vec<_> = by_key
+        .iter()
+        .map(|(&key, value)| (key, string_value(graph, value)))
+        .collect();
+    assert_eq!(values, [(10, "Word"), (20, "One"), (30, "Word")]);
+    assert_eq!(reference(by_key[&10]), reference(by_key[&30]));
+    assert_ne!(reference(by_key[&10]), reference(by_key[&20]));
+}
+
+fn queue_and_set(stamped: bool, queue: bool) {
+    let mut graph = Graph::default();
+    let (class, input) = if queue {
+        ("Queue<int>", [1, 3, 5])
+    } else {
+        ("HashSet<int>", [1, 2, 3])
+    };
+    let root = list(&mut graph, class, input.map(Value::Integer).to_vec());
+    let (reader, root) = deep_clone(&graph, root, stamped);
+    let mut actual: Vec<_> = list_values(reader.graph(), root, class)
+        .iter()
+        .map(|value| integer_value(reader.graph(), value))
+        .collect();
+    if !queue {
+        actual.sort_unstable();
+    }
+    assert_eq!(actual, input);
+}
+
+stamp_modes!(int_dictionary_plain, int_dictionary_stamped, |s| {
+    integer_dictionary(s, "Dictionary<int,int>", 100, |i| i + 1, false)
+});
+stamp_modes!(hashtable_plain, hashtable_stamped, |s| integer_dictionary(
+    s,
+    "Hashtable",
+    100,
+    |i| i + 1,
+    true
+));
+stamp_modes!(
+    concurrent_dictionary_plain,
+    concurrent_dictionary_stamped,
+    |s| integer_dictionary(s, "ConcurrentDictionary<int,int>", 10, |i| 2 * i, false)
+);
+stamp_modes!(
+    string_dictionary_plain,
+    string_dictionary_stamped,
+    string_dictionary
+);
+stamp_modes!(
+    dictionary_identity_plain,
+    dictionary_identity_stamped,
+    dictionary_identity
+);
+stamp_modes!(queue_plain, queue_stamped, |s| queue_and_set(s, true));
+stamp_modes!(hash_set_plain, hash_set_stamped, |s| queue_and_set(
+    s, false
+));

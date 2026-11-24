@@ -794,3 +794,17 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeListOfPrimitives	upstream_nunit::migrant_object_stream::primitive_list_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeListWithNull	upstream_nunit::migrant_object_stream::list_with_null_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeLongListOfPrimitives	upstream_nunit::migrant_object_stream::long_primitive_list_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldPreserveIdentityWithDictionary	upstream_nunit::migrant_object_stream::dictionary_identity_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeConcurrentDictionary	upstream_nunit::migrant_object_stream::concurrent_dictionary_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeDictionaryWithPrimitives	upstream_nunit::migrant_object_stream::int_dictionary_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeDictionaryWithStrings	upstream_nunit::migrant_object_stream::string_dictionary_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeHashSetWithPrimitives	upstream_nunit::migrant_object_stream::hash_set_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeHashtable	upstream_nunit::migrant_object_stream::hashtable_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeQueue	upstream_nunit::migrant_object_stream::queue_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldPreserveIdentityWithDictionary	upstream_nunit::migrant_object_stream::dictionary_identity_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeConcurrentDictionary	upstream_nunit::migrant_object_stream::concurrent_dictionary_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeDictionaryWithPrimitives	upstream_nunit::migrant_object_stream::int_dictionary_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeDictionaryWithStrings	upstream_nunit::migrant_object_stream::string_dictionary_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeHashSetWithPrimitives	upstream_nunit::migrant_object_stream::hash_set_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeHashtable	upstream_nunit::migrant_object_stream::hashtable_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeQueue	upstream_nunit::migrant_object_stream::queue_stamped	new
