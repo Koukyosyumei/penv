@@ -32,6 +32,39 @@ const STAMPS: &[TypeStamp<'static>] = &[
     stamp("Stack", &[("items", FieldKind::Reference)]),
     stamp("Stack<char>", &[("items", FieldKind::Reference)]),
     stamp("System.Char", &[("m_value", FieldKind::Integer)]),
+    stamp(
+        "SimpleDerivedClass",
+        &[
+            ("SimpleBaseClass.BaseField", FieldKind::Integer),
+            (
+                "SimpleDerivedClass.<DerivedField>k__BackingField",
+                FieldKind::Integer,
+            ),
+        ],
+    ),
+    stamp(
+        "SimplerStruct",
+        &[("A", FieldKind::Integer), ("B", FieldKind::Integer)],
+    ),
+    stamp(
+        "SimpleStruct",
+        &[("A", FieldKind::Integer), ("B", FieldKind::Reference)],
+    ),
+    stamp(
+        "ComplexStruct",
+        &[
+            ("A", FieldKind::Integer),
+            ("B.A", FieldKind::Integer),
+            ("B.B", FieldKind::Reference),
+        ],
+    ),
+    stamp(
+        "GenericBox<SimpleStruct>",
+        &[
+            ("Element.A", FieldKind::Integer),
+            ("Element.B", FieldKind::Reference),
+        ],
+    ),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -1468,4 +1501,65 @@ stamp_modes!(nongeneric_stack_plain, nongeneric_stack_stamped, |s| {
 });
 stamp_modes!(generic_stack_plain, generic_stack_stamped, |s| {
     character_stack(s, false)
+});
+
+fn derived_class(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record(
+        "SimpleDerivedClass",
+        vec![Value::Integer(1), Value::Integer(2)],
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let Some(Object::Record { class, fields }) = reader.graph().get(copy) else {
+        panic!("expected a derived object");
+    };
+    assert_eq!(class, "SimpleDerivedClass");
+    assert_eq!(fields[1], Value::Integer(2));
+    assert_eq!(fields[0], Value::Integer(1));
+}
+
+fn simpler_struct(stamped: bool) {
+    let mut graph = Graph::default();
+    let input = record(
+        "SimplerStruct",
+        vec![Value::Integer(1_234_567), Value::Integer(543)],
+    );
+    let root = graph.insert(input.clone());
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(reader.graph().get(copy), Some(&input));
+}
+
+fn struct_with_string(stamped: bool, class_name: &str, integers: &[i64]) {
+    let mut graph = Graph::default();
+    let text = graph.insert(string("allman"));
+    let mut values: Vec<_> = integers.iter().copied().map(Value::Integer).collect();
+    values.push(Value::Ref(text));
+    let root = graph.insert(record(class_name, values));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let Some(Object::Record { class, fields }) = reader.graph().get(copy) else {
+        panic!("expected typed record");
+    };
+    assert_eq!(class, class_name);
+    let (text, fields) = fields.split_last().unwrap();
+    assert_eq!(
+        fields,
+        integers
+            .iter()
+            .copied()
+            .map(Value::Integer)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(string_value(reader.graph(), text), "allman");
+}
+
+stamp_modes!(derived_class_plain, derived_class_stamped, derived_class);
+stamp_modes!(simpler_struct_plain, simpler_struct_stamped, simpler_struct);
+stamp_modes!(simple_struct_plain, simple_struct_stamped, |s| {
+    struct_with_string(s, "SimpleStruct", &[5])
+});
+stamp_modes!(complex_struct_plain, complex_struct_stamped, |s| {
+    struct_with_string(s, "ComplexStruct", &[6, 5])
+});
+stamp_modes!(struct_in_class_plain, struct_in_class_stamped, |s| {
+    struct_with_string(s, "GenericBox<SimpleStruct>", &[1])
 });

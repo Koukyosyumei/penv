@@ -903,3 +903,13 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeSimpleEnum	upstream_nunit::migrant_object_stream::simple_enum_stamped	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializableMappedSegmentTests.ShouldSerializeWhenNotTouched	upstream_nunit::serializable_mapped_segment::should_serialize_when_not_touched	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializableMappedSegmentTests.ShouldSerializeWhenTouched	upstream_nunit::serializable_mapped_segment::should_serialize_when_touched	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeComplexStruct	upstream_nunit::migrant_object_stream::complex_struct_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeSimplerStruct	upstream_nunit::migrant_object_stream::simpler_struct_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeSimpleStruct	upstream_nunit::migrant_object_stream::simple_struct_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeStructInClass	upstream_nunit::migrant_object_stream::struct_in_class_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeWithInheritance	upstream_nunit::migrant_object_stream::derived_class_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeComplexStruct	upstream_nunit::migrant_object_stream::complex_struct_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeSimplerStruct	upstream_nunit::migrant_object_stream::simpler_struct_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeSimpleStruct	upstream_nunit::migrant_object_stream::simple_struct_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeStructInClass	upstream_nunit::migrant_object_stream::struct_in_class_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeWithInheritance	upstream_nunit::migrant_object_stream::derived_class_stamped	new
