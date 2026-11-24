@@ -1,3 +1,4 @@
+use crate::migrant::delegate;
 use crate::migrant::generated_record::{generated_record, Codec};
 use crate::migrant::object_stream::{
     FieldInitializer, FieldKind, Graph, LateRecordHook, NativeResource, NonSerializableResource,
@@ -18,6 +19,33 @@ const fn stamp(
 }
 
 const STAMPS: &[TypeStamp<'static>] = &[
+    stamp(
+        "DelegateEntry",
+        &[
+            ("method", FieldKind::Reference),
+            ("target", FieldKind::Reference),
+        ],
+    ),
+    stamp("ClassWithEvent", &[("Event", FieldKind::Reference)]),
+    stamp(
+        "CompanionToClassWithEvent",
+        &[("Counter", FieldKind::Integer)],
+    ),
+    stamp(
+        "EventPair",
+        &[
+            ("first", FieldKind::Reference),
+            ("second", FieldKind::Reference),
+        ],
+    ),
+    stamp(
+        "EventTriple",
+        &[
+            ("first", FieldKind::Reference),
+            ("second", FieldKind::Reference),
+            ("third", FieldKind::Reference),
+        ],
+    ),
     stamp("SimpleEnum", &[("value__", FieldKind::Integer)]),
     stamp("EnumByte", &[("value__", FieldKind::Integer)]),
     stamp("EnumLong", &[("value__", FieldKind::Integer)]),
@@ -329,6 +357,11 @@ fn clone_using_methods(
 }
 
 const GRAPH_CODECS: &[Codec] = &[
+    generated_record!(delegate::ENTRY; method: reference, target: reference),
+    generated_record!("ClassWithEvent"; event: reference),
+    generated_record!("CompanionToClassWithEvent"; counter: integer),
+    generated_record!("EventPair"; first: reference, second: reference),
+    generated_record!("EventTriple"; first: reference, second: reference, third: reference),
     generated_record!("System.Object";),
     generated_record!("SimpleClass"; value: integer, string: reference),
     generated_record!("CyclicRef"; another: reference, value: integer),
@@ -3211,4 +3244,113 @@ mod serial_transient_derived {
 
     configurations!(ordinary, omit_transient_derived);
     user_configurations!(as_user_object, omit_transient_derived);
+}
+
+const EVENT_TRANSIENTS: Transients<'static> = Transients {
+    classes: &["TransientClassWithMethod"],
+    base_classes: &[],
+    fields: &[],
+};
+
+fn invoke_event(graph: &mut Graph, event: ObjectId) {
+    const HANDLERS: &[(&str, delegate::Callback)] =
+        &[("CompanionToClassWithEvent.Method", |graph, id| {
+            let Some(Object::Record { class, fields }) = graph.get_mut(id) else {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            };
+            let [Value::Integer(count)] = fields.as_mut_slice() else {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            };
+            assert_eq!(class, "CompanionToClassWithEvent");
+            *count += 1;
+            Ok(())
+        })];
+    let list = reference(&fields(graph.get(event).unwrap())[0]);
+    delegate::invoke(graph, list, HANDLERS).unwrap();
+}
+
+fn event_with_companions(methods: GraphMethods, count: usize) {
+    let mut graph = Graph::default();
+    let method = graph.insert(string("CompanionToClassWithEvent.Method"));
+    let companions: Vec<_> = (0..count)
+        .map(|_| graph.insert(record("CompanionToClassWithEvent", vec![Value::Integer(0)])))
+        .collect();
+    let entries = companions
+        .iter()
+        .map(|&target| delegate::bind(&mut graph, method, target))
+        .collect();
+    let list = graph.insert(Object::Array(entries));
+    let event = graph.insert(record("ClassWithEvent", vec![Value::Ref(list)]));
+    let tuple = graph.insert(record(
+        if count == 1 {
+            "EventPair"
+        } else {
+            "EventTriple"
+        },
+        std::iter::once(event)
+            .chain(companions)
+            .map(Value::Ref)
+            .collect(),
+    ));
+    let (reader, tuple) = methods.clone(&graph, tuple);
+    let mut graph = reader.finish_into_graph().unwrap();
+    let event = reference(&fields(graph.get(tuple).unwrap())[0]);
+    invoke_event(&mut graph, event);
+    for companion in &fields(graph.get(tuple).unwrap())[1..] {
+        assert_eq!(
+            fields(graph.get(reference(companion)).unwrap()),
+            [Value::Integer(1)]
+        );
+    }
+}
+
+fn event_with_transient(methods: GraphMethods, with_survivor: bool) {
+    let mut graph = Graph::default();
+    let transient = graph.insert(record("TransientClassWithMethod", vec![Value::Integer(1)]));
+    let transient_method = graph.insert(string("TransientClassWithMethod.Method"));
+    let mut entries = Vec::new();
+    if with_survivor {
+        let companion = graph.insert(record("CompanionToClassWithEvent", vec![Value::Integer(0)]));
+        let method = graph.insert(string("CompanionToClassWithEvent.Method"));
+        entries.push(delegate::bind(&mut graph, method, companion));
+    }
+    entries.push(delegate::bind(&mut graph, transient_method, transient));
+    let list = graph.insert(Object::Array(entries));
+    let event = graph.insert(record("ClassWithEvent", vec![Value::Ref(list)]));
+    let (reader, copy) = methods.clone_with_hooks(&graph, event, Some(&EVENT_TRANSIENTS), &[]);
+    let mut graph = reader.finish_into_graph().unwrap();
+    if with_survivor {
+        invoke_event(&mut graph, copy);
+    } else {
+        let list = reference(&fields(graph.get(copy).unwrap())[0]);
+        for entry in array_values(&graph, list) {
+            assert_eq!(fields(graph.get(reference(entry)).unwrap())[1], Value::Null);
+        }
+    }
+}
+
+macro_rules! event_configs {
+    ($module:ident, $case:expr) => {
+        mod $module {
+            use super::*;
+            #[test]
+            fn reflection_reflection_plain() {
+                ($case)(false.into());
+            }
+            #[test]
+            fn reflection_reflection_stamped() {
+                ($case)(true.into());
+            }
+            configurations!(ordinary, $case);
+            user_configurations!(as_user_object, $case);
+        }
+    };
+}
+
+mod serial_events {
+    use super::*;
+    event_configs!(single, |m| event_with_companions(m, 1));
+    event_configs!(multicast, |m| event_with_companions(m, 2));
+    event_configs!(transient, |m| event_with_transient(m, true));
+    event_configs!(empty, |m| event_with_transient(m, false));
 }

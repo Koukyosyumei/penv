@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,793 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,857 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 603 |
+| 移植待ち | 539 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -395,3 +395,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 `Hashtable` の100組を、ボックス化したキー・値、空バケット、負荷係数と更新状態を持つ内部表現で移植した。新規8件すべてが対象実行で合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-hashtable.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-hashtable.log)
 
 `ConcurrentDictionary<int,int>` の10組を、テーブル、バケット、ノード、ロック配列、ロック別カウンターを持つ内部表現で復元した。テスト環境に依存しないようロックは4個に固定した。対象実行で8件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-concurrent-dictionary.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-concurrent-dictionary.log)
+
+イベントの単独・複数購読、transient な購読先を含むイベント、および有効な購読先が残らないイベントの4メソッドを各16構成で移植した。Rust では登録済みコールバックを名前で解決し、復元された購読先を購読順に呼び出す。transient な購読先の参照は `null` として復元し、呼び出し対象から除外する。対象実行で64件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-events.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-events.log)

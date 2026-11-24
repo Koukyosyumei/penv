@@ -1292,7 +1292,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
         })
     }
 
-    pub(super) fn finish_into_graph(self) -> io::Result<Graph> {
+    pub(crate) fn finish_into_graph(self) -> io::Result<Graph> {
         self.data.finish()?;
         Ok(self.graph)
     }
