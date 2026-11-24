@@ -256,7 +256,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise Unsupported("unknown log level")
         flags = ""
         if self.rust_monitor:
-            mode = "start" if starts else "no-start" if self.started else "buffered"
+            mode = "start" if starts else "no-start"
             flags = f" {mode}" + (" pause" if pause else " continue")
         result = self.operation(
             f"{command} {timeout} {kind} {keep} {level} {pattern.encode().hex() or '-'}{flags}")
@@ -376,7 +376,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     if reply == "OK":
                         return value
                     return self.operation(command, assertion=True)
-                if (re.fullmatch(r"emulation\s+GetTimeSourceInfo", command)
+                if (re.fullmatch(r"emulation\s+(?:GetTimeSourceInfo|IsStarted)", command)
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)):
                     return self.operation(command, assertion=True)
                 self.commands.append(command)
@@ -796,7 +796,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if self.rust_monitor:
             allowed.update(("defaultWaitForEcho", "endLineOption", "defaultMatchNextLine", "binaryMode"))
         options = self.log_options(args, allowed, ("timeout",))
-        pause = self.uart_bool_option(options, "defaultPauseEmulation") if self.rust_monitor else ""
+        pause = self.uart_bool_option(options, "defaultPauseEmulation")
+        if not self.rust_monitor:
+            pause = ""
         timeout = self.duration(options.get("timeout", self.timeout))
         deadline = f" timeout={timeout}" if self.rust_monitor and "timeout" in options else ""
         echo = ""

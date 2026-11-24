@@ -206,7 +206,7 @@ pub(crate) fn handle(
             options @ ..,
         ] => Some((|| {
             let (mode, pause) = match options {
-                [] => ("no-start", false),
+                [] => ("legacy", false),
                 [mode @ ("start" | "no-start" | "buffered"), pause @ ("pause" | "continue")] =>
                     (*mode, *pause == "pause"),
                 _ => return Err("expected log wait options: start|no-start|buffered pause|continue".into()),
@@ -254,11 +254,11 @@ pub(crate) fn handle(
             let limit = steps.min(budget);
             let mut found = find(keep);
             let mut stop = Stop::Limit;
-            if found.is_none() && limit != 0 && mode == "buffered" {
+            if found.is_none() && limit != 0 && (mode == "buffered" || (mode == "no-start" && !machine.monitor_is_active())) {
                 stop = Stop::Paused;
             } else if found.is_none() && limit != 0 {
                 if mode == "start" {
-                    machine.primary.monitor_paused = false;
+                    machine.set_monitor_active(true);
                 }
                 let revision = || {
                     CAPTURE.with_borrow(|capture| {
@@ -272,7 +272,7 @@ pub(crate) fn handle(
                 })?;
                 found = find(keep);
                 if pause && (found.is_some() || (stop == Stop::Limit && limit == steps)) {
-                    machine.primary.monitor_paused = true;
+                    machine.set_monitor_active(false);
                 }
             }
             let dropped =

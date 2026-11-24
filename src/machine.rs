@@ -127,6 +127,7 @@ impl PcTrace {
 pub struct Machine {
     pub(crate) cpu_less: bool,
     pub(crate) empty_monitor: bool,
+    monitor_active: bool,
     pub bus: Bus,
     pub primary: Hart,
     pub function_symbols: Option<BTreeMap<u32, String>>,
@@ -422,6 +423,7 @@ impl Machine {
             monitor_clock_step: 0,
             cpu_less: false,
             empty_monitor: false,
+            monitor_active: false,
             boot_memory_cleared: false,
             monitor_firmware: None,
             monitor_quantum: DEFAULT_MONITOR_QUANTUM,
@@ -1045,7 +1047,17 @@ impl Machine {
         Ok(())
     }
 
+    pub(crate) fn set_monitor_active(&mut self, active: bool) {
+        self.monitor_active = active;
+        self.primary.monitor_paused = !active;
+    }
+
+    pub(crate) fn monitor_is_active(&self) -> bool {
+        self.monitor_active && !self.primary.monitor_paused
+    }
+
     fn reset_monitor_time(&mut self, steps: u64, quantum: u64) {
+        self.monitor_active = false;
         self.time_source = TimeSource::default();
         self.time_source.grant_until(steps);
         self.elapsed_steps = steps;

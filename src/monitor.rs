@@ -54,6 +54,7 @@ pub struct Boot {
     pub monitor_output: Vec<String>,
     pub console_only: bool,
     pub empty_machine: bool,
+    pub initial_start: bool,
     pub cpu_registers: Vec<CpuRegisterCommand>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
@@ -351,6 +352,7 @@ enum Action {
     IlluminanceFeed(String, PathBuf),
     RunRemaining,
     TimeSourceInfo,
+    EmulationIsStarted,
     PhyRegister(String, u16),
     AdxlAxis(String, usize, i16),
     LiteXLedState(String),
@@ -546,7 +548,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
-                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::EmulationIsStarted | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -709,6 +711,10 @@ fn run_commands<'a>(
                 }
                 mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, output.output).map(|()| None)
             }
+            Action::EmulationIsStarted => {
+                writeln!(output.reply(), "{}", if machine.monitor_is_active() { "True" } else { "False" })
+                    .map(|()| None).map_err(|error| error.to_string())
+            }
             Action::TimeSourceInfo => {
                 writeln!(output.reply(), "Elapsed Virtual Time: {}\nQuantum: {}",
                     monitor_timestamp(machine.monitor_elapsed_ns()),
@@ -737,7 +743,7 @@ fn run_commands<'a>(
                 }
             }
             Action::SetEmulationPaused(paused) => {
-                machine.primary.monitor_paused = *paused;
+                machine.set_monitor_active(!*paused);
                 Ok(None)
             }
             Action::UartIdle(timeout, tester, pause) => {
@@ -801,7 +807,8 @@ fn run_commands<'a>(
                         Ok((result, machine.elapsed_steps().wrapping_sub(start)))
                     });
                     let paused_during_run = machine.primary.monitor_paused;
-                    machine.primary.monitor_paused |= was_paused;
+                    machine.set_monitor_active(false);
+                    machine.primary.monitor_paused = paused_during_run || was_paused;
                     result.map(|((stop, count), used)| {
                         retired += count;
                         budget -= used;
@@ -1591,11 +1598,11 @@ fn wait_for_uart_idle(
     let (id, previous) = machine.bus.uart_activity(tester)?;
     let limit = cycles.min(budget);
     if limit != 0 {
-        machine.primary.monitor_paused = false;
+        machine.set_monitor_active(true);
     }
     let result = run_until_deadline(machine, limit, output, |bus, _| bus.uart_activity_changed(id, previous))?;
     if limit == cycles && result.0 == Stop::Limit && pause.unwrap_or(machine.bus.default_uart_pause) {
-        machine.primary.monitor_paused = true;
+        machine.set_monitor_active(false);
     }
     Ok(result)
 }
@@ -1621,11 +1628,11 @@ fn drive_tester_watch(
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
     if budget != 0 && !machine.bus.stm32_uart_matched(watch) {
-        machine.primary.monitor_paused = false;
+        machine.set_monitor_active(true);
     }
     let result = drive_uart_watch(machine, watch, budget, output)?;
     if pause && result.0 == Stop::OutputMatch {
-        machine.primary.monitor_paused = true;
+        machine.set_monitor_active(false);
     }
     Ok(result)
 }
@@ -1900,7 +1907,7 @@ fn is_console_action(action: &Action) -> bool {
 fn is_empty_machine_action(action: &Action) -> bool {
     is_console_action(action) || matches!(action,
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
-        | Action::TimeSourceInfo | Action::RunFor(_) | Action::RunUntil(_)
+        | Action::TimeSourceInfo | Action::EmulationIsStarted | Action::RunFor(_) | Action::RunUntil(_)
         | Action::RunToSyncPoint | Action::SetQuantum(_) | Action::SetEmulationPaused(_) | Action::SelectMachineZero
         | Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory | Action::DescribeSnapshotPlatform)
 }
@@ -2603,6 +2610,7 @@ fn execute(
             Some(Action::LastLog(count))
         }
         ["emulation", "GetTimeSourceInfo"] => Some(Action::TimeSourceInfo),
+        ["emulation", "IsStarted"] => Some(Action::EmulationIsStarted),
         ["TestMonitorUartIdle", timeout, args @ ..] => {
             let mut tester = None;
             let mut pause = None;
@@ -3432,7 +3440,7 @@ fn execute(
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint
-                        | Action::TimeSourceInfo
+                        | Action::TimeSourceInfo | Action::EmulationIsStarted
                         | Action::DescribeSnapshotPlatform
                         | Action::SaveMemory(..)
                         | Action::ClearMemory
@@ -3751,6 +3759,7 @@ fn execute(
             if boot.has_platform() && (boot.image.is_some() || !boot.binaries.is_empty()) =>
         {
             boot.started = true;
+            boot.initial_start = true;
         }
         ["showAnalyzer", "sysbus.uart" | "uart"] if boot.has_platform() => {
             // UART output is already connected to stdout.

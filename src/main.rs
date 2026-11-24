@@ -1392,6 +1392,7 @@ fn run() -> Result<ExitCode, String> {
     let mut monitor_uart_timeout = None;
     let mut monitor_output = Vec::new();
     let mut empty_monitor_machine = false;
+    let mut initial_monitor_start = false;
     let mut monitor_session = monitor::Session::default();
     let mut _generated_repl = None;
     if monitor_stdio || script.is_some() {
@@ -1521,6 +1522,7 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         empty_monitor_machine = boot.empty_machine;
+        initial_monitor_start = boot.initial_start;
         sd_setup_only = boot.is_sd_setup_only() && boot.image.is_none() && boot.binaries.is_empty();
         if let Some(server) = boot.network.into_tftp()? {
             let file = server.file.input_path(root, asset_dir.as_deref())?;
@@ -2195,6 +2197,9 @@ fn run() -> Result<ExitCode, String> {
         }
     }
     let mut machine = boot_machine()?;
+    if initial_monitor_start {
+        machine.set_monitor_active(true);
+    }
     let command_budget = max_steps.unwrap_or(if machine.cpu_less { u64::MAX } else { 10_000_000 });
     machine.monitor_firmware.clone_from(&path);
     if let Some(quantum) = monitor_quantum {
