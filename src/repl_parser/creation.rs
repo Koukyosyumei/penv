@@ -7,6 +7,9 @@ enum Model {
     Cpu,
     EmptyPeripheral,
     Register,
+    AmbiguousRegister,
+    MockRegistrationPoint,
+    NonPeripheralRegister,
     DependentPeripheral,
     EnumPeripheral,
     CollectionPeripheral,
@@ -101,6 +104,13 @@ impl Model {
             }
             "Antmicro.Renode.UnitTests.Mocks.NullRegister"
             | "Antmicro.Renode.UnitTests.Mocks.MockRegister" => Some(Self::Register),
+            "Antmicro.Renode.UnitTests.Mocks.AmbiguousRegister" => Some(Self::AmbiguousRegister),
+            "Antmicro.Renode.UnitTests.Mocks.MockRegistrationPoint" => {
+                Some(Self::MockRegistrationPoint)
+            }
+            "Antmicro.Renode.UnitTests.Mocks.EmptyInterestingType" => {
+                Some(Self::NonPeripheralRegister)
+            }
             MOCK_CPU => Some(Self::Cpu),
             "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
             "Antmicro.Renode.UnitTests.Mocks.MockExternal" => Some(Self::External),
@@ -431,6 +441,44 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                     if parent != "sysbus" {
                         let target = resolve(&entry.source, parent)
                             .ok_or_else(|| entry.error(&format!("MissingReference: {parent}")))?;
+                        match platform.objects[target].model {
+                            Model::NonPeripheralRegister => {
+                                return Err(entry.error(
+                                    "CastException: registration parent must be a peripheral",
+                                ));
+                            }
+                            Model::AmbiguousRegister
+                                if platform.objects[id].model == Model::EmptyPeripheral =>
+                            {
+                                let diagnosis = match point {
+                                    Some(RegistrationValue::Other(value))
+                                        if number(value).is_ok() =>
+                                    {
+                                        "AmbiguousCtorForRegistrationPoint: both bus and double point accept integer"
+                                    }
+                                    Some(RegistrationValue::Other(value))
+                                        if value.parse::<f64>().is_ok_and(f64::is_finite) =>
+                                    {
+                                        "AmbiguousRegistree: both byte and double-word registration accept double point"
+                                    }
+                                    Some(RegistrationValue::Other(value))
+                                        if resolve(&entry.source, value).is_some_and(
+                                            |target| {
+                                                platform.objects[target].model
+                                                    == Model::MockRegistrationPoint
+                                            },
+                                        ) =>
+                                    {
+                                        "AmbiguousRegistrationPointType: the point implements both supported interfaces"
+                                    }
+                                    _ => {
+                                        "NoUsableRegisterInterface: unsupported registration point"
+                                    }
+                                };
+                                return Err(entry.error(diagnosis));
+                            }
+                            _ => {}
+                        }
                         if platform.objects[target].model != Model::Register || point.is_some() {
                             return Err(entry
                                 .error("NoUsableRegisterInterface: unsupported parent or point"));
@@ -478,7 +526,10 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                                 | Model::EnumPeripheral
                                 | Model::ScalarPeripheral(_)
                                 | Model::CollectionPeripheral => "peripheral",
-                                Model::External => "external",
+                                Model::External
+                                | Model::NonPeripheralRegister
+                                | Model::AmbiguousRegister => "non-peripheral",
+                                Model::MockRegistrationPoint => "mock registration point",
                             };
                             return Err(entry.error(&format!(
                                 "TypeMismatch: {model} is not a registration point"

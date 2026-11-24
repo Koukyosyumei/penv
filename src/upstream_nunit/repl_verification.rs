@@ -1155,3 +1155,45 @@ cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ unregisteredParent
         "RegistrationException",
     );
 }
+
+#[test]
+fn should_fail_on_ambiguous_constructor_for_registration_point() {
+    assert_error(
+        r#"
+register: Antmicro.Renode.UnitTests.Mocks.AmbiguousRegister
+device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ register 1"#,
+        "AmbiguousCtorForRegistrationPoint",
+    );
+}
+
+#[test]
+fn should_fail_on_ambiguous_registration_point() {
+    assert_error(
+        r#"
+register: Antmicro.Renode.UnitTests.Mocks.AmbiguousRegister
+regPoint: Antmicro.Renode.UnitTests.Mocks.MockRegistrationPoint
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ register regPoint"#,
+        "AmbiguousRegistrationPointType",
+    );
+}
+
+#[test]
+fn should_fail_on_ambiguous_registree() {
+    assert_error(
+        r#"
+register: Antmicro.Renode.UnitTests.Mocks.AmbiguousRegister
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ register 2.0"#,
+        "AmbiguousRegistree",
+    );
+}
+
+#[test]
+fn should_fail_on_non_peripheral_register() {
+    assert_error(
+        r#"
+emptyIterestingType: Antmicro.Renode.UnitTests.Mocks.EmptyInterestingType
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ emptyIterestingType
+"#,
+        "CastException",
+    );
+}
