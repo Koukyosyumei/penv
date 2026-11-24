@@ -117,7 +117,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "=" in state:
             state = self.option(state, "state")
         if self.proc or self.script or any(
-                not (self.rust_monitor and cmd.startswith("SetDefaultUartTimeout ")) for cmd in self.commands):
+                not (self.rust_monitor and cmd.startswith(("SetDefaultUartTimeout ", "AttachMonitorLog ")))
+                for cmd in self.commands):
             raise Unsupported("Requires must precede machine operations")
         if state not in self.states:
             raise Unsupported(f"required state {state!r} unavailable")
@@ -207,8 +208,11 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.log_capacity = int(options.get("maxLogEntries", "1000000"))
         if not 1 <= self.log_capacity <= 1000000:
             raise Unsupported("log tester capacity outside supported range")
+        command = f"AttachMonitorLog {self.log_capacity}"
         if self.proc:
-            self.operation(f"AttachMonitorLog {self.log_capacity}")
+            self.operation(command)
+        elif self.rust_monitor:
+            self.commands.append(command)
 
     def wait_for_log(self, pattern, *args):
         positional = ("timeout", "keep", "treatAsRegex", "pauseEmulation", "level", "startEmulation")
@@ -236,6 +240,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise AssertionFailed("Log tester is not available")
         if self.proc:
             self.operation("ClearMonitorLog")
+        elif self.rust_monitor:
+            self.commands.append("ClearMonitorLog")
 
     def check_log(self, command, pattern, args, positional):
         if self.log_timeout is None:
@@ -636,7 +642,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 source = [f"using {json.dumps(str(self.platform))}", *source]
             platform.write_text("\n".join(source) + "\n")
         cmd = [str(self.binary), "run", "--platform-root", str(self.root), "--monitor-stdio"]
-        if self.log_capacity is not None:
+        if not self.rust_monitor and self.log_capacity is not None:
             cmd.extend(["--monitor-log-capacity", str(self.log_capacity)])
         if startup is not None:
             cmd.extend(["--script", "-", "--asset-dir", str(self.assets)])

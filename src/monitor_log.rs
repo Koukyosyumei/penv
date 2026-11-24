@@ -132,6 +132,14 @@ pub(crate) fn set_level(level: i8) {
     });
 }
 
+pub(crate) fn parse_capacity(value: &str) -> Result<usize, String> {
+    let limit = value.parse().map_err(|_| "invalid log capacity")?;
+    if !(1..=1_000_000).contains(&limit) {
+        return Err("log capacity must be between 1 and 1000000".into());
+    }
+    Ok(limit)
+}
+
 pub(crate) fn attach(limit: usize) -> Result<(), String> {
     if limit == 0 || limit > 1_000_000 {
         return Err("log capacity must be between 1 and 1000000".into());
@@ -166,7 +174,7 @@ pub(crate) fn handle(
     let words: Vec<_> = command.split_ascii_whitespace().collect();
     match words.as_slice() {
         ["AttachMonitorLog", limit] => Some((|| {
-            attach(limit.parse().map_err(|_| "invalid log capacity")?)?;
+            attach(parse_capacity(limit)?)?;
             Ok(("OK", String::new()))
         })()),
         ["ClearMonitorLog"] => Some(CAPTURE.with_borrow_mut(|capture| {

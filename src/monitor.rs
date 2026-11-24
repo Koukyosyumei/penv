@@ -48,6 +48,7 @@ pub struct Boot {
     pub use_virtual_elf_addresses: bool,
     pub log_function_names: bool,
     pub monitor_log_level: Option<i8>,
+    pub initial_log_capacity: Option<usize>,
     pub trace_memory: Vec<(String, bool)>,
     pub riscv_wfi_as_nop: Vec<(String, bool)>,
     pub monitor_user_state: Option<String>,
@@ -627,7 +628,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
         && commands.iter().all(|command| {
             matches!(
                 command.action,
-                Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime
+                Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
                     | Action::AssembleBlock(..) | Action::BusScalar(_)
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
@@ -2226,6 +2227,12 @@ fn is_console_action(action: &Action) -> bool {
     matches!(action, Action::ScriptLog(..) | Action::LogLevel(_) | Action::LastLog(_) | Action::Echo(_))
 }
 
+fn is_log_capture_setup(action: &Action) -> bool {
+    matches!(action, Action::MonitorLog(text) if
+        text.split_ascii_whitespace().next().is_some_and(|verb|
+            matches!(verb, "AttachMonitorLog" | "ClearMonitorLog")))
+}
+
 fn is_monitor_snapshot_action(action: &Action) -> bool {
     matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment
         | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..))
@@ -2296,9 +2303,11 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
     }
     // Keep monitor-only state in the same CPU-less backing store in both entry points.
     if !state.machine && !boot.has_platform() && !boot.started
-        && (session || boot.runtime.iter().any(|command| is_monitor_snapshot_action(&command.action)))
+        && (session || boot.runtime.iter().any(|command|
+            is_monitor_snapshot_action(&command.action) || matches!(command.action, Action::MonitorLog(_))))
         && boot.runtime.iter().all(|command|
-            is_console_action(&command.action) || is_monitor_snapshot_action(&command.action))
+            is_console_action(&command.action) || is_monitor_snapshot_action(&command.action)
+                || matches!(command.action, Action::MonitorLog(_)))
     {
         boot.empty_machine = true;
         return Ok(boot);
@@ -2886,6 +2895,10 @@ fn execute(
     match words {
         [] => return Ok(()),
         ["using", "sysbus"] => return Ok(()),
+        ["AttachMonitorLog", capacity] if !*machine && !boot.started && boot.runtime.is_empty() => {
+            boot.initial_log_capacity = Some(crate::monitor_log::parse_capacity(capacity)?);
+            return Ok(());
+        }
         ["SetDefaultUartTimeout", value] if !boot.started && boot.runtime.is_empty() => {
             boot.uart_timeout = Some(duration_steps(resolve(variables, value)?)?);
             return Ok(());
@@ -3879,6 +3892,7 @@ fn execute(
     if let Some(action) = action {
         let empty_machine_command = *machine && !boot.has_platform() && is_empty_machine_action(&action);
         if !empty_machine_command && !is_console_action(&action) && !is_monitor_snapshot_action(&action)
+            && !matches!(action, Action::MonitorLog(_))
             && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
@@ -3924,7 +3938,9 @@ fn execute(
         });
         return Ok(());
     }
-    if boot.started || !boot.runtime.is_empty() {
+    if boot.started || boot.runtime.iter().any(|entry|
+        !is_console_action(&entry.action) && !is_log_capture_setup(&entry.action))
+    {
         if matches!(
             boot.runtime.last().map(|entry| &entry.action),
             Some(Action::RunFor(_))

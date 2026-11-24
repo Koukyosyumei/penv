@@ -1515,6 +1515,9 @@ fn run() -> Result<ExitCode, String> {
                 common
             }
         };
+        if let Some(capacity) = boot.initial_log_capacity {
+            monitor_log::attach(capacity)?;
+        }
         if boot.console_only {
             if path.is_some() {
                 return Err("console-only scripts do not accept a firmware override".into());
