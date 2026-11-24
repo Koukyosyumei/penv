@@ -634,7 +634,8 @@ fn run_commands(
                     _ => Ok(()),
                 };
                 valid_cpu.and_then(|()| {
-                    if machine.primary.monitor_paused {
+                    let was_paused = machine.primary.monitor_paused;
+                    if was_paused && matches!(command.action, Action::CpuStep(..)) {
                         return Ok(None);
                     }
                     let steps = match command.action {
@@ -665,14 +666,17 @@ fn run_commands(
                     };
                     let chunk = steps.min(budget);
                     let start = machine.elapsed_steps();
-                    TimeHandle::run_grant(chunk, |granted| {
+                    machine.primary.monitor_paused = false;
+                    let result = TimeHandle::run_grant(chunk, |granted| {
                         let result = machine.run(granted, &mut output)?;
                         Ok((result, machine.elapsed_steps().wrapping_sub(start)))
-                    })
-                    .map(|((stop, count), used)| {
+                    });
+                    let paused_during_run = machine.primary.monitor_paused;
+                    machine.primary.monitor_paused |= was_paused;
+                    result.map(|((stop, count), used)| {
                         retired += count;
                         budget -= used;
-                        (stop != Stop::Limit || (chunk < steps && !machine.primary.monitor_paused))
+                        (stop != Stop::Limit || (chunk < steps && !paused_during_run))
                             .then_some(stop)
                     })
                 })
