@@ -902,19 +902,16 @@ fn run_commands(
                     }
                 })
             }
-            Action::WaitForLed(target, state, timeout, hold) => wait_for_led(
-                machine,
-                target,
-                *state,
-                *timeout,
-                *hold,
-                &mut budget,
-                &mut output,
-            )
-            .map(|count| {
-                retired += count;
-                None
-            }),
+            Action::WaitForLed(target, state, timeout, hold) => {
+                let rate = machine.bus.monitor_step_hz();
+                let timeout = duration_cycles(*timeout, CORTEX_M_STEP_HZ, rate)?;
+                let hold = duration_cycles(*hold, CORTEX_M_STEP_HZ, rate)?;
+                wait_for_led(machine, target, *state, timeout, hold, &mut budget, &mut output)
+                    .map(|count| {
+                        retired += count;
+                        None
+                    })
+            }
             Action::WriteUartLine(target, text, ending) => machine
                 .external_event(ExternalEvent::UartLine(
                     target.clone(),
@@ -1186,7 +1183,7 @@ fn wait_for_led(
         let start = machine.elapsed_steps();
         let limit = timeout.min(*budget);
         let (stop, count) =
-            machine.run_until(limit, output, |bus, _| bus.gpio_led(index).state == state)?;
+            run_until_deadline(machine, limit, output, |bus, _| bus.gpio_led(index).state == state)?;
         *budget -= machine.elapsed_steps().wrapping_sub(start);
         if stop != Stop::OutputMatch {
             return Err(format!(
@@ -1198,7 +1195,7 @@ fn wait_for_led(
 
     let transitions = machine.bus.gpio_led(index).transitions;
     let limit = hold.min(*budget);
-    let (stop, count) = machine.run_until(limit, output, |bus, _| {
+    let (stop, count) = run_until_deadline(machine, limit, output, |bus, _| {
         bus.gpio_led(index).transitions != transitions
     })?;
     if stop == Stop::OutputMatch {
@@ -3562,6 +3559,13 @@ mod tests {
         assert_eq!(budget, 2);
 
         machine.bus.write(gpio + 0x18, 4, 1, &mut output).unwrap(); // set pin
+        machine.primary.monitor_paused = true;
+        let error =
+            wait_for_led(&mut machine, "led", true, 0, 2, &mut budget, &mut output).unwrap_err();
+        assert!(error.contains("hold ended before completion (Paused)"));
+        assert_eq!(machine.elapsed_steps(), 0);
+        machine.primary.monitor_paused = false;
+
         machine.bus.write(0, 2, 0x6001, &mut output).unwrap(); // str r1, [r0]
         machine.primary.configure_cortex_m(Some(0), false);
         machine.primary.pc = 0;
