@@ -2,6 +2,12 @@ use crate::{bus_translation::NativePeripheral, dma_engine::Width};
 
 const CAPACITY: usize = 2048;
 const BUFFER: u64 = 0x1000;
+const RX_FULL: u32 = 1 << 0;
+const RX_WATERMARK: u32 = 1 << 1;
+const TX_WATERMARK: u32 = 1 << 2;
+const RX_OVERFLOW: u32 = 1 << 4;
+const TX_UNDERFLOW: u32 = 1 << 5;
+const IRQ_MASK: u32 = (1 << 12) - 1;
 
 #[derive(Default)]
 struct Fifo {
@@ -43,6 +49,8 @@ pub struct SpiDevice {
     tx: Fifo,
     control: u32,
     watermark: u32,
+    interrupt_state: u32,
+    interrupt_enable: u32,
 }
 
 impl Default for SpiDevice {
@@ -53,6 +61,8 @@ impl Default for SpiDevice {
             tx: Fifo::default(),
             control: 0x8000_0010,
             watermark: 0x80,
+            interrupt_state: 0,
+            interrupt_enable: 0,
         }
     }
 }
@@ -60,9 +70,25 @@ impl Default for SpiDevice {
 impl SpiDevice {
     pub fn transmit(&mut self, incoming: u8) -> u8 {
         let (rx, tx) = self.sram.split_at_mut(CAPACITY);
-        let output = self.tx.pop(tx).unwrap_or(0);
-        self.rx.push(rx, incoming);
-        output
+        let output = self.tx.pop(tx);
+        if output.is_none() {
+            self.interrupt_state |= TX_UNDERFLOW;
+        } else if self.tx.depth() < (self.watermark >> 16) as usize {
+            self.interrupt_state |= TX_WATERMARK;
+        }
+        if !self.rx.push(rx, incoming) {
+            self.interrupt_state |= RX_OVERFLOW;
+        } else if self.rx.depth() == CAPACITY {
+            self.interrupt_state |= RX_FULL;
+        }
+        if self.rx.depth() > (self.watermark & 0xffff) as usize {
+            self.interrupt_state |= RX_WATERMARK;
+        }
+        output.unwrap_or(0)
+    }
+
+    pub fn interrupt(&self, mask: u32) -> bool {
+        self.interrupt_state & self.interrupt_enable & mask != 0
     }
 
     pub fn finish_transmission(&mut self) {}
@@ -71,6 +97,8 @@ impl SpiDevice {
 impl NativePeripheral for SpiDevice {
     fn read(&mut self, _: Option<&str>, offset: u64) -> u64 {
         match offset {
+            0 => self.interrupt_state.into(),
+            4 => self.interrupt_enable.into(),
             0x10 => self.control.into(),
             0x18 => self.watermark.into(),
             0x1c => (self.rx.depth() & 0xff) as u64 | ((self.tx.depth() & 0xff) as u64) << 16,
@@ -92,6 +120,9 @@ impl NativePeripheral for SpiDevice {
 
     fn write(&mut self, _: Option<&str>, offset: u64, value: u64) {
         match offset {
+            0 => self.interrupt_state &= !(value as u32 & IRQ_MASK),
+            4 => self.interrupt_enable = value as u32 & IRQ_MASK,
+            8 => self.interrupt_state |= value as u32 & IRQ_MASK,
             0x10 => {
                 self.control = value as u32;
                 if value & (1 << 16) != 0 {

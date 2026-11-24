@@ -159,3 +159,68 @@ fn should_be_able_to_reset_fifos() {
     assert_eq!(level & 0xffff, 0);
     assert_eq!(level >> 16, 0);
 }
+
+const INTERRUPT_ENABLE: u64 = 4;
+const WATERMARK: u64 = 0x18;
+const RX_FULL: u32 = 1;
+const RX_WATERMARK: u32 = 1 << 1;
+const TX_WATERMARK: u32 = 1 << 2;
+const RX_OVERFLOW: u32 = 1 << 4;
+const TX_UNDERFLOW: u32 = 1 << 5;
+const MAX_FIFO_CAPACITY: usize = 2048;
+
+#[test]
+fn should_set_interrupt_on_rx_fifo_full() {
+    let mut fixture = Fixture::new();
+    fixture.write(INTERRUPT_ENABLE, RX_FULL);
+    for _ in 0..MAX_FIFO_CAPACITY - 1 {
+        fixture.send("FF");
+    }
+    assert!(!fixture.host.borrow().interrupt(RX_FULL));
+    fixture.send("FF");
+    assert!(fixture.host.borrow().interrupt(RX_FULL));
+}
+
+#[test]
+fn should_set_interrupt_on_rx_overflow() {
+    let mut fixture = Fixture::new();
+    fixture.write(INTERRUPT_ENABLE, RX_OVERFLOW);
+    for _ in 0..MAX_FIFO_CAPACITY {
+        fixture.send("FF");
+    }
+    assert!(!fixture.host.borrow().interrupt(RX_OVERFLOW));
+    fixture.send("FF");
+    assert!(fixture.host.borrow().interrupt(RX_OVERFLOW));
+}
+
+#[test]
+fn should_set_interrupt_on_rx_fifo_watermark() {
+    let mut fixture = Fixture::new();
+    fixture.write(INTERRUPT_ENABLE, RX_WATERMARK);
+    for _ in 0..0x80 {
+        fixture.send("FF");
+    }
+    assert!(!fixture.host.borrow().interrupt(RX_WATERMARK));
+    fixture.send("FF");
+    assert!(fixture.host.borrow().interrupt(RX_WATERMARK));
+}
+
+#[test]
+fn should_set_interrupt_on_tx_fifo_watermark() {
+    let mut fixture = Fixture::new();
+    fixture.write(INTERRUPT_ENABLE, TX_WATERMARK);
+    fixture.write(WATERMARK, 0x80 << 16);
+    fixture.write(TX_POINTERS, 0x80 << 16);
+    assert_eq!(fixture.read(FIFO_DEPTH) >> 16, 0x80);
+    assert!(!fixture.host.borrow().interrupt(TX_WATERMARK));
+    fixture.host.borrow_mut().transmit(0);
+    assert!(fixture.host.borrow().interrupt(TX_WATERMARK));
+}
+
+#[test]
+fn should_set_interrupt_on_tx_underflow() {
+    let mut fixture = Fixture::new();
+    fixture.write(INTERRUPT_ENABLE, TX_UNDERFLOW);
+    fixture.host.borrow_mut().transmit(0);
+    assert!(fixture.host.borrow().interrupt(TX_UNDERFLOW));
+}

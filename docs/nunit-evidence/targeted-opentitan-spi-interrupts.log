@@ -1,0 +1,12 @@
+$ cargo test --locked --bin penv upstream_nunit::opentitan_spi_device
+running 9 tests
+test upstream_nunit::opentitan_spi_device::should_set_interrupt_on_tx_underflow ... ok
+test upstream_nunit::opentitan_spi_device::should_be_able_to_transmit_data ... ok
+test upstream_nunit::opentitan_spi_device::should_set_interrupt_on_rx_fifo_watermark ... ok
+test upstream_nunit::opentitan_spi_device::should_receive_data_to_fifo ... ok
+test upstream_nunit::opentitan_spi_device::should_have_correct_fifo_configuration_after_boot ... ok
+test upstream_nunit::opentitan_spi_device::should_set_interrupt_on_tx_fifo_watermark ... ok
+test upstream_nunit::opentitan_spi_device::should_be_able_to_reset_fifos ... ok
+test upstream_nunit::opentitan_spi_device::should_set_interrupt_on_rx_fifo_full ... ok
+test upstream_nunit::opentitan_spi_device::should_set_interrupt_on_rx_overflow ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 3851 filtered out; finished in 0.00s

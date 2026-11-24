@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,357 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,362 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 38 |
+| 移植待ち | 33 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 8 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 7 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -518,3 +518,5 @@ eMMC カードのコマンド・データ API を追加し、SPI モードの拒
 CMD6 のパーティション切り替え、CMD8 の `EXT_CSD` 転送、CMD0 のリセットを eMMC カード API に追加し、残り3件を移植した。ユーザーデータ領域とブート領域の内容、切り替えエラーと設定維持を照合した。`SDCardEmmcTest` の全5件が合格した。テストは上流同様にカード API を直接使用し、ホストコントローラー統合は対象外。[公式IDとの対応](nunit-evidence/targeted-sd-emmc-partitions.tsv)・[実行ログ](nunit-evidence/targeted-sd-emmc-partitions.log)
 
 OpenTitan SPI Device の FIFO 4件を移植した。バスに同じアドレス範囲で登録し、SRAM のバイトアクセス、レジスタのワードアクセス、SPI ホストからの転送を使用した。[公式IDとの対応](nunit-evidence/targeted-opentitan-spi-fifo.tsv)・[実行ログ](nunit-evidence/targeted-opentitan-spi-fifo.log)
+
+OpenTitan SPI Device の割り込み5件を移植した。RX 満杯、RX オーバーフロー、RX/TX ウォーターマーク、TX アンダーフローの境界を上流入力で照合した。同 fixture の全9件が合格した。実装範囲は上流 fixture が使う汎用 FIFO と割り込み。[公式IDとの対応](nunit-evidence/targeted-opentitan-spi-interrupts.tsv)・[実行ログ](nunit-evidence/targeted-opentitan-spi-interrupts.log)
