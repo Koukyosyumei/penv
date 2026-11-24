@@ -1234,3 +1234,28 @@ Rust モニターテスト22件と起動前メモリ保存・復元の CLI テ�
 を拒否した（`target/monitor-selection-cleared-negative/renode.jsonl`）。
 未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
 残り2,193件は未実行（`target/monitor-selection-ordered-robot/results.json`）。
+
+### 復元後の CPU と machine コマンド、UserState
+
+`5827a3e` と `0262433` は、スナップショット操作以降の CPU コマンドと
+`machine UserState` などの操作を実行時に解決する。固定 Renode と
+通常 CLI で、選択解除状態の復元直後に `cpu IsHalted` と
+`machine UserState` が拒否され、`mach set 0` 後は CPU の停止状態と
+設定した UserState を読み出せることを確認した
+（`target/monitor-cpu-selection-proof/`、
+`target/monitor-machine-properties-proof/`）。
+この段階の未変更 Robot は保存・復元、HEX、STM32F072b Console Echo が
+4件合格（`target/monitor-machine-properties-robot/results.json`）。
+
+`8cf2555` は空でない `machine UserState` を Rust のスナップショット
+v7 に保存し、v1–v6 も読み込む。固定 Renode、通常 CLI、Robot RPC に
+同じコマンド列を送り、上書き後の `changed value` が `Load` 後に
+`saved value` に戻ることを確認した
+（`target/monitor-user-state-snapshot-proof/`）。
+Rust モニターテスト22件と CLI のスナップショット回帰テスト3件が合格。
+
+既存 v6 の成果物を通常 CLI で復元し、マシン選択と変数が維持されることも
+確認した（`target/monitor-user-state-snapshot-proof/legacy-v6.log`）。
+最終ビルドの未変更 Robot は同じ4件が合格、残り2,193件は未実行
+（`target/monitor-user-state-snapshot-robot/results.json`）。
+検証は単一マシンと対応済みスナップショット形式の範囲。
