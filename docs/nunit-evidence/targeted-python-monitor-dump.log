@@ -1,0 +1,8 @@
+$ cargo test --locked --bin penv upstream_nunit::python_monitor
+running 5 tests
+test upstream_nunit::python_monitor::next_value_test ... ok
+test upstream_nunit::python_monitor::echo_test ... ok
+test upstream_nunit::python_monitor::dump_test ... ok
+test upstream_nunit::python_monitor::dump_file_test ... ok
+test upstream_nunit::python_monitor::sleep_test ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1732 filtered out; finished in 6.00s

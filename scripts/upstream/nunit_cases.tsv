@@ -1239,3 +1239,5 @@ src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTes
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands.NextValueTest	upstream_nunit::python_monitor::next_value_test	new
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands.SleepTest	upstream_nunit::python_monitor::sleep_test	new
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands.EchoTest	upstream_nunit::python_monitor::echo_test	new
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands.DumpTest	upstream_nunit::python_monitor::dump_test	new
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands.DumpFileTest	upstream_nunit::python_monitor::dump_file_test	new

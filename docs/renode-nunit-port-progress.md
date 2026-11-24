@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,237 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,239 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,159 |
+| 移植待ち | 2,157 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 26 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 25 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -257,3 +257,10 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 公式9件を移植した。固定上流のキー共有とデータベクトルを使い、ECB の自動・手動動作、復号、同一キーの再利用、入力追跡とランダム化を検証した。キー長の処理は上流の AesManaged と同様、設定値を検証してから全キーバッファを使う。乱数シードは Rust テストで固定した。アラート線や ECB 以外のモードはこのモデルの検証範囲外。
 
 - [公式 ID](nunit-evidence/targeted-opentitan_aes.tsv)と[実行ログ](nunit-evidence/targeted-opentitan_aes.log)
+
+## Monitor PythonCommands
+
+対話モニターの組み込みコマンドとして next_value、sleep、echo、dump、dump_file を実装し、公式5件が合格した。上流の Python コマンドの動作を Rust で再現する。メモリ試験はマシンを Rust API で作成して元のアドレスに RAM を登録し、コマンドは対話モニターと同じディスパッチを通る。
+
+- [基本コマンドの公式 ID](nunit-evidence/targeted-python-monitor-builtins.tsv)と[実行ログ](nunit-evidence/targeted-python-monitor-builtins.log)
+- [メモリ出力の公式 ID](nunit-evidence/targeted-python-monitor-dump.tsv)と[5件の実行ログ](nunit-evidence/targeted-python-monitor-dump.log)

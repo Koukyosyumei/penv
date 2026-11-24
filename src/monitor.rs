@@ -592,9 +592,9 @@ pub(crate) struct MonitorBuiltins {
 }
 
 impl MonitorBuiltins {
-    pub(crate) fn execute(&mut self, text: &str) -> Option<Result<String, String>> {
+    pub(crate) fn execute(&mut self, machine: &mut Machine, text: &str) -> Option<Result<String, String>> {
         let command = text.split_whitespace().next()?;
-        if !matches!(command, "next_value" | "sleep" | "echo") {
+        if !matches!(command, "next_value" | "sleep" | "echo" | "dump" | "dump_file") {
             return None;
         }
         Some(command_words(text).and_then(|words| match words.as_slice() {
@@ -615,9 +615,53 @@ impl MonitorBuiltins {
             ["echo", value] => Ok(format!("{}\n", unquote(value))),
             ["echo", "-n", value] => Ok(unquote(value).to_owned()),
             ["echo", ..] => Ok("usage: echo [-n] [string]\n".to_owned()),
+            ["dump", address, count] | ["dump", address, count, _] => {
+                let width = words.get(3).map_or(Ok(16), |value| value.parse::<usize>())
+                    .map_err(|_| "invalid dump row width")?;
+                let address = crate::parse_address(address)?;
+                let count = count.parse::<usize>().map_err(|_| "invalid dump length")?;
+                dump_monitor_rows(machine, address, count, width)
+            }
+            ["dump_file", address, count, path] => {
+                let address = crate::parse_address(address)?;
+                let count = count.parse::<usize>().map_err(|_| "invalid dump length")?;
+                let path = unquote(path);
+                let path = path_value(path.strip_prefix('@').unwrap_or(path));
+                let bytes = machine.bus.read_bytes(address, count).map_err(|error| error.to_string())?;
+                let mut file = io::BufWriter::new(fs::File::create(path).map_err(|error| error.to_string())?);
+                for byte in bytes {
+                    file.write_all(&[byte.map_err(|error| error.to_string())?])
+                        .map_err(|error| error.to_string())?;
+                }
+                file.flush().map_err(|error| error.to_string())?;
+                Ok(String::new())
+            }
             _ => Err(format!("invalid {command} arguments")),
         }))
     }
+}
+
+fn dump_monitor_rows(machine: &mut Machine, address: u32, count: usize, width: usize) -> Result<String, String> {
+    use std::fmt::Write as _;
+
+    if width == 0 {
+        return Err("dump row width must be positive".into());
+    }
+    let mut output = String::new();
+    for offset in (0..count).step_by(width) {
+        let row = u32::try_from(offset).ok().and_then(|offset| address.checked_add(offset))
+            .ok_or("dump address overflow")?;
+        let values = machine.bus.read_bytes(row, width).map_err(|error| error.to_string())?;
+        write!(output, "0x{row:08X} |").unwrap();
+        let mut preview = String::new();
+        for value in values {
+            let value = value.map_err(|error| error.to_string())?;
+            write!(output, " {value:02X}").unwrap();
+            preview.push(if (0x20..=0x7f).contains(&value) { char::from(value) } else { '.' });
+        }
+        writeln!(output, " | {preview}").unwrap();
+    }
+    Ok(output)
 }
 
 pub fn serve(
@@ -641,7 +685,7 @@ pub fn serve(
             return Ok(());
         }
         let text = line.trim();
-        if let Some(result) = builtins.execute(text) {
+        if let Some(result) = builtins.execute(machine, text) {
             let reply = match result {
                 Ok(body) => frame(&mut output, "OK", body.as_bytes()),
                 Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
