@@ -288,7 +288,7 @@ enum Action {
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
     CreateUartTester(String, bool),
     DefaultUartTester(Option<usize>),
-    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, u64, bool),
+    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, u64, bool, bool),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, u64),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
@@ -822,7 +822,7 @@ fn run_commands(
                     })
                 })
             }
-            Action::WaitForTester(id, pattern, regex, mode, timeout, absent) => {
+            Action::WaitForTester(id, pattern, regex, mode, timeout, absent, _) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode).and_then(|watch| {
                     duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
@@ -1016,7 +1016,7 @@ pub fn serve(
                 }
             }
 
-            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent), .. }]) => {
+            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups), .. }]) => {
                 let result = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode).and_then(|watch| {
                     let stop = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
                         .and_then(|cycles| drive_uart_watch(machine, watch, cycles, &mut bytes));
@@ -1029,6 +1029,9 @@ pub fn serve(
                     match (stop?, matched) {
                         ((Stop::OutputMatch, _), Some(line)) if *absent => Ok(("FAIL", format!("Unexpected UART entry: {line}"))),
                         ((Stop::Limit, _), _) if *absent => Ok(("MATCH", String::new())),
+                        ((Stop::OutputMatch, _), Some(line)) if *capture_groups => {
+                            Ok(("MATCHCAPTURES", uart_capture_payload(&line, regex.as_ref())))
+                        }
                         ((Stop::OutputMatch, _), Some(line)) => Ok(("MATCH", line)),
                         ((Stop::Limit, _), _) => Ok(("FAIL", format!("Terminal tester failed! UART line containing {expected:?} was not received (Limit)"))),
                         ((stop, _), _) => Ok(("STOP", format!("{stop:?}"))),
@@ -1094,6 +1097,27 @@ fn read_bus_bytes(
         write!(output, "{separator}0x{byte:02x}").map_err(|error| error.to_string())?;
     }
     writeln!(output, "]").map_err(|error| error.to_string())
+}
+
+fn uart_capture_payload(line: &str, regex: Option<&regex::Regex>) -> String {
+    use std::fmt::Write;
+
+    // Tab-separated hex preserves UTF-8 and empty captures.
+    let mut payload = String::new();
+    let captures = regex.and_then(|regex| regex.captures(line));
+    let groups = captures.iter().flat_map(|captures| captures.iter().skip(1));
+    for (index, field) in std::iter::once(line)
+        .chain(groups.map(|group| group.map_or("", |group| group.as_str())))
+        .enumerate()
+    {
+        if index != 0 {
+            payload.push('\t');
+        }
+        for byte in field.bytes() {
+            write!(payload, "{byte:02x}").expect("writing to String");
+        }
+    }
+    payload
 }
 
 fn write_hex_list<T: std::fmt::LowerHex>(
@@ -2147,6 +2171,7 @@ fn execute(
                 if *command == "WaitForTesterPrompt" { UartWaitMode::Prompt } else { UartWaitMode::Lf },
                 options.timeout,
                 *command == "ShouldNotBeOnUart",
+                options.capture_groups,
             ))
         }
         [
@@ -3070,6 +3095,7 @@ struct TesterWaitOptions {
     timeout: u64,
     match_start: bool,
     regex: bool,
+    capture_groups: bool,
 }
 
 fn tester_wait_options<'a>(
@@ -3081,6 +3107,7 @@ fn tester_wait_options<'a>(
     let mut timeout = None;
     let mut match_start = None;
     let mut regex = None;
+    let mut capture_groups = None;
     for option in options.split_whitespace() {
         match option.split_once('=') {
             Some(("testerId", value)) if id.is_none() => {
@@ -3093,6 +3120,11 @@ fn tester_wait_options<'a>(
                 if kind == TesterOptionsKind::Bytes && match_start.is_none() =>
             {
                 match_start = Some(parse_tester_bool(resolve(value)?)?);
+            }
+            Some(("captureGroups", value))
+                if kind == TesterOptionsKind::Line && capture_groups.is_none() =>
+            {
+                capture_groups = Some(parse_tester_bool(resolve(value)?)?);
             }
             Some(("treatAsRegex", value)) if regex.is_none() => {
                 regex = Some(parse_tester_bool(resolve(value)?)?);
@@ -3109,6 +3141,7 @@ fn tester_wait_options<'a>(
         timeout: timeout.unwrap_or(8 * CORTEX_M_STEP_HZ),
         match_start: match_start.unwrap_or(false),
         regex: regex.unwrap_or(false),
+        capture_groups: capture_groups.unwrap_or(false),
     })
 }
 
@@ -3290,6 +3323,12 @@ fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uart_capture_payload_preserves_utf8_and_unmatched_groups() {
+        let regex = regex::Regex::new("(µ)(missing)?()").unwrap();
+        assert_eq!(uart_capture_payload("µ", Some(&regex)), "c2b5\tc2b5\t\t");
+    }
 
     #[test]
     fn startup_stream_preserves_bytes_for_the_live_session() {

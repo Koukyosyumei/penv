@@ -596,7 +596,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 raise RuntimeError("penv closed the monitor stream")
             payload = payload[count:]
 
-    def operation(self, command, assertion=False):
+    def operation(self, command, assertion=False, uart_captures=False):
         self.ensure_running()
         begin = time.monotonic()
         try:
@@ -607,8 +607,16 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             status, value = self.receive()
         except (BrokenPipeError, RuntimeError) as exc:
             raise PenvExecutionError(f"penv monitor stopped during {command}: {exc}") from exc
+        groups = []
+        if status == "MATCHCAPTURES":
+            line, *captures = value.split("\t")
+            value = bytes.fromhex(line).decode()
+            groups = [bytes.fromhex(field).decode() for field in captures]
+            status = "MATCH"
         measurement = dict(command=self.process_command, operation=command, reply=status, value=value,
                            elapsed_s=time.monotonic() - begin, stage="emulation")
+        if uart_captures:
+            measurement["groups"] = groups
         if status == "MATCH" or status == "OK" and assertion:
             measurement["result"] = "pass"
             self.measurements.append(measurement)
@@ -633,7 +641,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise AssertionFailed(value)
         if status not in {"OK", "MATCH"}:
             raise PenvExecutionError(value)
-        return value
+        return {"Line": value, "Groups": groups} if uart_captures else value
 
     @staticmethod
     def duration(value):
@@ -739,9 +747,11 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if verb == "ShouldNotBeOnUart":
                 raise Unsupported("unfinished UART line absence is unsupported")
             verb = "WaitForTesterPrompt"
-        line = self.operation(f"{verb} {self.uart_text(expected)} testerId={tester_id} timeout={deadline} treatAsRegex={str(regex).lower()}")
-        match = re.search(expected, line) if regex else None
-        return {"Line": line, "Groups": list(match.groups()) if match else []}
+        captures = regex and verb != "ShouldNotBeOnUart"
+        command = f"{verb} {self.uart_text(expected)} testerId={tester_id} timeout={deadline} treatAsRegex={str(regex).lower()}"
+        if captures:
+            command += " captureGroups=true"
+        return self.operation(command, uart_captures=True)
 
     def wait(self, expected, *args):
         return self.wait_for("WaitForLineOnUart", expected, *args)
