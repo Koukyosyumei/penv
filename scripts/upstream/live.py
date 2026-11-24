@@ -393,7 +393,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)
                         or re.fullmatch(r"[\w.]+\s+(?:PC|MSTATUS|MEPC|MCAUSE|MTVAL|ExecutionMode)", command)):
                     return self.operation(command, assertion=True)
-                if re.match(r"(?:include|i|ExecuteScript|log|Save|Load|runMacro)(?:\s|$)", command):
+                if (re.match(r"(?:include|i|ExecuteScript|log|Save|Load|runMacro)(?:\s|$)", command)
+                        or re.fullmatch(r'logLevel\s+(?:\S+|"[^"]*")', command)):
                     reply, value = self.inspect_startup(command)
                     if reply == "OK":
                         self.commands.append(command)
@@ -403,7 +404,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 return ""
             if select:
                 self.operation(select)
-            return self.operation(command, assertion=command == "printenv")
+            return self.operation(command, assertion=bool(re.fullmatch(r"(?:printenv|lastLog(?:\s+\S+)?)", command)))
         if args or machine is not None:
             raise Unsupported("Execute Command machine context requires the Rust monitor")
         assigned = self.monitor_input.assign(command)

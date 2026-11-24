@@ -2260,7 +2260,8 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }
     if let Ok(words) = command_words(command.trim())
-        && matches!(words.first(), Some(&("log" | "Save" | "Load")))
+        && (matches!(words.first(), Some(&("log" | "Save" | "Load")))
+            || matches!(words.as_slice(), ["logLevel", _]))
     {
         let uses_variables = words[1..].iter().any(|word| word.starts_with('$') || word.starts_with("@$"));
         if (!uses_variables || load_text(&source, source.clone(), root, &mut state, &body).is_ok())
@@ -2780,11 +2781,12 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
     Ok(())
 }
 
+const LOG_LEVEL_PARAMETERS: &str = "Bad parameters for command logLevel";
 const LOG_PARAMETERS: &str = "Bad parameters for command log";
 const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expected @snapshot-path";
 
 fn invalid_command_parameters(error: &str) -> bool {
-    matches!(error, LOG_PARAMETERS | SNAPSHOT_PARAMETERS)
+    matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | SNAPSHOT_PARAMETERS)
 }
 
 fn missing_include(message: &str) -> bool {
@@ -3112,7 +3114,7 @@ fn execute(
         return Ok(());
     }
     if let ["logLevel", value] = words {
-        let level = crate::monitor_log::parse_level(unquote(resolve(value)?))?;
+        let level = crate::monitor_log::parse_level(unquote(resolve(value)?)).map_err(|_| LOG_LEVEL_PARAMETERS)?;
         if boot.started || !boot.runtime.is_empty() {
             boot.runtime.push(RuntimeCommand {
                 line,
@@ -4940,6 +4942,8 @@ greet "hello world"
         let machine = "mach create \"bench board\"\n";
         assert_eq!(inspect(machine, "mach set 0").0, "DEFER");
         assert_eq!(inspect(machine, "mach set 9").0, "REJECTED");
+        assert_eq!(inspect(machine, "logLevel 4").0, "REJECTED");
+        assert_eq!(inspect(machine, "logLevel 2").0, "DEFER");
         assert_eq!(inspect(machine, "mach set \"missing\"").0, "REJECTED");
         assert_eq!(inspect("", "echo $var").0, "ERROR");
         let macro_setup = "macro greet \"echo $label\"\nset label ready\n";
