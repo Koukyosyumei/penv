@@ -73,7 +73,7 @@ pub(crate) fn handle(
             let level = if *level == "any" {
                 None
             } else {
-                Some(level.parse().map_err(|_| "invalid log severity")?)
+                Some(level.parse::<i8>().map_err(|_| "invalid log severity")?)
             };
             let pattern = decode(pattern)?;
             let expression = match *kind {
@@ -87,7 +87,7 @@ pub(crate) fn handle(
             if !CAPTURE.with_borrow(|capture| capture.is_some()) {
                 return Err("attach a log tester before waiting".into());
             }
-            let find = |keep| {
+            let find = |keep: bool| {
                 CAPTURE.with_borrow_mut(|capture| {
                     let capture = capture.as_mut().expect("attached log tester");
                     let index = capture.entries.iter().position(|(severity, text)| {
