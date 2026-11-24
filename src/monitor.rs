@@ -94,6 +94,8 @@ enum Action {
     CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
     NrfCpuMips(u32),
+    TraceStackAccess(String),
+    VectorRegisterLength(String, u64),
     CpuCondition(String, u32),
     CpuXpsr(String),
     CpuWait(String, bool),
@@ -361,6 +363,8 @@ pub fn run(
                 writeln!(output.output, "{}", if state { "True" } else { "False" })
                     .map(|()| None).map_err(|error| error.to_string())
             }),
+            Action::VectorRegisterLength(cpu, bits) => machine.configure_rv64_vlen(cpu, *bits).map(|()| None),
+            Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
             Action::NrfCpuMips(mips) => machine.bus.set_nrf_cpu_mips(*mips).map(|()| None),
             Action::TimeSourceInfo => {
                 let seconds = machine.elapsed_steps() / machine.bus.monitor_step_hz();
@@ -728,7 +732,7 @@ pub fn serve(
         let text = line.trim();
         if let Some(result) = crate::monitor_asm::handle(machine, text) {
             match result {
-                Ok(()) => frame(&mut output, "OK", &[]),
+                Ok(size) => frame(&mut output, "OK", size.to_string().as_bytes()),
                 Err(error) => frame(&mut output, "UNSUPPORTED", error.as_bytes()),
             }.map_err(|error| error.to_string())?;
             continue;
@@ -777,13 +781,13 @@ pub fn serve(
                     let matched = machine.bus.uart_tester_matched_line(watch);
                     machine.bus.finish_stm32_uart_watch(watch);
                     if let Some(line) = failure {
-                        return Ok(("FAIL", format!("Terminal tester failing entry: {line}")));
+                        return Ok(("FAIL", format!("Terminal tester failed! Test failing entry has been found on UART: {line}")));
                     }
                     match (stop?, matched) {
                         ((Stop::OutputMatch, _), Some(line)) if *absent => Ok(("FAIL", format!("Unexpected UART entry: {line}"))),
                         ((Stop::Limit, _), _) if *absent => Ok(("MATCH", String::new())),
                         ((Stop::OutputMatch, _), Some(line)) => Ok(("MATCH", line)),
-                        ((Stop::Limit, _), _) => Ok(("FAIL", format!("UART line containing {expected:?} was not received (Limit)"))),
+                        ((Stop::Limit, _), _) => Ok(("FAIL", format!("Terminal tester failed! UART line containing {expected:?} was not received (Limit)"))),
                         ((stop, _), _) => Ok(("STOP", format!("{stop:?}"))),
                     }
                 });
@@ -1537,6 +1541,13 @@ fn execute(
             Some(Action::LiteXLedState((*target).to_owned()))
         }
 
+        [cpu, "VectorRegisterLength", bits] if boot.started => Some(Action::VectorRegisterLength(
+            cpu.trim_start_matches("sysbus.").to_owned(),
+            crate::parse_address64(resolve(bits)?)?,
+        )),
+        ["TraceStackAccess", cpu] if boot.started => Some(Action::TraceStackAccess(
+            cpu.trim_start_matches("sysbus.").to_owned(),
+        )),
         ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.started => {
             let mips = resolve(value)?.parse().map_err(|_| "PerformanceInMips requires a positive integer")?;
             Some(Action::NrfCpuMips(mips))
@@ -1782,21 +1793,22 @@ fn execute(
             command @ ("RegisterFailingUartString" | "UnregisterFailingUartString"),
             ..,
         ] => {
-            let (pattern, arguments) = quoted_argument(text[command.len()..].trim_start())
-                .filter(|(pattern, _)| !pattern.is_empty())
-                .ok_or("expected quoted failing UART pattern")?;
+            let (pattern, arguments) = uart_text_argument(text[command.len()..].trim_start())?;
+            if pattern.is_empty() {
+                return Err("failing UART pattern must be nonempty".into());
+            }
             let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Failure)?;
             let regex = options
                 .regex
                 .then(|| {
-                    regex::Regex::new(pattern)
+                    regex::Regex::new(&pattern)
                         .map_err(|e| format!("invalid failing UART regex: {e}"))
                 })
                 .transpose()?;
             Some(Action::SetUartFailure(
                 options.id,
                 FailingUartPattern {
-                    pattern: pattern.into(),
+                    pattern,
                     regex,
                 },
                 *command == "RegisterFailingUartString",

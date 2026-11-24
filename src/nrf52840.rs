@@ -886,7 +886,10 @@ impl Peripheral {
                 _ => None,
             },
             Device::Clock(clock) => clock.read(offset),
-            Device::Twi(twi) => twi.read(offset),
+            Device::Twi(twi) => Some(twi.read(offset).unwrap_or_else(|| {
+                crate::monitor_log::record(2, &format!("{}: Unhandled read from offset 0x{offset:X}.", self.name));
+                0
+            })),
             Device::Spi(spi) => spi.read(offset),
             Device::Timer(timer) => timer.read(offset),
             Device::I2s(i2s) => i2s.read(offset),
@@ -978,7 +981,14 @@ impl Peripheral {
             Device::Watchdog(watchdog) => watchdog.write(offset, value),
             Device::Uarte(uart) => uart.write(offset, value, bus, output)?,
             Device::Rtc(rtc) => rtc.write(offset, value),
-            Device::Twi(twi) => twi.write(offset, value),
+            Device::Twi(twi) => {
+                if !twi.write(offset, value) {
+                    crate::monitor_log::record(2, &format!(
+                        "{}: Unhandled write to offset 0x{offset:X}, value 0x{value:X}.", self.name
+                    ));
+                }
+                true
+            },
             Device::Spi(spi) => {
                 if offset == 0x51c {
                     spi.sample_cs(bus);

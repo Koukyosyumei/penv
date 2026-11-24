@@ -21,9 +21,16 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     pending_state = None
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
+        "Set Default Tester": "set_default_tester",
+        "Register Failing Uart String": "register_failing_uart",
+        "Unregister Failing Uart String": "unregister_failing_uart",
         "Should Not Be On Uart": "uart_absence",
         "Create Log Tester": "create_log_tester",
         "Wait For Log Entry": "wait_for_log",
+        "Should Not Be In Log": "log_absence",
+        "Clear Log Tester History": "clear_log_history",
+        "Register Failing Log String": "register_failing_log",
+        "Unregister Failing Log String": "unregister_failing_log",
         "Write Line To Uart": "write_line",
         "Write Char On Uart": "write_char",
         "Test If Uart Is Idle": "uart_idle",
@@ -54,8 +61,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.inline = []
         self.using_bus = False
         self.numbers = "Hexadecimal"
-        self.uart = None
-        self.uart_timeout = None
+        self.uart_testers = {}
+        self.default_tester = None
         self.led = None
         self.led_timeout = None
         self.buffer = b""
@@ -155,9 +162,35 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             self.operation(f"AttachMonitorLog {self.log_capacity}")
 
     def wait_for_log(self, pattern, *args):
-        if self.log_timeout is None:
-            raise Unsupported("create a log tester before waiting")
         positional = ("timeout", "keep", "treatAsRegex", "pauseEmulation", "level", "startEmulation")
+        return self.check_log("WaitForMonitorLog", pattern, args, positional)
+
+    def log_absence(self, pattern, *args):
+        positional = ("timeout", "treatAsRegex", "pauseEmulation", "level")
+        return self.check_log("AssertAbsentMonitorLog", pattern, args, positional)
+
+    def register_failing_log(self, pattern, *args):
+        self.change_failing_log("RegisterFailingMonitorLog", pattern, args)
+
+    def unregister_failing_log(self, pattern, *args):
+        self.change_failing_log("UnregisterFailingMonitorLog", pattern, args)
+
+    def change_failing_log(self, command, pattern, args):
+        if self.log_timeout is None:
+            raise AssertionFailed("Log tester is not available")
+        options = self.log_options(args, {"treatAsRegex"}, ("treatAsRegex",))
+        kind = "regex" if self.log_bool(options.get("treatAsRegex", "false")) else "literal"
+        self.operation(f"{command} {kind} {pattern.encode().hex() or '-'}")
+
+    def clear_log_history(self):
+        if self.log_timeout is None:
+            raise AssertionFailed("Log tester is not available")
+        if self.proc:
+            self.operation("ClearMonitorLog")
+
+    def check_log(self, command, pattern, args, positional):
+        if self.log_timeout is None:
+            raise AssertionFailed("Log tester is not available")
         options = self.log_options(args, set(positional), positional)
         if self.log_bool(options.get("pauseEmulation", "false")):
             raise Unsupported("log tester pause-on-match requires asynchronous emulation")
@@ -172,7 +205,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if level is None:
             raise Unsupported("unknown log level")
         result = self.operation(
-            f"WaitForMonitorLog {timeout} {kind} {keep} {level} {pattern.encode().hex() or '-'}")
+            f"{command} {timeout} {kind} {keep} {level} {pattern.encode().hex() or '-'}")
         if timeout and starts:
             self.started = True
         return result
@@ -356,7 +389,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             return self.operation(command, assertion=True).strip()
         if re.fullmatch(r"sysbus LogPeripheralAccess (?:sysbus\.)?rcc|(?:sysbus\.)?rcc WriteDoubleWord \S+ \S+", command):
             return self.operation(command)
-        if re.fullmatch(r"emulation RunFor \d+(?:\.\d+)?", command) and self.started:
+        run_for = re.fullmatch(r"""emulation RunFor (\d+(?:\.\d+)?|"\d+(?:\.\d+)?"|'\d+(?:\.\d+)?')""", command)
+        if run_for and self.started:
             return self.operation(command)
         if command == "emulation GetTimeSourceInfo":
             return self.operation(command, assertion=True)
@@ -369,6 +403,20 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             return self.format_number(data) if reading else data
         cpu = r"(?:sysbus\.)?(?:cpu|u54|e51)[\w]* "
         number = r"(?:0x[\da-fA-F]+|\d+)"
+        if re.fullmatch(cpu + r"VectorRegisterLength " + number, command):
+            return self.operation(command)
+        if match := re.fullmatch(rf"({cpu.strip()}) SP(?: ({number}))?", command):
+            target, value = match.groups()
+            if value is not None:
+                return self.operation(f'{target} SetRegister "sp" {value}')
+            return self.format_number(self.operation(f'{target} GetRegister "sp"', assertion=True))
+        stack_hook = re.fullmatch(rf"({cpu.strip()}) AddPreStackAccessHook (.+)", command)
+        if stack_hook:
+            target, source = stack_hook.groups()
+            source = unquote(source)
+            if source != 'cpu.Log(LogLevel.Info, "StackAccess: 0x{0:X}, {1}, {2}", address, width, is_write)':
+                raise Unsupported("unsupported pre-stack-access hook body")
+            return self.operation(f"TraceStackAccess {target}")
         assembly = re.fullmatch(
             rf'({cpu.strip()}) AssembleBlock (0x[0-9a-fA-F]+|[0-9]+|`(?:sysbus\.)?[\w.]+ PC`) (.+)',
             command, flags=re.DOTALL)
@@ -412,8 +460,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             reading = command.endswith((" PC", " IsHalted", " IsPaused")) or any(
                 name in command for name in (" EvaluateConditionCode ", " GetRegister "))
             if command.endswith(" Step"):
-                command += " 1"
-            value = self.operation(command, assertion=reading)
+                self.operation(command + " 1")
+                value = self.operation(command[:-len("Step")] + "PC", assertion=True)
+            else:
+                value = self.operation(command, assertion=reading)
             return self.format_number(value) if value.lstrip().startswith("0x") else value
         if self.started and re.fullmatch(r"sysbus\.[\w.]+\.adc-channel\d+ Volts \d+(?:\.\d+)?", command):
             return self.operation(command)
@@ -579,15 +629,58 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         raise Unsupported(f"unsupported Robot keyword option {arg}")
 
     def terminal(self, uart, *args):
-        if self.uart or not self.image or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", uart):
+        if not self.image or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", uart):
             raise Unsupported(f"Create Terminal Tester: {uart}")
         options = self.log_options(args, {"timeout", "defaultPauseEmulation"}, ("timeout",))
         if "defaultPauseEmulation" in options:
             self.log_bool(options["defaultPauseEmulation"])
-        self.uart_timeout = self.duration(options.get("timeout", self.timeout))
+        timeout = self.duration(options.get("timeout", self.timeout))
         result = int(self.operation(f"CreateTerminalTester {uart}").strip())
-        self.uart = uart
+        self.uart_testers.setdefault(result, (uart, timeout))
         return result
+
+    @staticmethod
+    def parse_tester_id(value):
+        if value is None or str(value).lower() in {"null", "none"}:
+            return None
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise AssertionFailed(f"Invalid tester ID: {value}") from exc
+
+    def select_uart(self, value=None):
+        tester_id = self.parse_tester_id(value)
+        if tester_id is None:
+            tester_id = self.default_tester
+        if tester_id is None:
+            if len(self.uart_testers) != 1:
+                if self.uart_testers:
+                    raise AssertionFailed("There is more than one tester available - please specify ID of the desired tester.")
+                raise AssertionFailed("There are no testers available.")
+            tester_id = next(iter(self.uart_testers))
+        if tester_id not in self.uart_testers:
+            raise AssertionFailed(f"Tester for given ID={tester_id} was not found.")
+        return tester_id, self.uart_testers[tester_id]
+
+    def set_default_tester(self, value):
+        tester_id = self.parse_tester_id(value)
+        if tester_id is not None:
+            self.select_uart(tester_id)
+        self.operation(f"SetDefaultTester {tester_id if tester_id is not None else 'null'}")
+        self.default_tester = tester_id
+
+    def register_failing_uart(self, pattern, *args):
+        self.change_failing_uart("RegisterFailingUartString", pattern, args)
+
+    def unregister_failing_uart(self, pattern, *args):
+        self.change_failing_uart("UnregisterFailingUartString", pattern, args)
+
+    def change_failing_uart(self, command, pattern, args):
+        positional = ("treatAsRegex", "testerId")
+        options = self.log_options(args, set(positional), positional)
+        tester_id, _ = self.select_uart(options.get("testerId"))
+        regex = self.log_bool(options.get("treatAsRegex", "false"))
+        self.operation(f"{command} {self.uart_text(pattern)} testerId={tester_id} treatAsRegex={str(regex).lower()}")
 
     def start(self):
         if self.started or not self.image:
@@ -596,17 +689,19 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.started = True
 
     def wait_for(self, verb, expected, *args):
-        if not self.uart:
-            raise Unsupported("requires a terminal tester")
-        options = self.log_options(args, {"timeout", "treatAsRegex", "includeUnfinishedLine"}, ("timeout",))
-        deadline = self.duration(options.get("timeout", self.uart_timeout))
+        positional = ("timeout", "testerId", "treatAsRegex", "includeUnfinishedLine")
+        if verb == "WaitForTesterPrompt":
+            positional = ("testerId", "timeout", "treatAsRegex")
+        options = self.log_options(args, set(positional), positional)
+        tester_id, (_, timeout) = self.select_uart(options.get("testerId"))
+        deadline = self.duration(options.get("timeout", timeout))
         regex = self.log_bool(options.get("treatAsRegex", "false"))
         self.started = True
         if self.log_bool(options.get("includeUnfinishedLine", "false")):
             if verb == "ShouldNotBeOnUart":
                 raise Unsupported("unfinished UART line absence is unsupported")
             verb = "WaitForTesterPrompt"
-        line = self.operation(f"{verb} {self.uart_text(expected)} timeout={deadline} treatAsRegex={str(regex).lower()}")
+        line = self.operation(f"{verb} {self.uart_text(expected)} testerId={tester_id} timeout={deadline} treatAsRegex={str(regex).lower()}")
         match = re.search(expected, line) if regex else None
         return {"Line": line, "Groups": list(match.groups()) if match else []}
 
@@ -619,27 +714,29 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def uart_absence(self, expected, *args):
         self.wait_for("ShouldNotBeOnUart", expected, *args)
 
-    def write_char(self, char):
-        if not self.started or not self.uart or len(char) != 1 or not char.isascii():
+    def write_char(self, char, *args):
+        options = self.log_options(args, {"testerId"}, ("testerId",))
+        _, (uart, _) = self.select_uart(options.get("testerId"))
+        if not self.started or len(char) != 1 or not char.isascii():
             raise Unsupported("requires one ASCII character and a running UART tester")
-        self.operation(f"{self.uart} WriteLine {self.uart_text(char)} None")
+        self.operation(f"{uart} WriteLine {self.uart_text(char)} None")
         return {"Line": ""}
 
     def uart_idle(self, timeout):
-        if not self.uart:
-            raise Unsupported("requires a UART tester")
+        self.select_uart()
         self.started = True
         self.operation(f"TestMonitorUartIdle {self.duration(timeout)}")
 
-    def write_line(self, content, option="waitForEcho=true"):
-        if not self.started or not self.uart:
+    def write_line(self, content="", *args):
+        positional = ("testerId", "waitForEcho")
+        options = self.log_options(args, set(positional), positional)
+        tester_id, (uart, _) = self.select_uart(options.get("testerId"))
+        if not self.started:
             raise Unsupported("requires a running UART tester")
-        echo = self.option(option, "waitForEcho").lower()
-        if echo not in {"true", "false"}:
-            raise Unsupported(option)
-        self.operation(f"{self.uart} WriteLine {self.uart_text(content)} CR")
-        if echo == "true":
-            self.prompt(content)
+        echo = self.log_bool(options.get("waitForEcho", "true"))
+        self.operation(f"{uart} WriteLine {self.uart_text(content)} CR")
+        if echo:
+            self.prompt(content, f"testerId={tester_id}")
         return {"Line": ""}
 
     def create_led(self, led, timeout=None):

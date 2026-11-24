@@ -247,6 +247,10 @@ impl Rv64 {
     }
 
     pub(crate) fn initialize_monitor_reset_pc(&mut self) {
+        self.privilege.initialize_renode_reset_status(self.isa.single || self.isa.double);
+        // Renode's vector configuration and memory helpers check the ISA
+        // extensions directly. Its vector CSR handlers still check mstatus.VS.
+        self.privilege.renode_vector_memory = true;
         // A platform can override the Renode RISC-V default with resetVector.
         if !self.reset_vector_configured {
             self.reset_vector = 0x1000;
@@ -753,10 +757,9 @@ impl Rv64 {
             && let Some(name) = &self.stack_access_trace_name
         {
             let direction = if write { "True" } else { "False" };
-            eprintln!(
-                "penv: {name}: StackAccess: 0x{address:X}, {}, {direction}",
-                width * 8
-            );
+            let message = format!("{name}: StackAccess: 0x{address:X}, {}, {direction}", width * 8);
+            crate::monitor_log::record(1, &message);
+            eprintln!("penv: {message}");
         }
     }
 

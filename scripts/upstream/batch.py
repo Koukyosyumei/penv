@@ -120,7 +120,7 @@ class VirtualSleepListener:
             self.mirrored[test] = self.mirrored.get(test, 0) + 1
 
 
-def run_suite(task, *, options, renode, binary, assets):
+def run_suite(task, *, options, renode, binary, assets, host_case_timeout):
     """Pool worker entry point. Each worker uses its own Robot process state."""
     from robot_tests_provider import RobotTestSuite
     from tests_engine import TestTag
@@ -160,8 +160,8 @@ def run_suite(task, *, options, renode, binary, assets):
                 test.teardown.config(name="Renode Test Teardown")
             # Preserve shorter upstream timeouts and bound unbounded host waits.
             from robot.utils import timestr_to_secs
-            if not test.timeout or timestr_to_secs(str(test.timeout)) > 130:
-                test.timeout = "130 seconds"
+            if not test.timeout or timestr_to_secs(str(test.timeout)) > host_case_timeout:
+                test.timeout = f"{host_case_timeout} seconds"
         suite.tests = [test for test in suite.tests if test.name in active]
         if active:
             xml = out / "robot.xml"
@@ -235,7 +235,7 @@ def run_suite(task, *, options, renode, binary, assets):
         os.chdir(old_cwd)
 
 
-def run_batch(selected, options, renode, binary, out, assets, jobs):
+def run_batch(selected, options, renode, binary, out, assets, jobs, host_case_timeout=130):
     from concurrent.futures import ProcessPoolExecutor, as_completed
     from run import write_json
 
@@ -248,7 +248,8 @@ def run_batch(selected, options, renode, binary, out, assets, jobs):
     all_results = {}
     counts = Counter()
     print(f"Robot queued {len(selected)} cases in {len(tasks)} suite variants, jobs={jobs}", flush=True)
-    runner = partial(run_suite, options=options, renode=renode, binary=binary, assets=assets)
+    runner = partial(run_suite, options=options, renode=renode, binary=binary, assets=assets,
+                     host_case_timeout=host_case_timeout)
     # One worker per suite avoids sharing Robot's global BuiltIn execution context.
     with ProcessPoolExecutor(max_workers=jobs) as pool, (out / "progress.jsonl").open("w") as progress:
         futures = {pool.submit(runner, task): task for task in tasks}

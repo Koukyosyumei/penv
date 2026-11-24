@@ -118,6 +118,7 @@ pub struct Privilege {
     pub levels: Levels,
     pub zicboz: bool,
     pub(crate) renode_menvcfg: bool,
+    pub(crate) renode_vector_memory: bool,
     menvcfg: u64,
     senvcfg: u64,
     pub status: u64,
@@ -425,11 +426,13 @@ impl Privilege {
     }
 
     pub(crate) fn configure_vector(&mut self, kind: u64, avl: Option<u64>) -> Option<u64> {
-        if self.status & VS == 0 {
+        if self.status & VS == 0 && !self.renode_vector_memory {
             return None;
         }
         let length = self.vector.as_mut()?.configure(kind, avl);
-        self.status |= VS;
+        if !self.renode_vector_memory {
+            self.status |= VS;
+        }
         Some(length)
     }
 

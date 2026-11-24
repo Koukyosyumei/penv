@@ -7,12 +7,12 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-pub(crate) fn handle(machine: &mut Machine, command: &str) -> Option<Result<(), String>> {
+pub(crate) fn handle(machine: &mut Machine, command: &str) -> Option<Result<usize, String>> {
     let command = command.strip_prefix("AssembleMonitorBlock ")?;
     Some(assemble(machine, command))
 }
 
-fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
+fn assemble(machine: &mut Machine, command: &str) -> Result<usize, String> {
     let words: Vec<_> = command.split_whitespace().collect();
     let [cpu, address, requested_triple, text] = words.as_slice() else {
         return Err("AssembleBlock requires a CPU, an address, and assembly".into());
@@ -28,8 +28,10 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
     let source = String::from_utf8(bytes).map_err(|error| error.to_string())?;
     let instructions: Vec<_> = source
         .lines()
+        .map(|line| line.split_once('#').map_or(line, |(code, _)| code))
+        .flat_map(|line| line.split(';'))
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| !line.is_empty())
         .collect();
     if instructions.is_empty()
         || instructions.iter().any(|line| {
@@ -39,9 +41,9 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
                         .chars()
                         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
                     || instruction.trim_start().starts_with('.')
-                    || instruction.contains([';', ':'])
+                    || instruction.contains(':')
             } else {
-                line.starts_with('.') || line.contains(';')
+                line.starts_with('.')
             }
         })
     {
@@ -53,10 +55,15 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
             "assembler triple {requested_triple} is unavailable for {triple}"
         ));
     }
-    let instructions = instructions.join(
-        "
+    let instructions = instructions
+        .into_iter()
+        .map(normalize_vector_memory_operand)
+        .collect::<Vec<_>>()
+        .join(
+            "
 ",
-    ) + "
+        )
+        + "
 ";
     let output = crate::llvm_mc_for(triple, &features, "--show-encoding", &instructions)?;
     if !output.status.success() || !output.stderr.is_empty() {
@@ -79,7 +86,24 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
     }
     .ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
     target.copy_from_slice(&image);
-    Ok(())
+    Ok(image.len())
+}
+
+// The Renode assembler accepts explicit zero displacement on RVV memory
+// operands. LLVM's RISC-V assembly syntax spells that operand as (base).
+fn normalize_vector_memory_operand(line: &str) -> String {
+    let (prefix, statement) = line.split_once(':').map_or(("", line), |(label, rest)| {
+        (&line[..label.len() + 1], rest.trim_start())
+    });
+    if let Some((mnemonic, operands)) = statement.split_once(char::is_whitespace)
+        && (mnemonic.starts_with("vl") || mnemonic.starts_with("vs"))
+        && mnemonic.ends_with(".v")
+        && let Some((first, remaining)) = operands.split_once(',')
+        && let Some(base) = remaining.trim_start().strip_prefix("0(")
+    {
+        return format!("{prefix} {mnemonic} {first}, ({base}");
+    }
+    line.to_owned()
 }
 
 fn inline_encoding(text: &str) -> Result<Option<Vec<u8>>, String> {

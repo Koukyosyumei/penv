@@ -482,6 +482,20 @@ impl Machine {
             .ok_or_else(|| format!("unknown named RV64 CPU {name:?}"))
     }
 
+    pub(crate) fn configure_rv64_vlen(&mut self, name: &str, bits: u64) -> Result<(), String> {
+        let id = self.rv64_hart_by_name(name)?;
+        let vector = self.hart_mut(id).rv64.as_mut().expect("validated RV64 CPU")
+            .privilege.vector.as_mut().ok_or("VectorRegisterLength requires the V extension")?;
+        vector.set_length(bits).map_err(str::to_owned)
+    }
+
+    pub(crate) fn enable_rv64_stack_access_trace(&mut self, name: &str) -> Result<(), String> {
+        let id = self.rv64_hart_by_name(name)?;
+        self.hart_mut(id).rv64.as_mut().expect("validated RV64 CPU").stack_access_trace_name =
+            Some(name.to_owned());
+        Ok(())
+    }
+
     pub(crate) fn rv64_translate_read(&mut self, name: &str, address: u64) -> Result<u64, String> {
         let id = self.rv64_hart_by_name(name)?;
         let hart = if id == 0 {
@@ -583,6 +597,16 @@ impl Machine {
             let value = value.map(u32::try_from).transpose()
                 .map_err(|_| "trap vector exceeds RV32 width")?;
             return hart.monitor_trap_vector(vector, value).map(|value| value.map(u64::from));
+        }
+        if let Some(value) = value.filter(|_| register == "mstatus") {
+            if let Some(cpu) = &mut hart.rv64 {
+                cpu.initialize_mstatus(value);
+                return Ok(None);
+            }
+            if hart.thumb.is_none() {
+                hart.set_mstatus(u32::try_from(value).map_err(|_| "mstatus exceeds RV32 width")?);
+                return Ok(None);
+            }
         }
         if value.is_none() && matches!(register.as_str(), "mstatus" | "mepc" | "mcause" | "mtval") {
             let result = match &hart.rv64 {
