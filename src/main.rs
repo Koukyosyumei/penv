@@ -12,6 +12,7 @@ mod dwt;
 mod ethernet;
 mod ethernet_switch;
 mod event_trace;
+mod hex_string;
 mod float;
 mod ft5336;
 mod host_pty;
@@ -2577,34 +2578,7 @@ fn parse_address64(value: &str) -> Result<u64, String> {
 }
 
 #[cfg(test)]
-mod upstream_nunit {
-    use super::{parse_address64, repl_syntax};
-
-    #[test]
-    fn quoted_string() {
-        assert_eq!(repl_syntax::quoted_string(r#""some text""#).as_deref(), Some("some text"));
-    }
-
-    #[test]
-    fn quoted_string_with_semicolon() {
-        assert_eq!(repl_syntax::quoted_string(r#""some;text""#).as_deref(), Some("some;text"));
-    }
-
-    #[test]
-    fn hexadecimal_unsigned_long_1000() {
-        assert_eq!(parse_address64("0x1000"), Ok(0x1000));
-    }
-
-    #[test]
-    fn hexadecimal_unsigned_long_12ab() {
-        assert_eq!(parse_address64("0x12AB"), Ok(0x12ab));
-    }
-
-    #[test]
-    fn hexadecimal_unsigned_long_0ff() {
-        assert_eq!(parse_address64("0x0ff"), Ok(0xff));
-    }
-}
+mod upstream_nunit;
 
 fn export_peripherals(
     mut args: impl Iterator<Item = std::ffi::OsString>,

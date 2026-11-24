@@ -102,13 +102,7 @@ fn encode(bytes: &[u8]) -> String {
 }
 
 fn decode(value: &str) -> Result<Vec<u8>, &'static str> {
-    if !value.is_ascii() || !value.len().is_multiple_of(2) {
-        return Err("invalid event hex string");
-    }
-    (0..value.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&value[i..i + 2], 16).map_err(|_| "invalid event hex string"))
-        .collect()
+    crate::hex_string::decode(value, false, false).map_err(|_| "invalid event hex string")
 }
 
 fn decode_string(value: &str) -> Result<String, &'static str> {

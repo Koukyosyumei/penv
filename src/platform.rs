@@ -3488,7 +3488,10 @@ fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(us
 }
 
 pub(crate) fn irq_index(value: &str, count: u32) -> Result<u8, String> {
-    let index = number(value.trim())?;
+    checked_irq_index(number(value.trim())?, count)
+}
+
+fn checked_irq_index(index: u32, count: u32) -> Result<u8, String> {
     if index >= count || index > u32::from(u8::MAX) {
         return Err(format!("IRQ index {index} is out of range"));
     }
@@ -3496,24 +3499,26 @@ pub(crate) fn irq_index(value: &str, count: u32) -> Result<u8, String> {
 }
 
 fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
+    use crate::repl_parser::{IrqEnd, irq_ends, irq_range};
+
     let value = value.trim();
-    let Some(list) = value
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-    else {
+    if !(value.starts_with('[') && value.ends_with(']')) {
         return irq_index(value, count).map(|index| vec![index]);
-    };
+    }
+
     let mut indices = Vec::new();
-    for item in list.split(',') {
-        if let Some((start, end)) = item.split_once('-') {
-            let start = irq_index(start, count)?;
-            let end = irq_index(end, count)?;
-            if start > end {
-                return Err("descending IRQ range".into());
+    for end in irq_ends(value, false)? {
+        match end {
+            IrqEnd::Number(index) => indices.push(checked_irq_index(index, count)?),
+            IrqEnd::Range(start, end) => {
+                let start = checked_irq_index(start, count)?;
+                let end = checked_irq_index(end, count)?;
+                if start > end {
+                    return Err("descending IRQ range".into());
+                }
+                indices.extend(irq_range(start.into(), end.into()).map(|index| index as u8));
             }
-            indices.extend(start..=end);
-        } else {
-            indices.push(irq_index(item, count)?);
+            IrqEnd::Property(name) => return Err(format!("unexpected IRQ property {name}")),
         }
     }
     Ok(indices)

@@ -81,6 +81,50 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
     .map_err(|_| format!("invalid 32-bit number {value:?}"))
 }
 
+pub(crate) enum IrqEnd<'a> {
+    Number(u32),
+    Range(u32, u32),
+    Property(&'a str),
+}
+
+pub(crate) fn irq_range(start: u32, end: u32) -> impl Iterator<Item = u32> {
+    let mut bounds = start.min(end)..=start.max(end);
+    std::iter::from_fn(move || {
+        if start <= end {
+            bounds.next()
+        } else {
+            bounds.next_back()
+        }
+    })
+}
+
+pub(crate) fn irq_end(input: &str, source: bool) -> Result<IrqEnd<'_>, String> {
+    let input = input.trim();
+    if let Some((start, end)) = input.split_once('-') {
+        return Ok(IrqEnd::Range(number(start.trim())?, number(end.trim())?));
+    }
+    if source {
+        let mut chars = input.chars();
+        if chars.next().is_some_and(char::is_alphabetic)
+            && chars.all(|c| c.is_alphanumeric() || c == '_')
+        {
+            return Ok(IrqEnd::Property(input));
+        }
+    }
+    number(input).map(IrqEnd::Number)
+}
+
+pub(crate) fn irq_ends(input: &str, source: bool) -> Result<Vec<IrqEnd<'_>>, String> {
+    input
+        .trim()
+        .strip_prefix('[')
+        .and_then(|list| list.strip_suffix(']'))
+        .ok_or("expected IRQ list")?
+        .split(',')
+        .map(|item| irq_end(item, source))
+        .collect()
+}
+
 #[derive(Default)]
 struct ReplComments {
     in_block: bool,
@@ -242,9 +286,10 @@ fn sized_address(point: (&str, Option<RegistrationValue<'_>>), size: u32) -> Res
     }
 }
 
-fn range_value(value: &str) -> Result<(u64, u64), &'static str> {
-    let (begin, end) = value[1..]
-        .strip_suffix('>')
+pub(crate) fn range_value(value: &str) -> Result<(u64, u64), &'static str> {
+    let (begin, end) = value
+        .strip_prefix('<')
+        .and_then(|range| range.strip_suffix('>'))
         .and_then(|range| range.split_once(','))
         .ok_or("invalid registration range")?;
     let base = range_number(begin.trim())?;
@@ -425,7 +470,7 @@ pub(crate) fn quoted_value(text: &str) -> Result<String, &'static str> {
 pub(crate) enum ListItem<'a> {
     List(Vec<ListItem<'a>>),
     Object(ObjectValue<'a>),
-    Number(&'a str),
+    Number(std::borrow::Cow<'a, str>),
     String(String),
     Symbol(SymbolicValue<'a>),
     Range(u64, u64),
@@ -539,6 +584,11 @@ fn scalar_prefix(input: &str) -> Result<(ListItem<'_>, &str), &'static str> {
             (ListItem::Range(base, size), &input[end..])
         }
         _ => {
+            if let Some((value, tail)) = crate::repl_syntax::number_prefix(input)
+                && tail.trim_start().starts_with([',', ']'])
+            {
+                return Ok((ListItem::Number(value), tail));
+            }
             let end = input
                 .find(|c: char| c.is_whitespace() || c == ',' || c == ']')
                 .unwrap_or(input.len());
@@ -553,7 +603,7 @@ fn scalar_prefix(input: &str) -> Result<(ListItem<'_>, &str), &'static str> {
                         !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
                     })
             {
-                ListItem::Number(value)
+                ListItem::Number(value.into())
             } else {
                 return Err("expected REPL scalar value");
             };
