@@ -102,3 +102,5 @@ mod migrant_version_tolerance;
 mod migrant_two_domains;
 
 mod sd_emmc;
+
+mod opentitan_spi_device;

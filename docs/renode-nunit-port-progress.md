@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,353 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,357 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 42 |
+| 移植待ち | 38 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -516,3 +516,5 @@ Migrant の `TestGuidVerification` 20件を移植した。Rust の型スタン�
 eMMC カードのコマンド・データ API を追加し、SPI モードの拒否とセクター指定による読み書きの2件を移植した。[公式IDとの対応](nunit-evidence/targeted-sd-emmc-sectors.tsv)・[実行ログ](nunit-evidence/targeted-sd-emmc-sectors.log)
 
 CMD6 のパーティション切り替え、CMD8 の `EXT_CSD` 転送、CMD0 のリセットを eMMC カード API に追加し、残り3件を移植した。ユーザーデータ領域とブート領域の内容、切り替えエラーと設定維持を照合した。`SDCardEmmcTest` の全5件が合格した。テストは上流同様にカード API を直接使用し、ホストコントローラー統合は対象外。[公式IDとの対応](nunit-evidence/targeted-sd-emmc-partitions.tsv)・[実行ログ](nunit-evidence/targeted-sd-emmc-partitions.log)
+
+OpenTitan SPI Device の FIFO 4件を移植した。バスに同じアドレス範囲で登録し、SRAM のバイトアクセス、レジスタのワードアクセス、SPI ホストからの転送を使用した。[公式IDとの対応](nunit-evidence/targeted-opentitan-spi-fifo.tsv)・[実行ログ](nunit-evidence/targeted-opentitan-spi-fifo.log)
