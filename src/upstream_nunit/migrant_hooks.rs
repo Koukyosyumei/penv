@@ -57,6 +57,11 @@ const STAMPS: &[TypeStamp<'static>] = &[
         "CyclicReferenceMockB",
         &[("A", FieldKind::Reference), ("Str", FieldKind::Reference)],
     ),
+    stamp("LateDeserializationMockA", &[("B", FieldKind::Reference)]),
+    stamp(
+        "DeserializationMockB",
+        &[("PostDeserialized", FieldKind::Boolean)],
+    ),
     stamp("DerivedFromClassB", &[]),
 ];
 
@@ -359,3 +364,70 @@ modes!(
 );
 modes!(cyclic_plain, cyclic_stamped, cyclic_objects_ready);
 modes!(inheritance_plain, inheritance_stamped, inheritance_order);
+
+fn reject_surrogate_with_late_hook(stamped: bool) {
+    use crate::migrant::surrogate::Surrogates;
+
+    let class = "LateDeserializationMockA";
+    let mut graph = Graph::default();
+    let b = record(
+        &mut graph,
+        "DeserializationMockB",
+        vec![Value::Boolean(false)],
+    );
+    let root = record(&mut graph, class, vec![Value::Ref(b)]);
+    let mut stream = Cursor::new(Vec::new());
+    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true);
+    if stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+    stream.rewind().unwrap();
+
+    let hooks = [
+        ReadHook {
+            class: "DeserializationMockB",
+            phase: ReadHookPhase::Immediate,
+            apply: |frame, id| set_flag(frame, id, 0),
+        },
+        ReadHook {
+            class,
+            phase: ReadHookPhase::Late,
+            apply: |frame, root| {
+                let target = id(&fields(frame.get(root))[0]);
+                assert_eq!(fields(frame.get(target))[0], Value::Boolean(true));
+                Ok(())
+            },
+        },
+    ];
+
+    let mut surrogates = Surrogates::default();
+    surrogates
+        .register(class, |_, _| {
+            Ok(Object::Record {
+                class: "System.Object".into(),
+                fields: vec![],
+            })
+        })
+        .unwrap();
+    let mut reader = ObjectReader::new(stream, References::Preserve, true)
+        .with_read_hooks(&hooks)
+        .with_surrogates(&mut surrogates);
+    if stamped {
+        reader = reader.with_type_stamps(STAMPS);
+    }
+    let error = reader.read_object().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error
+            .to_string()
+            .contains("cannot be used with a surrogate")
+    );
+}
+
+modes!(
+    surrogate_conflict_plain,
+    surrogate_conflict_stamped,
+    reject_surrogate_with_late_hook
+);

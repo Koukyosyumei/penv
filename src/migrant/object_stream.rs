@@ -944,6 +944,18 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
         if let Some(surrogates) = self.surrogates.as_mut() {
             for (index, object) in objects.iter_mut().enumerate() {
                 let id = ObjectId(old_len + index);
+                if let Object::Record { class, .. } = object {
+                    let has_late_hook = self.late_hooks.iter().any(|hook| &hook.class == class)
+                        || self
+                            .read_hooks
+                            .iter()
+                            .any(|hook| hook.phase == ReadHookPhase::Late && &hook.class == class);
+                    if has_late_hook && surrogates.has_conversion(class) {
+                        return Err(invalid(
+                            "late post-deserialization hook cannot be used with a surrogate",
+                        ));
+                    }
+                }
                 if let Some(replacement) = surrogates.convert(id, object)? {
                     let fields = match &replacement {
                         Object::String(_) | Object::Bytes(_) => &[][..],

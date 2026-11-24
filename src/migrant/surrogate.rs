@@ -110,6 +110,11 @@ impl<'a> Surrogates<'a> {
         candidates.first().copied()
     }
 
+    pub(super) fn has_conversion(&self, class: &str) -> bool {
+        self.find(class)
+            .is_some_and(|index| self.registrations[index].converter.is_some())
+    }
+
     pub(super) fn convert(&mut self, id: ObjectId, object: &Object) -> io::Result<Option<Object>> {
         let Object::Record { class, .. } = object else {
             return Ok(None);
