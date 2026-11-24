@@ -286,3 +286,60 @@ fn generic_interface(write: bool, read: bool) {
 }
 
 configurations!(generic_interface, generic_interface);
+
+fn constructor_field(write: bool, read: bool) {
+    use crate::migrant::object_stream::{FieldInitializer, Transients};
+
+    const CODECS: &[Codec] = &[generated_record!("A";)];
+    const LAYOUT: Transients<'static> = Transients {
+        classes: &[],
+        base_classes: &[],
+        fields: &[(
+            "A",
+            &[(
+                0,
+                FieldInitializer::ObjectConstructor(|| Object::Record {
+                    class: "System.Object".into(),
+                    fields: vec![],
+                }),
+            )],
+        )],
+    };
+    let mut graph = Graph::default();
+    let source_object = record(&mut graph, "System.Object", vec![]);
+    let root = record(&mut graph, "A", vec![Value::Ref(source_object)]);
+    let source = [stamp("A", 1, &[])];
+    let target = [stamp("A", 2, &[])];
+    let mut bytes = Vec::new();
+    let mut writer = ObjectWriter::new(&mut bytes, &graph, References::PerRoot, true)
+        .with_type_stamps(&source)
+        .with_transients(&LAYOUT);
+    if write {
+        writer = writer.with_generated_records(CODECS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+
+    let mut reader = ObjectReader::new(bytes.as_slice(), References::PerRoot, true)
+        .with_type_stamps(&target)
+        .with_transients(&LAYOUT)
+        .with_version_policy(VersionPolicy {
+            allow_module_revision_change: true,
+            ..VersionPolicy::default()
+        });
+    if read {
+        reader = reader.with_generated_records(CODECS);
+    }
+    let root = reader.read_object().unwrap();
+    let restored = reader.finish_into_graph().unwrap();
+    let id = reference(&fields(&restored, root)[0]);
+    assert_eq!(
+        restored.get(id),
+        Some(&Object::Record {
+            class: "System.Object".into(),
+            fields: vec![]
+        })
+    );
+}
+
+configurations!(constructor_field, constructor_field);

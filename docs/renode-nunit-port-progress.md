@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,340 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,344 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 55 |
+| 移植待ち | 51 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -508,3 +508,5 @@ Migrant の `TestGuidVerification` 20件を移植した。Rust の型スタン�
 `TwoDomainTests` の24件を移植した。書き込みと読み込みに個別のスキーマを設定し、クラス、構造体、入れ子の構造体のフィールド変更と基底型の追加・削除を検証した。上流の復元値と4つの読み書き構成を維持し、対象実行では24件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-two-domains.tsv)・[実行ログ](nunit-evidence/targeted-migrant-two-domains.log)
 
 インターフェースをジェネリック型引数に持つ `TwoDomainTests` の4件を移植した。Rust のスキーマで閉じた型を明示し、個別の読み書きスキーマ間で整数フィールド `f = 1` を復元した。[公式IDとの対応](nunit-evidence/targeted-migrant-domain-interface.tsv)・[実行ログ](nunit-evidence/targeted-migrant-domain-interface.log)
+
+復元時のコンストラクタがオブジェクトを生成する4件を移植した。Rust の読み込みは生成オブジェクトをフレーム内に追加し、復元されたフィールド参照から取得できることを検証した。この初期化方式はルート単位の参照管理で利用できる。[公式IDとの対応](nunit-evidence/targeted-migrant-domain-constructor.tsv)・[実行ログ](nunit-evidence/targeted-migrant-domain-constructor.log)

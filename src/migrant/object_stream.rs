@@ -353,15 +353,8 @@ fn check_rectangular(dimensions: &[usize], elements: &[Value]) -> io::Result<()>
 pub enum FieldInitializer {
     Default(Value),
     Constructor(fn() -> Value),
-}
-
-impl FieldInitializer {
-    fn restore(&self) -> Value {
-        match self {
-            Self::Default(value) => value.clone(),
-            Self::Constructor(constructor) => constructor(),
-        }
-    }
+    /// Construct an independent object while restoring a per-root frame.
+    ObjectConstructor(fn() -> Object),
 }
 
 /// Runtime field layout for transient values excluded from an object stream.
@@ -445,13 +438,26 @@ impl Transients<'_> {
         })
     }
 
-    fn restore_fields(&self, class: &str, fields: &mut Vec<Value>) -> io::Result<()> {
+    fn restore_fields(
+        &self,
+        class: &str,
+        fields: &mut Vec<Value>,
+        mut allocate: impl FnMut(Object) -> io::Result<Value>,
+    ) -> io::Result<()> {
         let mut previous = None;
         for (index, initializer) in self.initializers(class) {
             if *index > fields.len() || previous.is_some_and(|previous| previous >= *index) {
                 return Err(invalid("invalid transient field layout"));
             }
-            let value = initializer.restore();
+            let value = match initializer {
+                FieldInitializer::Default(value) => value.clone(),
+                FieldInitializer::Constructor(constructor) => constructor(),
+                FieldInitializer::ObjectConstructor(constructor) => {
+                    fields.insert(*index, allocate(constructor())?);
+                    previous = Some(*index);
+                    continue;
+                }
+            };
             if matches!(value, Value::Ref(_)) {
                 return Err(invalid(
                     "initializer returned an unmanaged object reference",
@@ -1332,6 +1338,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             return Err(invalid("invalid root reference or object limit exceeded"));
         }
         let mut objects = Vec::new();
+        let mut constructed = Vec::new();
         let mut type_names = TypeReader::default();
         let mut restore_classes = HashMap::new();
         for index in 0..count {
@@ -1394,7 +1401,37 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                         stamp.validate(&fields)?;
                     }
                     if let Some(transients) = self.transients {
-                        transients.restore_fields(&class, &mut fields)?;
+                        transients.restore_fields(&class, &mut fields, |object| {
+                            if self.references != References::PerRoot {
+                                return Err(invalid(
+                                    "object construction requires per-root references",
+                                ));
+                            }
+                            let fields = match &object {
+                                Object::Record { fields, .. } | Object::Array(fields) => {
+                                    fields.as_slice()
+                                }
+                                Object::Rectangular {
+                                    dimensions,
+                                    elements,
+                                } => {
+                                    check_rectangular(dimensions, elements)?;
+                                    elements
+                                }
+                                _ => &[],
+                            };
+                            if fields.iter().any(|value| matches!(value, Value::Ref(_))) {
+                                return Err(invalid(
+                                    "constructor output contains an unmanaged reference",
+                                ));
+                            }
+                            let id = end
+                                .checked_add(constructed.len())
+                                .filter(|id| id - base < MAX_ITEMS)
+                                .ok_or_else(|| invalid("constructed object limit exceeded"))?;
+                            constructed.push(object);
+                            Ok(Value::Ref(ObjectId(id)))
+                        })?;
                     }
                     Object::Record { class, fields }
                 }
@@ -1422,8 +1459,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                 _ => return Err(invalid("unknown object kind")),
             });
         }
+        let end = end + constructed.len();
+        let stream_count = objects.len();
+        objects.append(&mut constructed);
         if let Some(surrogates) = self.surrogates.as_mut() {
-            for (index, object) in objects.iter_mut().enumerate().rev() {
+            for (index, object) in objects[..stream_count].iter_mut().enumerate().rev() {
                 let id = ObjectId(old_len + index);
                 if let Object::Record { class, .. } = object {
                     let has_late_hook = self.late_hooks.iter().any(|hook| &hook.class == class)
