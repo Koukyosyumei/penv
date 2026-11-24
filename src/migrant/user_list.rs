@@ -82,3 +82,23 @@ pub const fn type_stamp(class: &str) -> TypeStamp<'_> {
         ],
     }
 }
+
+pub(super) fn check_layout(class: &str, fields: &[Value], as_user_object: bool) -> io::Result<()> {
+    if !(class.starts_with("List<") || class.starts_with("System.Collections.Generic.List<")) {
+        return Ok(());
+    }
+    let matches = if as_user_object {
+        matches!(fields, [Value::Ref(_), Value::Integer(size), Value::Integer(version)]
+            if *size >= 0 && i32::try_from(*size).is_ok() && i32::try_from(*version).is_ok())
+    } else {
+        matches!(fields, [Value::Ref(_)])
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "list record does not match the configured collection layout",
+        ))
+    }
+}

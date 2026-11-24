@@ -343,6 +343,7 @@ pub struct ObjectWriter<'a, 's, W: Write> {
     replacements: HashMap<ObjectId, Object>,
     stamps: Option<&'a [TypeStamp<'a>]>,
     allow_xml_surrogates: bool,
+    user_object_collections: Option<bool>,
     generated: Option<&'a [Codec]>,
     transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
@@ -377,6 +378,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             replacements: HashMap::new(),
             stamps: None,
             allow_xml_surrogates: true,
+            user_object_collections: None,
             generated: None,
             transients: None,
             surrogates: None,
@@ -441,6 +443,11 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
 
     pub(super) fn allow_xml_surrogates(mut self, allow: bool) -> Self {
         self.allow_xml_surrogates = allow;
+        self
+    }
+
+    pub fn with_collections_as_user_objects(mut self, enabled: bool) -> Self {
+        self.user_object_collections = Some(enabled);
         self
     }
 
@@ -573,6 +580,9 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                 Object::Record { class, fields } => {
                     if !self.allow_xml_surrogates && class == super::xml_surrogate::CLASS {
                         return Err(super::xml_surrogate::disabled());
+                    }
+                    if let Some(as_user_object) = self.user_object_collections {
+                        super::user_list::check_layout(class, fields, as_user_object)?;
                     }
                     if let Some(stamps) = self.stamps {
                         stamp_for(stamps, class)?.validate(fields)?;
@@ -870,6 +880,7 @@ pub struct ObjectReader<'a, 's, R: Read> {
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
     allow_xml_surrogates: bool,
+    user_object_collections: Option<bool>,
     generated: Option<&'a [Codec]>,
     transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
@@ -887,6 +898,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             references,
             stamps: None,
             allow_xml_surrogates: true,
+            user_object_collections: None,
             generated: None,
             transients: None,
             surrogates: None,
@@ -921,6 +933,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
 
     pub(super) fn allow_xml_surrogates(mut self, allow: bool) -> Self {
         self.allow_xml_surrogates = allow;
+        self
+    }
+
+    pub fn with_collections_as_user_objects(mut self, enabled: bool) -> Self {
+        self.user_object_collections = Some(enabled);
         self
     }
 
@@ -1075,6 +1092,9 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     } else {
                         self.read_values(base, limit)?
                     };
+                    if let Some(as_user_object) = self.user_object_collections {
+                        super::user_list::check_layout(&class, &fields, as_user_object)?;
+                    }
                     if let Some(stamp) = stamp {
                         stamp.validate(&fields)?;
                     }

@@ -295,41 +295,34 @@ fn deep_clone_with_hooks(
     transients: Option<&'static Transients<'static>>,
     hooks: &'static [LateRecordHook<'static>],
 ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
-    clone_using_methods(graph, root, stamped, transients, hooks, None, None)
+    clone_using_methods(graph, root, GraphMethods::from(stamped), transients, hooks)
 }
 
 fn clone_using_methods(
     graph: &Graph,
     root: ObjectId,
-    stamped: bool,
+    methods: GraphMethods,
     transients: Option<&'static Transients<'static>>,
     hooks: &'static [LateRecordHook<'static>],
-    write_codecs: Option<&'static [Codec]>,
-    read_codecs: Option<&'static [Codec]>,
 ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
     let mut stream = Cursor::new(Vec::new());
-    let mut writer = ObjectWriter::new(&mut stream, graph, References::Preserve, true);
-    if stamped {
-        writer = writer.with_type_stamps(STAMPS);
-    }
+    let mut writer = methods.writer(ObjectWriter::new(
+        &mut stream,
+        graph,
+        References::Preserve,
+        true,
+    ));
     if let Some(transients) = transients {
         writer = writer.with_transients(transients);
-    }
-    if let Some(codecs) = write_codecs {
-        writer = writer.with_generated_records(codecs);
     }
     writer.write_object(root).unwrap();
     writer.finish().unwrap();
     stream.seek(SeekFrom::Start(0)).unwrap();
-    let mut reader = ObjectReader::new(stream, References::Preserve, true).with_late_hooks(hooks);
-    if stamped {
-        reader = reader.with_type_stamps(STAMPS);
-    }
+    let mut reader = methods
+        .reader(ObjectReader::new(stream, References::Preserve, true))
+        .with_late_hooks(hooks);
     if let Some(transients) = transients {
         reader = reader.with_transients(transients);
-    }
-    if let Some(codecs) = read_codecs {
-        reader = reader.with_generated_records(codecs);
     }
     let root = reader.read_object().unwrap();
     (reader, root)
@@ -404,6 +397,7 @@ const GRAPH_CODECS: &[Codec] = &[
 
 #[derive(Clone, Copy, Default)]
 struct GraphMethods {
+    user_collections: bool,
     stamped: bool,
     write: bool,
     read: bool,
@@ -429,7 +423,7 @@ impl GraphMethods {
         if self.write {
             writer = writer.with_generated_records(GRAPH_CODECS);
         }
-        writer
+        writer.with_collections_as_user_objects(self.user_collections)
     }
 
     fn reader<'a, 's, R: std::io::Read>(
@@ -442,7 +436,7 @@ impl GraphMethods {
         if self.read {
             reader = reader.with_generated_records(GRAPH_CODECS);
         }
-        reader
+        reader.with_collections_as_user_objects(self.user_collections)
     }
 
     fn clone(
@@ -460,15 +454,7 @@ impl GraphMethods {
         transients: Option<&'static Transients<'static>>,
         hooks: &'static [LateRecordHook<'static>],
     ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
-        clone_using_methods(
-            graph,
-            root,
-            self.stamped,
-            transients,
-            hooks,
-            self.write.then_some(GRAPH_CODECS),
-            self.read.then_some(GRAPH_CODECS),
-        )
+        clone_using_methods(graph, root, self, transients, hooks)
     }
 }
 
@@ -2752,6 +2738,7 @@ macro_rules! configurations {
             #[test]
             fn reader_plain() {
                 ($case)(GraphMethods {
+                    user_collections: false,
                     stamped: false,
                     write: false,
                     read: true,
@@ -2760,6 +2747,7 @@ macro_rules! configurations {
             #[test]
             fn reader_stamped() {
                 ($case)(GraphMethods {
+                    user_collections: false,
                     stamped: true,
                     write: false,
                     read: true,
@@ -2768,6 +2756,7 @@ macro_rules! configurations {
             #[test]
             fn writer_plain() {
                 ($case)(GraphMethods {
+                    user_collections: false,
                     stamped: false,
                     write: true,
                     read: false,
@@ -2776,6 +2765,7 @@ macro_rules! configurations {
             #[test]
             fn writer_stamped() {
                 ($case)(GraphMethods {
+                    user_collections: false,
                     stamped: true,
                     write: true,
                     read: false,
@@ -2784,6 +2774,7 @@ macro_rules! configurations {
             #[test]
             fn both_plain() {
                 ($case)(GraphMethods {
+                    user_collections: false,
                     stamped: false,
                     write: true,
                     read: true,
@@ -2792,6 +2783,7 @@ macro_rules! configurations {
             #[test]
             fn both_stamped() {
                 ($case)(GraphMethods {
+                    user_collections: false,
                     stamped: true,
                     write: true,
                     read: true,
@@ -2976,4 +2968,116 @@ mod serial_generated_arrays {
     configurations!(empty, empty_array);
     configurations!(empty_2d, |m| empty_rectangular(m, &[0, 0]));
     configurations!(empty_3d, |m| empty_rectangular(m, &[2, 0, 2]));
+}
+
+macro_rules! user_configurations {
+    ($module:ident, $case:expr) => {
+        mod $module {
+            use super::*;
+            #[test]
+            fn reflection_reflection_plain() {
+                ($case)(GraphMethods {
+                    write: false,
+                    read: false,
+                    stamped: false,
+                    user_collections: true,
+                });
+            }
+            #[test]
+            fn reflection_reflection_stamped() {
+                ($case)(GraphMethods {
+                    write: false,
+                    read: false,
+                    stamped: true,
+                    user_collections: true,
+                });
+            }
+            #[test]
+            fn reflection_generated_plain() {
+                ($case)(GraphMethods {
+                    write: false,
+                    read: true,
+                    stamped: false,
+                    user_collections: true,
+                });
+            }
+            #[test]
+            fn reflection_generated_stamped() {
+                ($case)(GraphMethods {
+                    write: false,
+                    read: true,
+                    stamped: true,
+                    user_collections: true,
+                });
+            }
+            #[test]
+            fn generated_reflection_plain() {
+                ($case)(GraphMethods {
+                    write: true,
+                    read: false,
+                    stamped: false,
+                    user_collections: true,
+                });
+            }
+            #[test]
+            fn generated_reflection_stamped() {
+                ($case)(GraphMethods {
+                    write: true,
+                    read: false,
+                    stamped: true,
+                    user_collections: true,
+                });
+            }
+            #[test]
+            fn generated_generated_plain() {
+                ($case)(GraphMethods {
+                    write: true,
+                    read: true,
+                    stamped: false,
+                    user_collections: true,
+                });
+            }
+            #[test]
+            fn generated_generated_stamped() {
+                ($case)(GraphMethods {
+                    write: true,
+                    read: true,
+                    stamped: true,
+                    user_collections: true,
+                });
+            }
+        }
+    };
+}
+
+mod serial_user_records {
+    use super::*;
+    user_configurations!(object, should_serialize_object_with_methods);
+    user_configurations!(simple_class, should_serialize_simple_class_with_methods);
+    user_configurations!(cyclic, should_serialize_cyclic_reference_with_methods);
+    user_configurations!(
+        self_reference,
+        should_serialize_reference_to_self_with_methods
+    );
+    user_configurations!(null_reference, should_serialize_null_reference_with_methods);
+    user_configurations!(identity, should_preserve_identity_with_methods);
+    user_configurations!(readonly, should_serialize_readonly_field_with_methods);
+    user_configurations!(deep, should_serialize_deep_graph_with_methods);
+    user_configurations!(inheritance, derived_class);
+    user_configurations!(simpler_struct, simpler_struct);
+    user_configurations!(simple_struct, |m| struct_with_string(
+        m,
+        "SimpleStruct",
+        &[5]
+    ));
+    user_configurations!(complex_struct, |m| struct_with_string(
+        m,
+        "ComplexStruct",
+        &[6, 5]
+    ));
+    user_configurations!(struct_in_class, |m| struct_with_string(
+        m,
+        "GenericBox<SimpleStruct>",
+        &[1]
+    ));
 }

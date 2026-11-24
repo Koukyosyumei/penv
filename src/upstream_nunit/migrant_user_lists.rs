@@ -41,6 +41,7 @@ struct Options {
 impl Options {
     fn restore(self, graph: &Graph, root: ObjectId) -> (Graph, ObjectId) {
         GraphSerializer::default()
+            .with_collections_as_user_objects(true)
             .with_generated_methods(self.write.then_some(CODECS), self.read.then_some(CODECS))
             .clone_graph(graph, root, self.stamp.then_some(STAMPS))
             .unwrap()

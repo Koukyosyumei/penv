@@ -9,6 +9,7 @@ use super::{
 #[derive(Default)]
 pub struct GraphSerializer<'a> {
     support_xml_serializable: bool,
+    user_object_collections: bool,
     writer_codecs: Option<&'a [Codec]>,
     reader_codecs: Option<&'a [Codec]>,
 }
@@ -16,6 +17,11 @@ pub struct GraphSerializer<'a> {
 impl<'a> GraphSerializer<'a> {
     pub fn with_xml_serializable(mut self, enabled: bool) -> Self {
         self.support_xml_serializable = enabled;
+        self
+    }
+
+    pub fn with_collections_as_user_objects(mut self, enabled: bool) -> Self {
+        self.user_object_collections = enabled;
         self
     }
 
@@ -37,7 +43,8 @@ impl<'a> GraphSerializer<'a> {
     ) -> io::Result<(Graph, ObjectId)> {
         let mut bytes = Vec::new();
         let mut writer = ObjectWriter::new(&mut bytes, graph, References::Preserve, true)
-            .allow_xml_surrogates(self.support_xml_serializable);
+            .allow_xml_surrogates(self.support_xml_serializable)
+            .with_collections_as_user_objects(self.user_object_collections);
         if let Some(stamps) = stamps {
             writer = writer.with_type_stamps(stamps);
         }
@@ -48,7 +55,8 @@ impl<'a> GraphSerializer<'a> {
         writer.finish()?;
 
         let mut reader = ObjectReader::new(Cursor::new(bytes), References::Preserve, true)
-            .allow_xml_surrogates(self.support_xml_serializable);
+            .allow_xml_surrogates(self.support_xml_serializable)
+            .with_collections_as_user_objects(self.user_object_collections);
         if let Some(stamps) = stamps {
             reader = reader.with_type_stamps(stamps);
         }
