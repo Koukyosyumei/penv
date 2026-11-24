@@ -976,3 +976,5 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldInvokeConstructorForField	upstream_nunit::migrant_object_stream::constructor_in_class_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldInvokeConstructorForFieldInStruct	upstream_nunit::migrant_object_stream::constructor_in_struct_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldInvokeConstructorForFieldInStructComplex	upstream_nunit::migrant_object_stream::constructor_nested_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeGenericClassWithLatePostDeserializationHook	upstream_nunit::migrant_object_stream::generic_late_hook_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeGenericClassWithLatePostDeserializationHook	upstream_nunit::migrant_object_stream::generic_late_hook_stamped	new

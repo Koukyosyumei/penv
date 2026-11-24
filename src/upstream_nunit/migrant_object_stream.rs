@@ -1,6 +1,6 @@
 use crate::migrant::object_stream::{
-    FieldInitializer, FieldKind, Graph, NativeResource, NonSerializableResource, Object, ObjectId,
-    ObjectReader, ObjectWriter, References, Transients, TypeStamp, Value,
+    FieldInitializer, FieldKind, Graph, LateRecordHook, NativeResource, NonSerializableResource,
+    Object, ObjectId, ObjectReader, ObjectWriter, References, Transients, TypeStamp, Value,
 };
 use std::io::{Cursor, Seek, SeekFrom};
 
@@ -158,6 +158,7 @@ const STAMPS: &[TypeStamp<'static>] = &[
     stamp("StructWithConstructorAttribute", &[]),
     stamp("StructWithConstructorAttributeOnNestedStruct", &[]),
     stamp("WithConstructorAttribute", &[]),
+    stamp("GenericClassWithLatePostDeserializationHook", &[]),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -283,6 +284,16 @@ fn deep_clone_transient(
     stamped: bool,
     transients: Option<&'static Transients<'static>>,
 ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
+    deep_clone_with_hooks(graph, root, stamped, transients, &[])
+}
+
+fn deep_clone_with_hooks(
+    graph: &Graph,
+    root: ObjectId,
+    stamped: bool,
+    transients: Option<&'static Transients<'static>>,
+    hooks: &'static [LateRecordHook<'static>],
+) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
     let mut stream = Cursor::new(Vec::new());
     let mut writer = ObjectWriter::new(&mut stream, graph, References::Preserve, true);
     if stamped {
@@ -294,7 +305,7 @@ fn deep_clone_transient(
     writer.write_object(root).unwrap();
     writer.finish().unwrap();
     stream.seek(SeekFrom::Start(0)).unwrap();
-    let mut reader = ObjectReader::new(stream, References::Preserve, true);
+    let mut reader = ObjectReader::new(stream, References::Preserve, true).with_late_hooks(hooks);
     if stamped {
         reader = reader.with_type_stamps(STAMPS);
     }
@@ -2338,4 +2349,34 @@ stamp_modes!(
     constructor_nested_plain,
     constructor_nested_stamped,
     constructor_for_nested_field
+);
+
+fn generic_late_hook(stamped: bool) {
+    const CLASS: &str = "GenericClassWithLatePostDeserializationHook";
+    const TRANSIENTS: Transients<'static> = Transients {
+        classes: &[],
+        fields: &[(CLASS, &[(0, FieldInitializer::Default(Value::Integer(0)))])],
+    };
+    const HOOKS: &[LateRecordHook<'static>] = &[LateRecordHook {
+        class: CLASS,
+        apply: |fields| {
+            if fields[0] == Value::Integer(0) {
+                fields[0] = Value::Integer(147);
+            }
+            Ok(())
+        },
+    }];
+    let mut graph = Graph::default();
+    let root = graph.insert(record(CLASS, vec![Value::Integer(150)]));
+    let (reader, copy) = deep_clone_with_hooks(&graph, root, stamped, Some(&TRANSIENTS), HOOKS);
+    assert_eq!(
+        fields(reader.graph().get(copy).unwrap())[0],
+        Value::Integer(147)
+    );
+}
+
+stamp_modes!(
+    generic_late_hook_plain,
+    generic_late_hook_stamped,
+    generic_late_hook
 );

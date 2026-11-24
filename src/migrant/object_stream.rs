@@ -670,10 +670,17 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
     }
 }
 
+/// A callback applied after all records and surrogates in a frame are restored.
+pub struct LateRecordHook<'a> {
+    pub class: &'a str,
+    pub apply: fn(&mut [Value]) -> io::Result<()>,
+}
+
 pub struct ObjectReader<'a, 's, R: Read> {
     data: Reader<R>,
     graph: Graph,
     weak_history: Vec<Weak<Object>>,
+    late_hooks: &'a [LateRecordHook<'a>],
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
     transients: Option<&'a Transients<'a>>,
@@ -686,11 +693,17 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             data: Reader::new(stream, buffered),
             graph: Graph::default(),
             weak_history: Vec::new(),
+            late_hooks: &[],
             references,
             stamps: None,
             transients: None,
             surrogates: None,
         }
+    }
+
+    pub fn with_late_hooks(mut self, hooks: &'a [LateRecordHook<'a>]) -> Self {
+        self.late_hooks = hooks;
+        self
     }
 
     pub fn with_surrogates(mut self, surrogates: &'a mut Surrogates<'s>) -> Self {
@@ -885,6 +898,20 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                         return Err(invalid("surrogate reference outside stream table"));
                     }
                     *object = replacement;
+                }
+            }
+        }
+        if !self.late_hooks.is_empty() {
+            for object in &mut objects {
+                if let Object::Record { class, fields } = object {
+                    for hook in self.late_hooks.iter().filter(|hook| hook.class == class) {
+                        (hook.apply)(fields)?;
+                    }
+                    if fields.iter().any(
+                        |value| matches!(value, Value::Ref(id) if !(base..end).contains(&id.0)),
+                    ) {
+                        return Err(invalid("hook reference outside stream table"));
+                    }
                 }
             }
         }
