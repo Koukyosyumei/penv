@@ -1573,3 +1573,54 @@ STM32F072b Console Echo の4件合格、2,193件未実行。
 15件は penv の実測まで到達しなかった。条件付き代入とログバッファは合格。
 MiV UART の未対応と `SetAndRevertAfter` 系が依存するプロパティ値取得などの
 停止点は `target/monitor-quoted-repl-monitor-suite/results.json` に記録した。
+
+### 起動状態の照会とインライン REPL
+
+- `3020b36` では、`emulation IsStarted` がマシン作成前後に起動前の状態を
+  返し、後続の REPL 読み込みに進める。固定 Renode と penv の両方で
+  `False` を確認した（`target/monitor-preboot-started-proof/`）。
+- `0f8e2a1` では、ライブの `start` と `pause` が実際の状態に応じて
+  応答する。固定 Renode と実行順、起動状態の `False → True → False`、
+  二重起動および再度の停止の応答を照合した。通常 CLI でも同じ状態遷移を
+  確認した（`target/monitor-preboot-started-state-proof/`）。
+- `96861df` では、主プラットフォームローダーも REPL パーサーの
+  トップレベル区切り判定を使う。固定 Renode、penv RPC、通常 CLI で、
+  セミコロンで区切った2つのメモリ宣言を読み込み、各領域から
+  `0x12345678` と `0x23456789` を読み戻した
+  （`target/monitor-inline-declarations-proof/`）。
+
+対象 Rust テストはモニター26件とプラットフォーム3件が合格した。
+広範囲の Rust テストは停止時点で58件の失敗が報告されており、
+`renode_cpuwait_latches_only_at_reset_and_releases_at_sync_point` が60秒を
+超えたため中断した。広範囲のテストの完走結果は得られていない。
+
+未変更の代表 Robot 6件は4件合格、2件未対応。残る2,191件は未実行。
+`precise-pause.robot` の2件は主ローダーで REPL の区切りを通過し、
+STM32L071 の `Analog.STM32_ADC` 未対応で停止した。
+ケース別結果、実行コマンド、上流 SHA、penv SHA とハッシュは
+`target/monitor-inline-declarations-robot/results.json` にある。
+
+この区切りの Robot 全件再実行は次のコマンドを使用し、進捗を出力先の
+`progress.jsonl` に記録する。
+
+```sh
+target/renode-venv/bin/python scripts/upstream/run.py --rust-monitor --all --jobs 10 \
+  --out target/monitor-inline-declarations-sweep
+```
+
+### 連続する `@` のパストークン
+
+`2098838` では REPL、`Save`、`Load` が共通のパストークン処理を使用する。
+固定 Renode と penv の両方で `@@` を付けて有効な REPL を読み込み、
+保存後に変更したモニター変数を `Load` で元の値へ戻した。
+`b91ca11` では ELF、HEX、バイナリ、FDT の起動時読み込みにも同じ処理を
+使う。固定 Renode と penv RPC および通常 CLI が、元の HEX テストで使う
+ファームウェアを `@@` 付きパスでロードし、`0x08000000` から
+`0x20000830` を読み出した。
+
+Rust モニターテスト27件が合格した。未変更の Renesas RA6M5 では
+旧実行で `@@` の読み込みに失敗していた6件が
+`machine CreateVirtualConsole "segger_rtt"` まで進み、未対応で停止した。
+ケース別証跡は `target/monitor-repeated-at-robot/scratch-results.json` にある。
+この検証では全件実行の作業ツリーを固定するため、同じ差分を適用した
+作業ツリー内のソースコピーから penv をビルドした。
