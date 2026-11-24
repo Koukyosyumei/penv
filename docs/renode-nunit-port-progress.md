@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 952 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 966 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,444 |
+| 移植待ち | 2,430 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 45 fixture の
@@ -93,9 +93,13 @@ ComparingTimerTests の比較値上限1件。対象を絞った Rust 実行で�
 比較値上限は汎用タイマーの型付きエラーで検証し、既移植の4件も対象実行で合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-transients-native-compare.tsv) · [対象実行ログ](nunit-evidence/targeted-transients-native-compare.log)
 
-今回の追加は8件。Migrant の入れ子の decimal とネイティブ資源の経路4件、
+前回の追加は8件。Migrant の入れ子の decimal とネイティブ資源の経路4件、
 サロゲート登録のライフサイクル4件。対象を絞った Rust 実行で全件合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-decimal-path-surrogates.tsv) · [対象実行ログ](nunit-evidence/targeted-decimal-path-surrogates.log)
+
+今回の追加は14件。Migrant のカスタムペイロード8件、既定設定の正規表現2件、
+ジェネリック配列とインターフェースのリスト4件。対象を絞った Rust 実行で全件合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-custom-regex-generics.tsv) · [対象実行ログ](nunit-evidence/targeted-custom-regex-generics.log)
 
 SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
 パラメーター付き登録、null CPU の登録に対応する API が必要。
