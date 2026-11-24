@@ -2691,7 +2691,8 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                 | ["numbersMode", _]
                 | ["SetDefaultUartTimeout" | "CreateTerminalTester" | "TestMonitorUartIdle"
                     | "WaitForLineOnUart" | "WaitForTesterPrompt" | "WaitForNextLineOnUart"
-                    | "WaitForBytesOnUart" | "ShouldNotBeOnUart" | "WriteTesterUart", ..]
+                    | "WaitForBytesOnUart" | "ShouldNotBeOnUart" | "WriteTesterUart"
+                    | "RegisterFailingUartString" | "UnregisterFailingUartString", ..]
                 | ["WaitForMonitorLog" | "AssertAbsentMonitorLog" | "log" | "logLevel" | "lastLog", ..]
                 | ["emulation", "SetGlobalQuantum" | "SetQuantum" | "RunFor" | "RunUntil", _]
                 | ["machine", "UserState" | "GetTimeSourceInfo" | "SetQuantum" | "Reset", ..])
@@ -3602,7 +3603,7 @@ fn execute(
         }
         ["WaitForBytesOnUart", ..] => {
             let args = text["WaitForBytesOnUart".len()..].trim_start();
-            let (pattern, arguments) = uart_text_argument(args)?;
+            let (pattern, arguments) = uart_text_argument(args, variables)?;
             if pattern.is_empty() {
                 return Err("UART byte wait pattern must be nonempty".into());
             }
@@ -3642,7 +3643,7 @@ fn execute(
             ))
         }
         [command @ ("WaitForLineOnUart" | "WaitForTesterPrompt" | "ShouldNotBeOnUart"), ..] => {
-            let (pattern, arguments) = uart_text_argument(text[command.len()..].trim_start())?;
+            let (pattern, arguments) = uart_text_argument(text[command.len()..].trim_start(), variables)?;
             if pattern.is_empty() {
                 return Err("UART wait pattern must be nonempty".into());
             }
@@ -3671,7 +3672,7 @@ fn execute(
             command @ ("RegisterFailingUartString" | "UnregisterFailingUartString"),
             ..,
         ] => {
-            let (pattern, arguments) = uart_text_argument(text[command.len()..].trim_start())?;
+            let (pattern, arguments) = uart_text_argument(text[command.len()..].trim_start(), variables)?;
             if pattern.is_empty() {
                 return Err("failing UART pattern must be nonempty".into());
             }
@@ -3738,13 +3739,7 @@ fn execute(
         }
         ["WriteTesterUart", ..] => {
             let argument = text["WriteTesterUart".len()..].trim_start();
-            let (value, options) = if argument.starts_with('$') {
-                let (variable, options) = argument.split_once(char::is_whitespace).unwrap_or((argument, ""));
-                let value = monitor_string(resolve(variable)?).ok_or("expected a UART string variable")?;
-                (value, options)
-            } else {
-                uart_text_argument(argument)?
-            };
+            let (value, options) = uart_text_argument(argument, variables)?;
             let args: Vec<_> = options.split_whitespace().collect();
             let [ending, echo, selector @ ..] = args.as_slice() else {
                 return Err("expected UART ending and echo option".into());
@@ -3772,7 +3767,7 @@ fn execute(
         }
         [target, "WriteLine", ..] => {
             let args = text[target.len()..].trim_start()["WriteLine".len()..].trim();
-            let (line, ending) = uart_text_argument(args)?;
+            let (line, ending) = uart_text_argument(args, variables)?;
             let ending: &[u8] = match ending {
                 "" | "CR" | "true" => b"\r",
                 "LF" => b"\n",
@@ -4801,7 +4796,12 @@ fn hex_pattern(value: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-fn uart_text_argument(value: &str) -> Result<(String, &str), String> {
+fn uart_text_argument<'a>(value: &'a str, variables: &HashMap<String, String>) -> Result<(String, &'a str), String> {
+    if value.starts_with('$') {
+        let (variable, rest) = value.split_once(char::is_whitespace).unwrap_or((value, ""));
+        let text = monitor_string(resolve(variables, variable)?).ok_or("expected a UART string variable")?;
+        return Ok((text, rest.trim()));
+    }
     if let Some(encoded) = value.strip_prefix("hex:") {
         let (text, rest) = encoded.split_once(char::is_whitespace).unwrap_or((encoded, ""));
         if text.len() % 2 != 0 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -4995,6 +4995,19 @@ mod tests {
         let links = parse_gpio_overlay("gpioPortA: { 6 -> gpioPortD@12 }", root).unwrap();
         assert_eq!(links, [("gpioPortA".into(), 6, "gpioPortD".into(), 12)]);
         assert!(parse_gpio_overlay("gpioPortA: { someProperty: 1 }", root).is_err());
+    }
+
+    #[test]
+    fn uart_argument_resolves_quoted_variables_without_consuming_options() {
+        let variables = HashMap::from([
+            ("global.pattern".into(), r#""a b""#.into()),
+            ("global.invalid".into(), "123".into()),
+        ]);
+        assert_eq!(
+            uart_text_argument("$pattern timeout=0", &variables).unwrap(),
+            ("a b".into(), "timeout=0"),
+        );
+        assert!(uart_text_argument("$invalid timeout=0", &variables).is_err());
     }
 
     #[test]
