@@ -67,7 +67,8 @@ pub struct Session {
     machine: Option<String>,
 }
 
-const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x01";
+const SESSION_SNAPSHOT_V1: &[u8; 9] = b"PENVSESS\x01";
+const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x02";
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
 impl Session {
@@ -98,6 +99,7 @@ impl Session {
             .map_err(|e| format!("{}: {e}", temporary.display()))?;
         let result = (|| {
             file.write_all(SESSION_SNAPSHOT).map_err(|e| e.to_string())?;
+            file.write_all(&machine.monitor_quantum.to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&(data.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&data).map_err(|e| e.to_string())?;
             machine.write_boot_snapshot(&mut file)?;
@@ -113,10 +115,26 @@ impl Session {
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
         let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
         let result = (|| {
-            if !input.fill_buf().map_err(|e| e.to_string())?.starts_with(SESSION_SNAPSHOT) {
+            let header = input.fill_buf().map_err(|e| e.to_string())?;
+            let version = if header.starts_with(SESSION_SNAPSHOT) {
+                2
+            } else if header.starts_with(SESSION_SNAPSHOT_V1) {
+                1
+            } else {
                 return machine.read_boot_snapshot(&mut input);
-            }
+            };
             input.consume(SESSION_SNAPSHOT.len());
+            let quantum = if version == 2 {
+                let mut bytes = [0; 8];
+                input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+                let quantum = u64::from_le_bytes(bytes);
+                if quantum == 0 {
+                    return Err("invalid snapshot synchronization quantum".into());
+                }
+                Some(quantum)
+            } else {
+                None
+            };
             fn read_size(input: &mut impl Read) -> Result<usize, String> {
                 let mut length = [0; 4];
                 input.read_exact(&mut length).map_err(|e| e.to_string())?;
@@ -153,6 +171,9 @@ impl Session {
                 }
             }
             machine.read_boot_snapshot(&mut input)?;
+            if let Some(quantum) = quantum {
+                machine.monitor_quantum = quantum;
+            }
             self.variables = variables;
             Ok(())
         })();
