@@ -30,6 +30,7 @@ use crate::{
 mod floating;
 
 pub const MAX_HARTS: usize = 8;
+const DEFAULT_MONITOR_QUANTUM: u64 = 10_000; // 100 microseconds in 10 ns monitor units.
 pub const VIRTUAL_STEPS_PER_SECOND: u32 = 1_000_000;
 
 #[derive(Clone)]
@@ -421,7 +422,7 @@ impl Machine {
             cpu_less: false,
             boot_memory_cleared: false,
             monitor_firmware: None,
-            monitor_quantum: 10_000, // 100 microseconds in 10 ns monitor units.
+            monitor_quantum: DEFAULT_MONITOR_QUANTUM,
             cpu_paused: false,
             cpu_halted: false,
             cpu_clock_stopped: false,
@@ -991,24 +992,29 @@ impl Machine {
         if steps == u64::MAX || quantum == 0 || state[16] > 1 {
             return Err("invalid CPU-less snapshot clock state".into());
         }
+        self.reset_monitor_time(steps, quantum);
+        self.primary.monitor_paused = state[16] != 0;
+        self.boot_memory_cleared = false;
+        Ok(())
+    }
+
+    fn reset_monitor_time(&mut self, steps: u64, quantum: u64) {
         self.time_source = TimeSource::default();
         self.time_source.grant_until(steps);
         self.elapsed_steps = steps;
         self.monitor_quantum = quantum;
         self.monitor_clock_ns = 0;
         self.monitor_clock_step = 0;
-        self.primary.monitor_paused = state[16] != 0;
-        Ok(())
     }
 
     pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
+        if self.boot_memory_cleared {
+            return Err("Load a boot snapshot after Clear".into());
+        }
         if self.cpu_less {
             return self.write_cpu_less_snapshot(output);
         }
         self.check_memory_snapshot()?;
-        if self.boot_memory_cleared {
-            return Err("Load a boot snapshot after Clear".into());
-        }
         (|| -> std::io::Result<()> {
             output.write_all(b"PENVBOOT\x02")?;
             output.write_all(&self.raw_load_address().to_le_bytes())?;
@@ -1020,6 +1026,13 @@ impl Machine {
     }
 
     pub fn clear_memory_snapshot(&mut self) -> Result<(), String> {
+        if self.cpu_less {
+            self.cpu_less_snapshot_prefix()?;
+            self.reset_monitor_time(0, DEFAULT_MONITOR_QUANTUM);
+            self.primary.monitor_paused = false;
+            self.boot_memory_cleared = true;
+            return Ok(());
+        }
         self.check_memory_snapshot()?;
         self.bus.clear_memory();
         self.bus.reset_cortex_m_machine_devices();
@@ -3070,6 +3083,35 @@ mod tests {
             machine.bus.read::<4>(0xe000e018).unwrap(),
             machine.bus.read::<4>(0xe0001004).unwrap(),
         )
+    }
+
+    #[test]
+    fn cpu_less_snapshot_rewinds_clock_and_rejects_other_uart_layouts() {
+        let device = |base| {
+            let mut machine = Machine::without_default_ram();
+            machine.cpu_less = true;
+            machine.bus.map_trivial_uart(base, "uart0").unwrap();
+            machine
+        };
+        let mut machine = device(0x1000);
+        machine.run(5, &mut std::io::sink()).unwrap();
+        machine.monitor_quantum = 20;
+        let mut snapshot = Vec::new();
+        machine.write_boot_snapshot(&mut snapshot).unwrap();
+        machine.run(7, &mut std::io::sink()).unwrap();
+        assert_eq!(machine.elapsed_steps(), 12);
+
+        let mut other = device(0x2000);
+        assert!(other.read_boot_snapshot(&mut snapshot.as_slice()).is_err());
+        assert_eq!(other.elapsed_steps(), 0);
+
+        machine.clear_memory_snapshot().unwrap();
+        assert!(machine.run(1, &mut std::io::sink()).is_err());
+        machine.read_boot_snapshot(&mut snapshot.as_slice()).unwrap();
+        assert_eq!(machine.elapsed_steps(), 5);
+        assert_eq!(machine.monitor_quantum, 20);
+        machine.run(2, &mut std::io::sink()).unwrap();
+        assert_eq!(machine.elapsed_steps(), 7);
     }
 
     #[test]

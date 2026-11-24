@@ -498,7 +498,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint
-                    | Action::TimeSourceInfo | Action::SaveMemory(_) | Action::LoadMemory(_)
+                    | Action::TimeSourceInfo | Action::SaveMemory(_) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -3099,6 +3099,7 @@ fn execute(
                         | Action::RunToSyncPoint
                         | Action::TimeSourceInfo
                         | Action::SaveMemory(_)
+                        | Action::ClearMemory
                         | Action::LoadMemory(_)
                         | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
