@@ -564,6 +564,10 @@ impl Csr {
             .ok_or_else(error)
     }
 
+    pub(crate) fn set_monitor_trap_value(&mut self, value: u32) {
+        self.write(0x343, value);
+    }
+
     pub(crate) fn monitor_trap_register(&self, name: &str) -> Option<u32> {
         self.read(match name {
             "mepc" => 0x341,

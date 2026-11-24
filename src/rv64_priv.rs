@@ -317,6 +317,10 @@ impl Privilege {
         }
     }
 
+    pub(crate) fn set_monitor_trap_value(&mut self, value: u64) {
+        self.machine.value = value;
+    }
+
     pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
         Some(match name {
             "vstart" => return self.vector.as_ref()?.read(0x008),

@@ -614,6 +614,17 @@ impl Machine {
                 return Ok(None);
             }
         }
+        if let Some(value) = value.filter(|_| register == "mtval") {
+            if let Some(cpu) = &mut hart.rv64 {
+                cpu.privilege.set_monitor_trap_value(value);
+                return Ok(None);
+            }
+            if hart.thumb.is_none() {
+                let value = u32::try_from(value).map_err(|_| "MTVAL exceeds RV32 width")?;
+                hart.csr.set_monitor_trap_value(value);
+                return Ok(None);
+            }
+        }
         if value.is_none() && matches!(register.as_str(), "mstatus" | "mepc" | "mcause" | "mtval") {
             let result = match &hart.rv64 {
                 Some(cpu) => cpu.monitor_register(&register),
