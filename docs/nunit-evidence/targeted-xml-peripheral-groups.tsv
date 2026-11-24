@@ -1,0 +1,6 @@
+official_id	nunit_id	rust_test	rust_outcome
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,False,False).ShouldSerializeCustomIXmlSerializable	0-1079	upstream_nunit::migrant_builtin::custom_xml_plain	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,False,True).ShouldSerializeCustomIXmlSerializable	0-1067	upstream_nunit::migrant_builtin::custom_xml_stamped	pass
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.PeripheralsGroupTests.ShouldNotAddUnregisteredPeripheralToGroup	0-1372	upstream_nunit::peripherals_group::should_not_add_unregistered_peripheral_to_group	pass
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.PeripheralsGroupTests.ShouldNotUnregisterSinglePeripheralFromGroup	0-1370	upstream_nunit::peripherals_group::should_not_unregister_single_peripheral_from_group	pass
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.PeripheralsGroupTests.ShouldUnregisterPeripheralGroups	0-1371	upstream_nunit::peripherals_group::should_unregister_peripheral_groups	pass

@@ -1,6 +1,6 @@
 project	fixture	discovered	ported	ported_excluded	pending	inactive	remaining_api
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	48	0	0	48	0	Migrant serialization of BlockingCollection and its synchronization state is unavailable.
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests	16	2	0	14	0	Regex pattern round-trip is ported for reflection mode. Remaining cases need the custom IXmlSerializable adapter and generated reader/writer paths.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests	16	4	0	12	0	Both reflection cases are ported for each stamp mode. The remaining 12 cases require generated reader and/or writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests	160	40	0	120	0	All 40 reflection read/write cases are ported across both stamp modes. The other 120 cases require generated reader and/or writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.IdGeneratorTests	1	1	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.ObjectReaderWriterTests	1	1	0	0	0	-
@@ -36,7 +36,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MultiCPUTests	5	0	0	5	0	There is no generic registration and debugger/context naming API for the fixture's mock CPUs and CPU-local peripherals.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.NullRegistrationPointPeripheralContainerTests	10	0	0	10	0	There is no generic single-peripheral container with NullRegistrationPoint, registration-point enumeration and typed registration failures.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests	18	0	0	18	0	There is no metadata-driven Packet encoder/decoder for fields with bit widths, offsets, nesting and endian annotations.
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PeripheralsGroupTests	3	0	0	3	0	There is no named generic peripheral grouping API with membership and unregister behavior for arbitrary mock peripherals.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PeripheralsGroupTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	4	0	0	4	0	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RangeTests	20	20	0	0	0	-

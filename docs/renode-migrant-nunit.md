@@ -171,6 +171,12 @@ HooksTests に24件を追加し、反射読み書きの型スタンプ有無2設
 うち40件を Rust の公式 ID と照合した。残る120件には生成読み書きが必要。
 [公式 ID 別の結果](nunit-evidence/targeted-migrant-hooks-reflection.tsv) · [固定 C# のログ](nunit-evidence/migrant-hooks-official.log)
 
-残りは9 fixture・1,871ケース。生成読み書き、コレクションと CLR 型の
+BuiltinSurrogatesTests の XML サロゲート2件を追加した。型名と XML バイト列を
+サロゲートに保存し、復元時は登録型を照合して Rust の型固有コーデックに渡す。
+固定上流の属性と値を XML 要素で表す。リフレクション設定の4件が揃い、残る12件には
+生成読み書きが必要。
+[公式 ID 別の結果](nunit-evidence/targeted-xml-peripheral-groups.tsv)
+
+残りは9 fixture・1,869ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。

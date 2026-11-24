@@ -1,0 +1,14 @@
+running 4 tests
+test upstream_nunit::migrant_builtin::custom_xml_plain ... ok
+test upstream_nunit::migrant_builtin::custom_xml_stamped ... ok
+test upstream_nunit::migrant_builtin::regex_stamped ... ok
+test upstream_nunit::migrant_builtin::regex_plain ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1512 filtered out; finished in 0.00s
+running 6 tests
+test upstream_nunit::peripherals_group::should_not_add_unregistered_peripheral_to_group ... ok
+test upstream_nunit::system_bus::find_after_registration ... ok
+test upstream_nunit::peripherals_group::should_not_unregister_single_peripheral_from_group ... ok
+test upstream_nunit::system_bus::find_after_many_registrations ... ok
+test upstream_nunit::peripherals_group::should_unregister_peripheral_groups ... ok
+test upstream_nunit::system_bus::should_test_enable_all_translations ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1513 filtered out; finished in 0.00s

@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,016 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,021 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,380 |
+| 移植待ち | 2,375 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 45 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 44 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -110,10 +110,15 @@ ComparingTimerTests の比較値上限1件。対象を絞った Rust 実行で�
 2設定で8メソッド移植した。対象を絞った Rust 実行で全件合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-migrant-read-global-hooks.tsv) · [対象実行ログ](nunit-evidence/targeted-migrant-read-global-hooks.log)
 
-今回の追加は24件。Migrant の HooksTests で書き込み前後の変更、失敗時の後処理、
+前回の追加は24件。Migrant の HooksTests で書き込み前後の変更、失敗時の後処理、
 呼び出し順と仮想メソッドのケースを移植した。既移植分を含む反射読み書き40件が
 固定 C# と対象 Rust 実行の両方で合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-migrant-hooks-reflection.tsv) · [対象実行ログ](nunit-evidence/targeted-migrant-hooks-reflection.log)
+
+今回の追加は5件。Migrant の XML サロゲート2件、PeripheralsGroupTests 全3件。
+周辺機器グループは SystemBus のネイティブアクセス幅変換対応の登録経路で検証した。
+対象を絞った Rust 実行で新規5件すべてが合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-xml-peripheral-groups.tsv) · [対象実行ログ](nunit-evidence/targeted-xml-peripheral-groups.log)
 
 SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
 パラメーター付き登録、null CPU の登録に対応する API が必要。
