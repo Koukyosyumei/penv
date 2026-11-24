@@ -2877,7 +2877,7 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
 
 const LOG_LEVEL_PARAMETERS: &str = "Bad parameters for command logLevel";
 const LOG_PARAMETERS: &str = "Bad parameters for command log";
-const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expected @snapshot-path";
+const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expected @snapshot-path or quoted path";
 
 fn invalid_command_parameters(error: &str) -> bool {
     matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | SNAPSHOT_PARAMETERS)
@@ -2918,6 +2918,9 @@ fn snapshot_path(
 ) -> Result<PathBuf, String> {
     if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
         return Ok(path);
+    }
+    if let Some(path) = monitor_string(value) {
+        return Ok(script_dir.join(path));
     }
     let path = resolve(variables, value)?.strip_prefix('@').ok_or(SNAPSHOT_PARAMETERS)?;
     Ok(script_dir.join(path_value(unquote(path))))
