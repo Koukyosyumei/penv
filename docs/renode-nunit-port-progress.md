@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,049 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,055 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,347 |
+| 移植待ち | 2,341 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 39 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 38 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -153,3 +153,10 @@ EFM32 I²C のレジスタ初期化・制御・割り込み3件と、SymbolTests
 
 - [公式 ID ごとの結果](nunit-evidence/targeted-efm32-symbols.tsv)
 - [対象実行ログ](nunit-evidence/targeted-efm32-symbols.log)
+
+## LPC43xx GPIO と Cadence TTC
+
+LPC43xx GPIO の5件は上流と同じバス登録後に周辺機器のレジスタを直接操作する。Cadence TTC の6件はカウンターのリセット、3系統の独立したプリスケーラ、増減両方向のオーバーフロー・インターバルと IRQ を検証する。時間は TTC に直接進め、比較一致、外部クロック、イベントタイマーは今回の実装範囲外。
+
+- [GPIO の公式 ID ごとの結果](nunit-evidence/targeted-lpc43xx_gpio.tsv)と[実行ログ](nunit-evidence/targeted-lpc43xx_gpio.log)
+- [TTC の公式 ID ごとの結果](nunit-evidence/targeted-cadence_ttc.tsv)と[実行ログ](nunit-evidence/targeted-cadence_ttc.log)

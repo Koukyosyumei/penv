@@ -23,7 +23,6 @@ Antmicro.Renode.PeripheralsTests.OpenTitan_I2C_Test	OpenTitan I2C register/FIFO 
 Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	OpenTitan KeyManager command and state-machine model is absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest	OpenTitan SPI Device flash passthrough and FIFO model are absent.
 Antmicro.Renode.PeripheralsTests.SDCardEmmcTest	SD controllers lack an eMMC card model with CMD6 partition switching, EXT_CSD transfer, and separate user and boot areas.
-Antmicro.Renode.UnitTests.Cadence_TTCTests	Cadence Triple Timer Counter peripheral model is absent.
 Antmicro.Renode.UnitTests.Cadence_UARTTests	Cadence UART register, FIFO and IRQ model is absent.
 Antmicro.Renode.UnitTests.MachineTests	There is no generic IMachine registry and lifecycle for the fixture's managed mock peripheral graph.
 Antmicro.Renode.UnitTests.MultiCPUTests	There is no generic registration and debugger/context naming API for the fixture's mock CPUs and CPU-local peripherals.
