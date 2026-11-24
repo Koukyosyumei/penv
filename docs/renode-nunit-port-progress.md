@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,028 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,031 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 367 |
+| 移植待ち | 364 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -438,3 +438,5 @@ REPL のインラインオブジェクト生成を追加し、不明な型、参
 CPU参照を要素、キー、値に含むコレクション4件を移植した。前方参照を解決し、登録済みCPUと同一のオブジェクトIDを参照していることを検証した。対象の67件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-collection-refs.tsv)・[実行ログ](nunit-evidence/targeted-repl-collection-refs.log)
 
 `empty` を型、登録先、引数名、`using` の引数に置く4件を移植し、すべての構文エラーを照合した。[公式IDとの対応](nunit-evidence/targeted-repl-empty-syntax.tsv)・[実行ログ](nunit-evidence/targeted-repl-empty-syntax.log)
+
+真偽値と周辺機器参照に `empty` を渡す2件、および整数引数を `none` で上書きして既定コンストラクタの生成結果を検証する1件を移植した。対象の74件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-empty-binding.tsv)・[実行ログ](nunit-evidence/targeted-repl-empty-binding.log)

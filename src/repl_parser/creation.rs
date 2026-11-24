@@ -15,6 +15,8 @@ enum Model {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ScalarKind {
     Integer,
+    Boolean,
+    PeripheralReference,
     String,
     Range,
     Object,
@@ -23,6 +25,8 @@ pub(crate) enum ScalarKind {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ScalarValue {
     Integer(i32),
+    Boolean(bool),
+    PeripheralReference(Option<usize>),
     String(Option<String>),
     Range(u64, u64),
     Object(Option<usize>),
@@ -36,6 +40,14 @@ impl ScalarKind {
         resolve: impl Fn(&str) -> Option<usize>,
     ) -> Option<ScalarValue> {
         match (self, name, value) {
+            (Self::Boolean, "mockBool", "empty") => Some(ScalarValue::Boolean(false)),
+            (Self::Boolean, "mockBool", value) => boolean_value(value).map(ScalarValue::Boolean),
+            (Self::PeripheralReference, "mockReference", "empty") => {
+                Some(ScalarValue::PeripheralReference(None))
+            }
+            (Self::PeripheralReference, "mockReference", value) => {
+                resolve(value).map(|id| ScalarValue::PeripheralReference(Some(id)))
+            }
             (Self::Integer, "mockInt", "empty") => Some(ScalarValue::Integer(0)),
             (Self::Integer, "mockInt", value) => value.parse().ok().map(ScalarValue::Integer),
             (Self::String, "mockString", "empty") => Some(ScalarValue::String(None)),
@@ -76,6 +88,12 @@ impl Model {
             "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes" => {
                 Some(Self::CollectionPeripheral)
             }
+            "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithBoolAttribute" => {
+                Some(Self::ScalarPeripheral(ScalarKind::Boolean))
+            }
+            "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralUsingReferenceAttribute" => {
+                Some(Self::ScalarPeripheral(ScalarKind::PeripheralReference))
+            }
             MOCK_CPU => Some(Self::Cpu),
             "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
             "Antmicro.Renode.UnitTests.Mocks.MockExternal" => Some(Self::External),
@@ -110,6 +128,7 @@ struct CreatedObject {
     ranges: Vec<(u64, u64)>,
     enum_arguments: EnumArguments,
     scalar: Option<ScalarValue>,
+    empty_peripheral_counter: u32,
     collections: Collections,
 }
 
@@ -270,6 +289,12 @@ impl CreatedPlatform {
     }
 
     #[cfg(test)]
+    pub(crate) fn empty_peripheral_counter(&self, qualified_name: &str) -> Option<u32> {
+        let object = &self.objects[*self.registered.get(qualified_name)?];
+        (object.model == Model::EmptyPeripheral).then_some(object.empty_peripheral_counter)
+    }
+
+    #[cfg(test)]
     pub(crate) fn scalar(&self, qualified_name: &str) -> Option<&ScalarValue> {
         self.objects[*self.registered.get(qualified_name)?]
             .scalar
@@ -336,6 +361,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             ranges: Vec::new(),
             enum_arguments: EnumArguments::default(),
             scalar: None,
+            empty_peripheral_counter: 1,
             collections: Collections::default(),
         });
         targets.push(Some(id));
@@ -466,10 +492,30 @@ impl CreatedPlatform {
         if self.objects[id].model == Model::EnumPeripheral {
             return self.objects[id].enum_arguments.bind(name, value, source);
         }
+        if self.objects[id].model == Model::EmptyPeripheral && name == "value" {
+            self.objects[id].empty_peripheral_counter = if value == "none" {
+                1
+            } else if value.parse::<i32>().is_ok() {
+                3
+            } else if value.parse::<f64>().is_ok_and(f64::is_finite) {
+                2
+            } else {
+                return Err(format!("{source}: NoCtor: invalid value argument"));
+            };
+            return Ok(());
+        }
         if let Model::ScalarPeripheral(kind) = self.objects[id].model {
-            self.objects[id].scalar = Some(kind.bind(name, value, resolve).ok_or_else(|| {
-                format!("{source}: NoCtor: invalid scalar constructor argument {name}")
-            })?);
+            self.objects[id].scalar = Some(
+                kind.bind(name, value, |name| {
+                    let target = resolve(name)?;
+                    (kind != ScalarKind::PeripheralReference
+                        || self.objects[target].model != Model::External)
+                        .then_some(target)
+                })
+                .ok_or_else(|| {
+                    format!("{source}: NoCtor: invalid scalar constructor argument {name}")
+                })?,
+            );
             return Ok(());
         }
         let target = if name == "OtherCpu" && self.objects[id].model == Model::Cpu {
@@ -491,6 +537,7 @@ impl CreatedPlatform {
                     ranges: Vec::new(),
                     enum_arguments: EnumArguments::default(),
                     scalar: None,
+                    empty_peripheral_counter: 1,
                     collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();

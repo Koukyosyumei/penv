@@ -891,3 +891,43 @@ mockPeripheral:  Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>
 fn should_fail_on_empty_keyword_as_using_parameter() {
     assert_error(r#"using empty"#, "SyntaxError");
 }
+
+#[test]
+fn should_handle_empty_bool_value() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithBoolAttribute @ sysbus  <0, 1>
+    mockBool: empty"#, Path::new(".")).unwrap();
+    assert_eq!(
+        platform.scalar("sysbus.mockPeripheral"),
+        Some(&creation::ScalarValue::Boolean(false))
+    );
+}
+
+#[test]
+fn should_handle_empty_reference_attribute() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralUsingReferenceAttribute @ sysbus <0, 1>
+    mockReference: empty"#, Path::new(".")).unwrap();
+    assert_eq!(
+        platform.scalar("sysbus.mockPeripheral"),
+        Some(&creation::ScalarValue::PeripheralReference(None))
+    );
+}
+
+#[test]
+fn should_handle_none_in_ctor_param() {
+    let platform = creation::create_objects(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>
+    value: 1
+
+peripheral:
+    value: none"#,
+        Path::new("."),
+    )
+    .unwrap();
+    assert_eq!(
+        platform.empty_peripheral_counter("sysbus.peripheral"),
+        Some(1)
+    );
+}
