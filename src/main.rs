@@ -101,6 +101,7 @@ mod rv64_gem;
 mod rv64_mpfs;
 mod rv64_mpfs_ihc;
 mod rv64_mpfs_sd;
+pub mod sd_emmc;
 mod rv64_mpfs_wdog;
 mod rv64_platform;
 mod rv64_priv;

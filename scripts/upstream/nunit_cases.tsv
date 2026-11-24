@@ -3350,3 +3350,5 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,False
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,True).ShouldHandleAssemblyVersionChange	upstream_nunit::migrant_two_domains::assembly_version::write_false_read_true	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,False).ShouldHandleAssemblyVersionChange	upstream_nunit::migrant_two_domains::assembly_version::write_true_read_false	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,True).ShouldHandleAssemblyVersionChange	upstream_nunit::migrant_two_domains::assembly_version::write_true_read_true	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.SDCardEmmcTest.ShouldRejectSpiMode	upstream_nunit::sd_emmc::should_reject_spi_mode	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.SDCardEmmcTest.ShouldUseSectorAddressingForEmmc	upstream_nunit::sd_emmc::should_use_sector_addressing_for_emmc	new

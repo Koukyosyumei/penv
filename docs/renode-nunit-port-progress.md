@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,348 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,350 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 47 |
+| 移植待ち | 45 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -512,3 +512,5 @@ Migrant の `TestGuidVerification` 20件を移植した。Rust の型スタン�
 復元時のコンストラクタがオブジェクトを生成する4件を移植した。Rust の読み込みは生成オブジェクトをフレーム内に追加し、復元されたフィールド参照から取得できることを検証した。この初期化方式はルート単位の参照管理で利用できる。[公式IDとの対応](nunit-evidence/targeted-migrant-domain-constructor.tsv)・[実行ログ](nunit-evidence/targeted-migrant-domain-constructor.log)
 
 アセンブリバージョン変更の4件を移植した。Rust のフレームに1つのアセンブリバージョンを記録し、モジュールリビジョンとは独立に変更可否を判断する。上流の `1.0` から `1.1` へ移行した際に、入れ子の整数フィールド `a.c == 1` を照合した。`TwoDomainTests` の全36件が対象実行で合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-domain-assembly.tsv)・[実行ログ](nunit-evidence/targeted-migrant-domain-assembly.log)
+
+eMMC カードのコマンド・データ API を追加し、SPI モードの拒否とセクター指定による読み書きの2件を移植した。[公式IDとの対応](nunit-evidence/targeted-sd-emmc-sectors.tsv)・[実行ログ](nunit-evidence/targeted-sd-emmc-sectors.log)
