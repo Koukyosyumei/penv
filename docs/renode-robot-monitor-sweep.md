@@ -666,3 +666,33 @@ Arty LiteX の `Should Boot` はゲストの起動出力を受信し、
 `11f8d8b9222fdbcc7c616571d3aa453b5800aeaf224b04264bf5465eea03a8a4`。
 
 マシン選択変更後も HEX は合格した（`target/monitor-selection-88b06b7-hex/results.json`）。
+
+`9ec62e1` では、起動前の `echo` を `PENV-INSPECT` で Rust に送り、
+通常の RESC ローダーで変数を評価する。マシンや実行時操作が必要な場合は
+通常の起動・ライブモニターに切り替える。照会後に投入した操作が
+一度も Rust に評価されない場合、その照会だけでケースを合格にしない。
+
+固定 Renode の Robot RPC と penv の同一コマンド列で、未定義時に
+`?=` が 5678 を設定し、定義済みの 1234 は維持されることを確認した。
+末尾改行を除いた結果が一致した
+（`target/monitor-inspect-proof/{renode,penv}.jsonl`）。
+未変更の `Should Call Conditional Set`、
+`Should Not Call Conditional Set`、`Should Load HEX` はすべて合格
+（`target/monitor-inspect-9ec62e1-{positive,negative,hex}/results.json`）。
+
+`a378f33` と `b9600b7` は、`log` と `lastLog` を Rust の履歴で処理する。
+通常 CLI と起動前の Robot 照会が同じ記録・読み出し処理を使う。
+履歴は既定で 1,000 件を保持し、上限で古い 1 件を捨てる。
+Robot で起動前に投入されたログは照会時に順に評価するため、
+そのタイムスタンプは照会時の評価時刻となる。
+
+`target/monitor-lastlog-proof/history.resc` を両 CLI で実行し、
+時刻を除いた INFO と WARNING の履歴を比較した。
+固定 Renode と penv の 1,003 RPC コマンドも比較し、1,001 件目を
+追加する前後で、それぞれ 1,000 件すべてのメッセージと順序が一致した。
+`renode-rpc.jsonl` と `penv-rpc-summary.jsonl` に結果を記録した。
+STM32F072b の未変更の Console Echo は合格。
+MiV の `Should Print Last Logs` は `UART.MiV_CoreUART` の未対応で
+起動前に停止した（`target/monitor-lastlog-a378f33-miv/results.json`）。
+未変更の `Should Overflow Buffer` は `b9600b7` で合格した
+（`target/monitor-lastlog-b9600b7-overflow/results.json`）。
