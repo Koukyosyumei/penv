@@ -11,7 +11,7 @@ import tempfile
 import time
 
 from memory_keywords import MemoryKeywords
-from monitor_input import MonitorInput, PUBLIC_ASSET, at_path, script_asset_urls, words
+from monitor_input import MonitorInput, PUBLIC_ASSET, at_path, script_asset_urls, unquote, words
 from penv_robot import (AssertionFailed, Endpoint, PenvExecutionError, PenvStartupError,
                         PenvUnsupported, Unsupported)
 
@@ -278,12 +278,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             prefix = "machine LoadPlatformDescriptionFromString "
             if command.startswith(prefix) and not self.image:
                 arg = command[len(prefix):]
-                if arg.startswith('"""') and arg.endswith('"""'):
-                    repl = arg[3:-3]
-                elif arg.startswith('"') and arg.endswith('"') and "\n" not in arg:
-                    repl = arg[1:-1].replace(r'\"', '"')
-                else:
+                if not ((arg.startswith('"""') and arg.endswith('"""') and len(arg) >= 6)
+                        or re.fullmatch(r"""(['"])(?:\\[\s\S]|(?!\1)[^\\])*\1""", arg)):
                     raise Unsupported("invalid inline platform quoting")
+                repl = unquote(arg)
                 self.inline.append(repl)
                 return ""
             if (not self.image and tokens[:1] == ["sysbus"] and len(tokens) == 3
