@@ -2097,6 +2097,18 @@ fn run() -> Result<ExitCode, String> {
         }
     }
     if monitor_stdio {
+        if !runtime.is_empty() {
+            let (stop, _) = monitor::run(
+                &mut machine,
+                script.as_deref().ok_or("missing monitor script")?,
+                &runtime,
+                max_steps.unwrap_or(10_000_000),
+                &mut io::stderr().lock(),
+            )?;
+            if stop != Stop::ScriptComplete {
+                return Err(format!("monitor script stopped before completion: {stop:?}"));
+            }
+        }
         monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock())?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -2549,7 +2561,17 @@ fn parse_address64(value: &str) -> Result<u64, String> {
 
 #[cfg(test)]
 mod upstream_nunit {
-    use super::parse_address64;
+    use super::{parse_address64, repl_syntax};
+
+    #[test]
+    fn quoted_string() {
+        assert_eq!(repl_syntax::quoted_string(r#""some text""#).as_deref(), Some("some text"));
+    }
+
+    #[test]
+    fn quoted_string_with_semicolon() {
+        assert_eq!(repl_syntax::quoted_string(r#""some;text""#).as_deref(), Some("some;text"));
+    }
 
     #[test]
     fn hexadecimal_unsigned_long_1000() {

@@ -609,6 +609,7 @@ pub fn serve(
         let mut boot = Boot {
             platform: Some(path.into()),
             image: Some(Asset::new("", path)),
+            started: true,
             ..Boot::default()
         };
         let mut existing_machine = true;
@@ -1543,7 +1544,7 @@ fn execute(
                 hold,
             ))
         }
-        [target, "PC", address] if !boot.runtime.is_empty() => {
+        [target, "PC", address] if boot.started || !boot.runtime.is_empty() => {
             let cpu = resolve(target)?;
             Some(Action::CpuPc(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),

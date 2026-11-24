@@ -16,7 +16,7 @@ HOST_SUITES = {"tests/peripherals/VirtIO.robot", "tests/tools/renode-test.robot"
 
 
 def status_record(case, status, reason):
-    return dict(case, status=status, reason=reason, engine="penv")
+    return dict(case, status=status, reason=reason, engine="penv", category="environment")
 
 
 def write_case(case, record, directory):
@@ -24,24 +24,28 @@ def write_case(case, record, directory):
     write_json(directory / "case.json", dict(case, engine="penv", **record))
 
 
-def assess(test, endpoint, missing):
-    last = endpoint.measurements[-1]["result"] if endpoint.measurements else None
-    unsupported = next((call["message"] for call in endpoint.calls
-                        if call["status"] == "unsupported"), None)
-    if missing or unsupported:
-        status, reason = "unsupported", missing or unsupported
+def assess(test, endpoint):
+    failures = [call for call in endpoint.calls if call["status"] != "ok"]
+    issue = next((call for call in failures if call["status"] == "unsupported"), None)
+    if issue:
+        status, category, reason = "unsupported", issue["category"], issue["message"]
     elif test.status == "SKIP":
-        status, reason = "skipped", test.message
-    elif last == "pass" and test.status == "PASS" and all(
-            call["status"] == "ok" for call in endpoint.calls):
-        status, reason = "pass", "penv assertion and Robot case passed"
-    elif test.status == "FAIL" and last in {"pass", "fail"}:
-        status, reason = "fail", test.message
-    elif last or any(call["status"] == "error" for call in endpoint.calls):
-        status, reason = "not_run", test.message or last or "remote startup error"
+        status, category, reason = "skipped", "skip", test.message
+    elif failures:
+        issue = failures[-1]
+        category, reason = issue["category"], issue["message"]
+        status = "fail" if category in {"assertion_failed", "penv_execution_failure"} else "not_run"
+        if test.status == "PASS":
+            status, category = "not_run", "environment"
+            reason = f"error handled by Robot without a verified penv assertion: {reason}"
+    elif endpoint.measurements and test.status == "PASS":
+        status, category, reason = "pass", "passed", "penv observation and Robot case passed"
+    elif endpoint.measurements and test.status == "FAIL":
+        status, category, reason = "fail", "assertion_failed", test.message
     else:
-        status, reason = "not_run", test.message or "no measured penv operation"
-    return dict(status=status, reason=reason, robot_status=test.status,
+        status, category = "not_run", "no_measurement"
+        reason = test.message or "no measured penv operation"
+    return dict(status=status, category=category, reason=reason, robot_status=test.status,
                 message=test.message, remote_calls=endpoint.calls[:],
                 measurements=endpoint.measurements[:])
 
@@ -52,23 +56,39 @@ class SuiteListener:
     def __init__(self, endpoint, active, out, xml):
         self.endpoint, self.active, self.out, self.xml = endpoint, active, out, xml
         self.results = {}
+        self.endpoint.states = {}
+        self.blocked = {}
 
     def start_test(self, data, result):
-        case, directory = self.active[data.name]
+        from state_dependency_listener import keyword_states
+
+        _, directory = self.active[data.name]
         self.endpoint.begin_case(directory)
+        missing = [state for state in keyword_states(data, "Requires")
+                   if state not in self.endpoint.states]
+        if missing:
+            reason = f"required state not produced by a successful replayable provider: {missing}"
+            self.blocked[data.name] = reason
+            data.config(setup=None, teardown=None)
+            data.body.clear()
+            data.body.create_keyword("Skip", [reason])
 
     def end_test(self, data, result):
         case, directory = self.active[data.name]
-        record = assess(result, self.endpoint, None)
+        record = assess(result, self.endpoint)
+        if data.name in self.blocked:
+            record.update(status="skipped", category="dependency_blocked", reason=self.blocked[data.name])
+        if result.status == "PASS" and self.endpoint.pending_state and all(
+                call["status"] == "ok" for call in self.endpoint.calls):
+            self.endpoint.publish_state()
         record["evidence"] = str(self.xml)
         self.results[data.name] = record
-        write_case(case, record, directory)
+        write_case(case, dict(record, provisional=True), directory)
 
 
 def run_suite(task, *, options, renode, binary, assets):
     """Pool worker entry point. Each worker uses its own Robot process state."""
     from robot_tests_provider import RobotTestSuite
-    from state_dependency_listener import keyword_states
     from tests_engine import TestTag
 
     path, hotspot, cases, out = task
@@ -88,16 +108,14 @@ def run_suite(task, *, options, renode, binary, assets):
             directory.mkdir()
             reason = None
             if case["skipped"]:
-                records[test.name] = dict(status="skipped", reason="upstream host skip tag")
+                records[test.name] = dict(status="skipped", category="skip", reason="upstream host skip tag")
             elif (path in HOST_SUITES or path.startswith(("tests/external-control/",
                     "tests/native-interface/", "tests/unit-tests/gdb/"))):
                 reason = "requires host process, debugger or native integration"
-            elif (hotspot is not None or keyword_states(test, "Requires")
-                    or keyword_states(test, "Provides") or "profiling" in test.tags
-                    or provider.timeout_expected_tag in test.tags):
+            elif ("profiling" in test.tags or provider.timeout_expected_tag in test.tags):
                 reason = "requires Renode-specific lifecycle"
             if reason:
-                records[test.name] = dict(status="unsupported", reason=reason)
+                records[test.name] = dict(status="unsupported", category="adapter_missing", reason=reason)
             if test.name in records:
                 write_case(case, records[test.name], directory)
                 continue
@@ -126,6 +144,7 @@ def run_suite(task, *, options, renode, binary, assets):
                               variable=["SKIP_RUNNING_SERVER:True", "SAVE_LOGS:False",
                                         "CREATE_SNAPSHOT_ON_FAIL:False",
                                         f"PORT_NUMBER:{server.server_address[1]}",
+                                        f"HOTSPOT_ACTION:{hotspot or 'None'}",
                                         f"RESULTS_DIRECTORY:{out}", f"RENODETOOLS:{renode / 'tools'}",
                                         f"RENODEKEYWORDS:{renode / 'tests/renode-keywords.robot'}"])
                 finally:
@@ -138,17 +157,23 @@ def run_suite(task, *, options, renode, binary, assets):
                 missing = next((msg.text for msg in node.iter("msg") if msg.get("level") == "FAIL"
                                 and re.search(r"No keyword with name .* found", msg.text or "")), None)
                 if missing:
-                    records[name].update(status="unsupported", reason=missing)
+                    records[name].update(status="unsupported", category="adapter_missing", reason=missing)
                 if records[name]["status"] in {"pass", "fail"} and any(
                         keyword.get("name") == "Sleep" and keyword.get("library") == "BuiltIn"
                         for keyword in node.iter("kw")):
-                    records[name].update(status="unsupported", reason="requires asynchronous emulation during host Sleep")
+                    records[name].update(status="unsupported", category="adapter_missing",
+                                         reason="requires asynchronous emulation during host Sleep")
                 if node.find("status").get("status") == "FAIL" and records[name]["status"] == "pass":
-                    records[name].update(status="fail", reason="Robot XML reports failure")
+                    records[name].update(status="fail", category="assertion_failed", reason="Robot XML reports failure")
+                if records[name]["category"] == "no_measurement" and re.search(
+                        r"FileNotFoundError|ModuleNotFoundError|Importing library|PermissionError|No such file|"
+                        r"Parent suite setup failed|Connection refused|Timeout exceeded",
+                        records[name]["reason"], re.I):
+                    records[name]["category"] = "environment"
                 case, directory = active[name]
                 write_case(case, records[name], directory)
         return [dict(case, engine="penv", **records.get(case["name"], dict(
-            status="not_run", reason="case did not reach Robot listener"))) for case in cases]
+            status="not_run", category="environment", reason="case did not reach Robot listener"))) for case in cases]
     finally:
         os.chdir(old_cwd)
 
@@ -180,7 +205,7 @@ def run_batch(selected, options, renode, binary, out, assets, jobs):
                 # A late exception can leave valid per-case results.
                 saved = {(r["id"], r["parameters"]["hotspot_action"]): r
                          for p in directory.glob("case-*/case.json")
-                         for r in [json.loads(p.read_text())]}
+                         for r in [json.loads(p.read_text())] if not r.get("provisional")}
                 records = [saved.get((r["id"], hotspot), r) for r in records]
             all_results[path, hotspot] = records
             counts.update(record["status"] for record in records)

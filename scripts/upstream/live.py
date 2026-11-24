@@ -7,32 +7,114 @@ from pathlib import Path
 import re
 import select
 import subprocess
+import tempfile
 import time
 
-from penv_robot import Endpoint, Unsupported
+from penv_robot import AssertionFailed, Endpoint, PenvExecutionError, PenvUnsupported, Unsupported
 
 
 class LiveEndpoint(Endpoint):
     proc = None
+    pending_state = None
     keywords = dict(Endpoint.keywords, **{
         "Wait For Prompt On Uart": "prompt",
         "Write Line To Uart": "write_line",
         "Create LED Tester": "create_led",
         "Assert LED State": "assert_led",
+        "Execute Script": "execute_script",
+        "Allocate Temporary File": "temporary_file",
+        "Allocate Temporary Directory": "temporary_directory",
+        "Handle Hot Spot": "hotspot",
+        "Provides": "provides",
+        "Requires": "requires",
     })
 
     def reset(self):
         self.close()
         super().reset()
         self.platform = None
+        self.script = None
+        self.replaying = False
         self.inline = []
         self.using_bus = False
-        self.numbers = None
+        self.numbers = "Hexadecimal"
         self.uart = None
         self.uart_timeout = None
         self.led = None
         self.led_timeout = None
         self.buffer = b""
+
+    states = None
+
+    def begin_case(self, out):
+        self.pending_state = None
+        super().begin_case(out)
+
+    def publish_state(self):
+        if self.pending_state:
+            state, recipe = self.pending_state
+            self.states[state] = recipe
+
+    def provides(self, state, kind="Serialization"):
+        if "=" in state:
+            state = self.option(state, "state")
+        if "=" in kind:
+            kind = self.option(kind, "type")
+        if self.replaying or kind != "Reexecution":
+            raise Unsupported(f"Provides {kind} requires a snapshot-capable adapter")
+        replay = {
+            "Execute Command", "Execute Script", "Create Terminal Tester", "Start Emulation",
+            "Wait For Line On Uart", "Wait For Prompt On Uart", "Write Line To Uart",
+            "Create LED Tester", "Assert LED State", "Handle Hot Spot",
+            "Set Default Uart Timeout", "Set Crash On Abort",
+        }
+        calls = [call for call in self.calls[:-1] if call["keyword"] != "Reset Emulation"]
+        if self.proc is None or any(call["status"] != "ok" or call["keyword"] not in replay
+                                    for call in calls):
+            raise Unsupported("state includes operations without a supported replay")
+        self.pending_state = state, [(call["keyword"], call["args"]) for call in calls]
+
+    def requires(self, state):
+        if "=" in state:
+            state = self.option(state, "state")
+        if self.commands or self.proc or self.script:
+            raise Unsupported("Requires must precede machine operations")
+        if state not in self.states:
+            raise Unsupported(f"required state {state!r} unavailable")
+        self.replaying = True
+        try:
+            for keyword, args in self.states[state]:
+                getattr(self, self.keywords[keyword])(*args)
+        finally:
+            self.replaying = False
+
+    def temporary_file(self):
+        with tempfile.NamedTemporaryFile(dir=self.out, delete=False) as file:
+            return file.name
+
+    def temporary_directory(self, name):
+        if not re.fullmatch(r"[\w.-]+", name) or name in {".", ".."}:
+            raise Unsupported("temporary directory requires a simple name")
+        path = self.out / name
+        path.mkdir()
+        return str(path)
+
+    def hotspot(self, action):
+        if action != "None":
+            raise Unsupported(f"HotSpot action {action} requires additional lifecycle support")
+
+    def execute_script(self, script):
+        if self.commands or self.proc or self.script:
+            raise Unsupported("Execute Script requires a fresh monitor")
+        candidate = (self.root / script.removeprefix("@")).resolve()
+        if not candidate.is_relative_to(self.root):
+            raise Unsupported("Execute Script requires a pinned upstream script")
+        if not candidate.is_file():
+            raise FileNotFoundError(candidate)
+        self.script = candidate
+        self.image = True
+        self.ensure_running()
+        return ""
 
     def close(self):
         proc = getattr(self, "proc", None)
@@ -47,11 +129,17 @@ class LiveEndpoint(Endpoint):
             finally:
                 proc.stdout.close()
 
-    def execute(self, command):
+    def execute(self, command, *fragments):
+        if isinstance(command, list):
+            if fragments or not all(isinstance(item, str) for item in command):
+                raise Unsupported("unsupported Execute Command fragment arguments")
+            command = " ".join(command)
+        elif fragments:
+            raise Unsupported(f"Execute Command machine context or arguments: {fragments}")
         if command == "using sysbus":
             self.using_bus = True
             return ""
-        if re.fullmatch(r"numbersMode (Hexadecimal|Decimal)", command):
+        if re.fullmatch(r"numbersMode (Hexadecimal|Decimal|Both)", command):
             self.numbers = command.split()[1]
             return ""
         if not self.commands and re.fullmatch(r'mach create(?: "[^"\r\n]+")?', command):
@@ -90,13 +178,32 @@ class LiveEndpoint(Endpoint):
             command = "sysbus " + command
         if re.fullmatch(r"sysbus " + scalar + r"(?: (?:0x[\da-fA-F]+|\d+)){1,2}", command):
             reading = command.startswith("sysbus Read")
-            data = self.operation(command, assertion=reading).strip()
-            if reading and self.numbers == "Decimal":
-                return str(int(data, 16))
-            return data
+            data = self.operation(command, assertion=reading)
+            return self.format_number(data) if reading else data
+        cpu = r"(?:sysbus\.)?cpu[\w]* "
+        number = r"(?:0x[\da-fA-F]+|\d+)"
+        if re.fullmatch(cpu + r"(?:PC(?: " + number + r")?|IsHalted(?: (?:true|false|True|False))?|"
+                        r"Pause|Resume|IsPaused|Step(?: " + number + r")?|"
+                        r"EvaluateConditionCode " + number + r'|GetRegister "?[cx]psr"?)', command):
+            reading = command.endswith((" PC", " IsHalted", " IsPaused")) or any(
+                name in command for name in (" EvaluateConditionCode ", " GetRegister "))
+            if command.endswith(" Step"):
+                command += " 1"
+            value = self.operation(command, assertion=reading)
+            return self.format_number(value) if value.lstrip().startswith("0x") else value
         if self.started and re.fullmatch(r"sysbus\.[\w.]+\.adc-channel\d+ Volts \d+(?:\.\d+)?", command):
             return self.operation(command)
         raise Unsupported(f"Execute Command: {command}")
+
+    def format_number(self, value):
+        raw = value.strip()
+        num = int(raw, 16)
+        if self.numbers == "Decimal":
+            return f"{num}\r\n"
+        hex_value = "0x" + raw[2:].upper()
+        if self.numbers == "Both":
+            hex_value += f" ({num})"
+        return hex_value + "\r\n"
 
     def receive(self):
         fd = self.proc.stdout.fileno()
@@ -125,14 +232,16 @@ class LiveEndpoint(Endpoint):
     def ensure_running(self):
         if self.proc is not None:
             return
-        if not self.commands or not (self.platform or self.inline):
+        if not self.script and (not self.commands or not (self.platform or self.inline)):
             raise Unsupported("requires a single machine and platform")
         platform = self.platform
         if self.inline:
             platform = self.out / "platform.repl"
             platform.write_text("\n".join(self.inline) + "\n")
         cmd = [str(self.binary), "run", "--platform-root", str(self.root), "--monitor-stdio"]
-        if self.image:
+        if self.script:
+            cmd.extend(["--script", str(self.script), "--asset-dir", str(self.assets)])
+        elif self.image:
             script = self.out / "boot.resc"
             script.write_text("\n".join([self.commands[0],
                               f"machine LoadPlatformDescription @{platform}",
@@ -147,8 +256,9 @@ class LiveEndpoint(Endpoint):
         try:
             status, _ = self.receive()
         except RuntimeError as exc:
-            if re.search(r"unsupported (?:platform model|peripheral|CPU)|unknown (?:model|CPU)", str(exc), re.I):
-                raise Unsupported(str(exc)) from exc
+            if re.search(r"unsupported (?:platform model|peripheral|CPU|monitor command|command)|"
+                         r"unknown (?:model|CPU)", str(exc), re.I):
+                raise PenvUnsupported(str(exc)) from exc
             raise
         if status != "READY":
             raise RuntimeError(f"expected penv READY, got {status}")
@@ -158,8 +268,11 @@ class LiveEndpoint(Endpoint):
     def operation(self, command, assertion=False):
         self.ensure_running()
         begin = time.monotonic()
-        self.proc.stdin.write((command + "\n").encode())
-        status, value = self.receive()
+        try:
+            self.proc.stdin.write((command + "\n").encode())
+            status, value = self.receive()
+        except (BrokenPipeError, RuntimeError) as exc:
+            raise PenvExecutionError(f"penv monitor stopped during {command}: {exc}") from exc
         measurement = dict(command=self.process_command, operation=command, reply=status, value=value,
                            elapsed_s=time.monotonic() - begin, stage="emulation")
         if status == "MATCH" or status == "OK" and assertion:
@@ -177,9 +290,11 @@ class LiveEndpoint(Endpoint):
             print(json.dumps(measurement), file=log)
         if status == "UNSUPPORTED" or status == "ERROR" and re.search(
                 r"UART peripheral not found|unknown STM32 UART|unknown LED", value, re.I):
-            raise Unsupported(value)
+            raise PenvUnsupported(value)
+        if measurement.get("result") == "fail":
+            raise AssertionFailed(value)
         if status not in {"OK", "MATCH"}:
-            raise RuntimeError(value)
+            raise PenvExecutionError(value)
         return value
 
     @staticmethod

@@ -13,6 +13,18 @@ class Unsupported(Exception):
     pass
 
 
+class PenvUnsupported(Unsupported):
+    pass
+
+
+class PenvExecutionError(RuntimeError):
+    pass
+
+
+class AssertionFailed(RuntimeError):
+    pass
+
+
 class Endpoint:
     keywords = {
         "Set Default Uart Timeout": "set_timeout",
@@ -49,10 +61,16 @@ class Endpoint:
             if kwargs:
                 raise Unsupported("named arguments")
             result = getattr(self, self.keywords[name])(*args)
+        except PenvUnsupported as exc:
+            call.update(status="unsupported", category="penv_unimplemented", message=str(exc))
         except (Unsupported, TypeError) as exc:
-            call.update(status="unsupported", message=str(exc))
+            call.update(status="unsupported", category="adapter_missing", message=str(exc))
+        except AssertionFailed as exc:
+            call.update(status="error", category="assertion_failed", message=str(exc))
+        except PenvExecutionError as exc:
+            call.update(status="error", category="penv_execution_failure", message=str(exc))
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-            call.update(status="error", message=str(exc))
+            call.update(status="error", category="environment", message=str(exc))
         else:
             call.update(status="ok")
             return {"status": "PASS", "return": "" if result is None else result}

@@ -26,9 +26,16 @@ PIN = "c38ac3babcd38a7144b9498e3ca4c2226b76aa37"
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ROBOT = ["tests/unit-tests/hex.robot", "tests/platforms/STM32F072b.robot"]
 PROJECT = "tests/unit-tests/RenodeTests/RenodeTests.csproj"
-NUNIT_PREFIX = ("Antmicro.Renode.UnitTests.PlatformDescription.ParserPrimitivesTest."
-                "ShouldParseHexadecimalLong")
-MAPPING = {"0x1000": "1000", "0x12AB": "12ab", "0x0ff": "0ff"}
+NUNIT_PREFIX = "Antmicro.Renode.UnitTests.PlatformDescription.ParserPrimitivesTest."
+MAPPING = {
+    f'{NUNIT_PREFIX}ShouldParseHexadecimalLong("{value}")':
+        (f"hexadecimal_unsigned_long_{suffix}", {"number": value})
+    for value, suffix in [("0x1000", "1000"), ("0x12AB", "12ab"), ("0x0ff", "0ff")]
+}
+MAPPING.update({
+    f"{NUNIT_PREFIX}ShouldParseQuotedString": ("quoted_string", {}),
+    f"{NUNIT_PREFIX}ShouldParseQuotedStringWithASemicolon": ("quoted_string_with_semicolon", {}),
+})
 
 
 def git(root, *args):
@@ -230,9 +237,7 @@ def discover_nunit(root, dotnet, projects, host, output):
             # NUnit permits identical custom names (even for different arguments).
             # Retain the engine ID for those occurrences in this pinned discovery.
             unique_id = case_id if ids[case_id] == 1 else f"{case_id} [NUnit {engine_id}]"
-            parameter = re.fullmatch(re.escape(NUNIT_PREFIX) + r'\("([^"]*)"\)', case_id)
-            value = parameter[1] if parameter else None
-            mapped = project == PROJECT and value in MAPPING
+            mapped = MAPPING.get(case_id) if project == PROJECT else None
             excluded = not categories.isdisjoint(host["exclude"])
             runstate = node.attrib["runstate"]
             if excluded:
@@ -244,11 +249,11 @@ def discover_nunit(root, dotnet, projects, host, output):
             run["selected_count"] += not excluded
             run["runnable_count"] += (not excluded and runstate == "Runnable")
             rows.append(dict(id=f"{project}::{unique_id}", project=project, name=case_id,
-                             nunit_id=engine_id, parameters={"number": value} if mapped else
+                             nunit_id=engine_id, parameters=mapped[1] if mapped else
                              ({"display": parameters} if parameters else {}),
                              categories=sorted(categories), runstate=runstate,
-                             rust_test=f"upstream_nunit::hexadecimal_unsigned_long_{MAPPING[value]}"
-                             if mapped else None, evidence=str(xml), status=status))
+                             rust_test=f"upstream_nunit::{mapped[0]}" if mapped else None,
+                             evidence=str(xml), status=status))
     return rows, runs
 
 
@@ -353,6 +358,10 @@ def main():
             if row["status"] == "not_run" and row["rust_test"] and not args.inventory_only:
                 row = run_rust(row, out / "nunit", out / "cargo")
             row["engine"] = "penv-rust"
+            row["category"] = {"pass": "passed", "fail": "assertion_failed",
+                               "skipped": "skip", "excluded": "skip",
+                               "not_runnable": "environment",
+                               "not_run": "environment"}.get(row["status"], "adapter_missing")
             if row["status"] == "unmapped":
                 row.update(status="unsupported", reason="no equivalent Rust test")
             results.append(row)
@@ -380,6 +389,8 @@ def main():
     write_json(out / "results.json", dict(metadata=metadata, counts=counts,
                                          verdicts=dict(Counter(row["verdict"] for row in results
                                                                if row["verdict"])),
+                                         categories=dict(Counter(row.get("category", "not_selected")
+                                                                 for row in results)),
                                          nunit=nunit_runs, cases=results))
     print(counts)
     accepted = {"pass", "skipped", "unmapped", "diagnostic", "excluded", "not_runnable"}
@@ -391,7 +402,7 @@ def main():
                or any(row.get("status") == "diagnostic" and row["outcome"] != "fail"
                       for row in results)
                or bool(nunit_root and any(run["status"] != "discovered" for run in nunit_runs))
-               or bool(nunit_root and {row["parameters"]["number"] for row in nunit
+               or bool(nunit_root and {row["name"] for row in nunit
                                        if row["rust_test"]} != set(MAPPING)))
 
 
