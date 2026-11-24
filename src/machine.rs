@@ -128,6 +128,7 @@ pub struct Machine {
     pub(crate) cpu_less: bool,
     pub(crate) empty_monitor: bool,
     monitor_active: bool,
+    pub(crate) monitor_single_step_blocking: bool,
     pub bus: Bus,
     pub primary: Hart,
     pub function_symbols: Option<BTreeMap<u32, String>>,
@@ -420,6 +421,7 @@ impl Machine {
             cpu_less: false,
             empty_monitor: false,
             monitor_active: false,
+            monitor_single_step_blocking: true,
             boot_memory_cleared: false,
             monitor_firmware: None,
             monitor_quantum: DEFAULT_MONITOR_QUANTUM,
@@ -1645,6 +1647,13 @@ impl Machine {
             self.elapsed_steps = self.time_source.elapsed();
             self.bus.uart_clock_step = self.elapsed_steps;
             return Ok((Stop::Limit, 0));
+        }
+        if selected.is_none() && limit != 0 && self.monitor_single_step_blocking
+            && std::iter::once(&self.primary).chain(&self.secondary).enumerate().any(|(index, hart)| {
+                hart.monitor_single_step && !hart.monitor_halted && self.halted & (1 << index) == 0
+            })
+        {
+            return Ok((if matched(&self.bus, output) { Stop::OutputMatch } else { Stop::Paused }, 0));
         }
         let all_harts = ((1u16 << self.hart_count()) - 1) as u8;
         let stop_when_halted = self.stop_when_halted && selected.is_none();
@@ -6014,6 +6023,25 @@ mem: Memory.MappedMemory @ sysbus 0x1000 {{ size: 0x40000 }}
         assert_eq!(machine.primary.csr.access(0xc020_2073, 0).unwrap(), 43);
         assert_eq!(machine.primary.csr.access(0xc000_2073, 0).unwrap(), 4);
         assert_eq!(machine.primary.csr.access(0xc010_2073, 0).unwrap(), 6);
+    }
+
+    #[test]
+    fn blocking_single_step_holds_continuous_harts_until_released() {
+        let mut machine = Machine::new(64).unwrap();
+        machine.bus.memory(RAM_BASE, 8).unwrap()
+            .copy_from_slice(&0x0000_0013u32.to_le_bytes().repeat(2));
+        machine.configure_harts(2);
+        machine.secondary[0].monitor_single_step = true;
+        let mut output = std::io::sink();
+        assert_eq!(machine.run(2, &mut output).unwrap(), (Stop::Paused, 0));
+        assert_eq!(machine.elapsed_steps(), 0);
+        assert_eq!(machine.run_selected(1, Some(1), &mut output, |_, _| false).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, RAM_BASE);
+        assert_eq!(machine.secondary[0].pc, RAM_BASE + 4);
+        machine.monitor_single_step_blocking = false;
+        assert_eq!(machine.run(2, &mut output).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, RAM_BASE + 4);
+        assert_eq!(machine.secondary[0].pc, RAM_BASE + 4);
     }
 
     #[test]

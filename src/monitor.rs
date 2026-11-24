@@ -353,6 +353,7 @@ enum Action {
     RunRemaining,
     TimeSourceInfo,
     EmulationIsStarted,
+    SingleStepBlocking(Option<bool>),
     PhyRegister(String, u16),
     AdxlAxis(String, usize, i16),
     LiteXLedState(String),
@@ -548,7 +549,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
-                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -637,6 +638,7 @@ fn run_commands<'a>(
                 None
             }),
             Action::LoadMemory(path) => session.load(machine, path).map(|()| {
+                machine.monitor_single_step_blocking = true;
                 cleared = false;
                 None
             }),
@@ -710,6 +712,15 @@ fn run_commands<'a>(
                     return Err("the platform has no CPU".into());
                 }
                 mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, output.output).map(|()| None)
+            }
+            Action::SingleStepBlocking(value) => {
+                if let Some(value) = value {
+                    machine.monitor_single_step_blocking = *value;
+                    Ok(None)
+                } else {
+                    writeln!(output.reply(), "{}", if machine.monitor_single_step_blocking { "True" } else { "False" })
+                        .map(|()| None).map_err(|error| error.to_string())
+                }
             }
             Action::EmulationIsStarted => {
                 writeln!(output.reply(), "{}", if machine.monitor_is_active() { "True" } else { "False" })
@@ -1970,7 +1981,7 @@ fn is_console_action(action: &Action) -> bool {
 fn is_empty_machine_action(action: &Action) -> bool {
     is_console_action(action) || matches!(action,
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
-        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::RunFor(_) | Action::RunUntil(_)
+        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::RunFor(_) | Action::RunUntil(_)
         | Action::RunToSyncPoint | Action::SetEmulationPaused(_) | Action::SelectMachineZero
         | Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory | Action::DescribeSnapshotPlatform)
 }
@@ -2702,6 +2713,10 @@ fn execute(
             Some(Action::LastLog(count))
         }
         ["emulation" | "machine", "GetTimeSourceInfo"] => Some(Action::TimeSourceInfo),
+        ["emulation", "SingleStepBlocking", value @ ..] if value.len() <= 1 => {
+            Some(Action::SingleStepBlocking(value.first()
+                .map(|value| resolve(value).and_then(parse_tester_bool)).transpose()?))
+        }
         ["emulation", "IsStarted"] => Some(Action::EmulationIsStarted),
         ["TestMonitorUartIdle", timeout, args @ ..] => {
             let mut tester = None;
@@ -3533,7 +3548,7 @@ fn execute(
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint
-                        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted
+                        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_)
                         | Action::DescribeSnapshotPlatform
                         | Action::SaveMemory(..)
                         | Action::ClearMemory
