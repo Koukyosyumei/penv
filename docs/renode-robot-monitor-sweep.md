@@ -103,3 +103,61 @@ UART の ANSI 色コードが XML-RPC を壊していた
 `target/robot-wfi-rust-tests.log` と `target/robot-rust-baseline-full.log`。
 変更前の `ed298c1` と今回の Rust テストは両方547件合格、58件失敗で、
 失敗したテスト名も一致した。
+
+## RV32 CLIC の署名スイート
+
+固定 Renode の `CoreLocalInterruptController.cs` と tlib の RISC-V
+`helper.c`、`op_helper.c` に沿って、CLINT のソフトウェア／タイマー割り込みを
+CLIC の入力3／7に接続した。RV32 M-mode のしきい値、優先度、直接・間接
+ベクター、`mcause` の別名ビット、`mnxti`、条件付きスクラッチ交換を実装した。
+ELF32 のロード区間が隣接する複数の RAM をまたぐ場合は、同じバイト列を
+各マッピングに分けてロードする。
+
+`clicdirect-01_default` の上流 ELF は `0x80002000` からのロード区間が
+`0x80004000` の署名 RAM にまたがる。分割ロード後はゲストが署名比較に達し、
+未対応のスクラッチ CSR によるトラップで9ワードが不一致だった。
+CSR 実装後は72ワードすべて一致し、固定 Renode と penv の両方が元の述語
+`All signatures correct` を満たした。
+
+公式 Renode の実行は worktree 内の別コピー `target/renode-discovery` で行った。
+RISC-V のネイティブ翻訳ライブラリを下記コマンドで作成する。
+参照 XML は `target/clic-reference/official-check/robot_output.xml`。
+ELF、署名と両エンジンの SHA-256 は `target/clic-reference/checksums.sha256`。
+
+```sh
+export PATH="$PWD/target/renode-dotnet:$PWD/target/renode-venv/bin:$PATH"
+(
+  cd target/renode-discovery
+  ./build.sh --skip-fetch --no-gui --external-lib-arch riscv
+  ./renode-test -T robot --skip-building -r ../clic-reference/official-check \
+    -f "Should Pass clicdirect-01_default" \
+    tests/peripherals/CLIC/CLIC-riscv-arch-tests.robot
+)
+target/renode-venv/bin/python scripts/upstream/run.py --jobs 4 \
+  --suite tests/peripherals/CLIC/CLIC-riscv-arch-tests.robot \
+  --suite tests/unit-tests/hex.robot --suite tests/platforms/STM32F072b.robot \
+  --suite tests/unit-tests/memory-assertions.robot --out target/clic-arch-retest-new
+```
+
+今回の実装範囲は既定レイアウトの単一 RV32 CLIC と M-mode 割り込み。
+S-mode 割り込みの配送と間接 CSR のペリフェラルアクセスは引き続き未実装。
+
+`419ab97` の固定バイナリによる確定結果は CLIC 144件のうち76件 PASS、
+68件 FAIL。68件はいずれも元のログアサーションに失敗した。
+前回の144件はすべて CLIC プラットフォーム未実装で起動前停止していた。
+HEX、STM32F072b、メモリアサーションの3スイートは両コミット間でテストIDごとの
+結果が一致した。内訳は14件 PASS、53件 UNSUPPORTED。
+`target/clic-arch-retest/results.json` と `progress.jsonl` に全ケースの証跡があり、
+`target/clic-reference/case-audit.json` に比較結果がある。
+
+残る共通原因の代表は `sclicdeleg-01_default`。ELF の `0x800002b8` が
+未実装の `sintthresh` CSR（`0x147`）に書き込み、署名の `mcause` が
+期待値 `0x10000009` に対して違法命令の `0x30000002` になった。
+`sclic*` の64件を進めるには、S-mode の CLIC CSR と特権別の割り込み配送・
+委譲が必要。CLINT の Rust 回帰テストは5件合格した。
+
+もう一つの失敗群は `clicshvinhv-01` の4件。ゲストが `mcause.MINHV` を
+設定して `mret` した際に、`mepc` のベクターテーブルエントリーを読むように修正した。
+`3172275` では4件とも元の Robot ケースを個別に走らせて PASS を確認した。
+この短い検証の証跡は `target/clic-reference/minhv-audit.json`。
+144件の集計は `419ab97` の結果として保持する。
