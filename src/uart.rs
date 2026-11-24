@@ -376,6 +376,7 @@ impl FailingUartPattern {
 pub struct UartHistory {
     unread: VecDeque<u8>,
     pub(crate) activity: u64,
+    sgr: Vec<u8>,
     active: Option<UartLineMatch>,
     failures: Vec<FailingUartPattern>,
     failure: Option<String>,
@@ -465,6 +466,30 @@ impl UartHistory {
 
     pub fn receive(&mut self, byte: u8) {
         self.activity = self.activity.wrapping_add(1);
+        if !self.sgr.is_empty() {
+            if self.sgr.len() == 1 && byte == b'['
+                || self.sgr.len() > 1 && (byte.is_ascii_digit() || byte == b';')
+                    && self.sgr.len() < UART_HISTORY_BYTES
+            {
+                self.sgr.push(byte);
+                return;
+            }
+            if self.sgr.len() > 1 && byte == b'm' {
+                self.sgr.clear();
+                return;
+            }
+            for pending in std::mem::take(&mut self.sgr) {
+                self.receive_text_byte(pending);
+            }
+        }
+        if byte == 0x1b {
+            self.sgr.push(byte);
+        } else {
+            self.receive_text_byte(byte);
+        }
+    }
+
+    fn receive_text_byte(&mut self, byte: u8) {
         if byte == b'\n' && self.active.is_some() && !self.matched() && !self.failures.is_empty() {
             if self.unread.len() == UART_HISTORY_BYTES {
                 self.unread.pop_front();
@@ -734,6 +759,20 @@ mod tests {
         history.finish_wait();
         history.begin_wait("response", UartWaitMode::Lf);
         assert!(history.matched());
+    }
+
+    #[test]
+    fn text_wait_ignores_sgr_across_buffered_and_live_output() {
+        let mut history = UartHistory::default();
+        for &byte in b"\x1b[1" {
+            history.receive(byte);
+        }
+        let pattern = r"CPU:\s+(VexRiscv)";
+        history.begin_text_wait(pattern, Some(regex::Regex::new(pattern).unwrap()), UartWaitMode::Lf);
+        for &byte in b"mCPU\x1b[0m:\tVexRiscv\r\n" {
+            history.receive(byte);
+        }
+        assert_eq!(history.matched_line().as_deref(), Some("CPU:\tVexRiscv"));
     }
 
     #[test]
