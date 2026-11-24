@@ -2,10 +2,9 @@ fixture	missing_api
 Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	Migrant serialization of BlockingCollection and its synchronization state is unavailable.
 Antmicro.Migrant.Tests.BuiltinSurrogatesTests	The snapshot reader/writer does not have Migrant built-in CLR surrogate mappings.
 Antmicro.Migrant.Tests.HooksTests	Migrant object graph serialization hooks and attribute-based callbacks are unavailable.
-Antmicro.Migrant.Tests.ObjectReaderWriterTests	The Rust object stream restores typed records and references; CLR type/module stamp encoding and restoration remain unavailable.
-Antmicro.Migrant.Tests.OpenStreamSerializationTests	The Rust object stream supports strong and per-root reference tables and unbuffered iteration; weak reference retention, stamped type schemas, and generated reader/writer paths remain unavailable.
-Antmicro.Migrant.Tests.SerializationTests	Initial unstamped reflection-mode cases restore record and array graphs. Remaining settings and cases need generated reader/writer paths, type stamp verification, collection and CLR type codecs, surrogate and hook dispatch, and delegate/state restoration.
-Antmicro.Migrant.Tests.StampingTests	There is no Migrant serialized type/resource stamping implementation.
+Antmicro.Migrant.Tests.OpenStreamSerializationTests	Reflection mode with strong or per-root references is ported. Remaining cases need weak reference retention and generated reader/writer paths.
+Antmicro.Migrant.Tests.SerializationTests	Initial stamped and unstamped reflection cases restore record and array graphs. Remaining settings and cases need generated reader/writer paths, collection and CLR type codecs, surrogate and hook dispatch, and delegate/state restoration.
+Antmicro.Migrant.Tests.StampingTests	All four reflection-mode stamp configurations are ported. The remaining 12 cases require the generated writer and/or reader paths.
 Antmicro.Migrant.Tests.SurrogateTests	There is no registration of custom Migrant serialization/deserialization surrogates.
 Antmicro.Migrant.Tests.TwoDomainTests	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
 Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.

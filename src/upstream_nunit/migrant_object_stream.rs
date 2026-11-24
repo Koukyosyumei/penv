@@ -1,7 +1,66 @@
 use crate::migrant::object_stream::{
-    Graph, Object, ObjectId, ObjectReader, ObjectWriter, References, Value,
+    FieldKind, Graph, Object, ObjectId, ObjectReader, ObjectWriter, References, TypeStamp, Value,
 };
 use std::io::{Cursor, Seek, SeekFrom};
+
+const fn stamp(
+    class: &'static str,
+    fields: &'static [(&'static str, FieldKind)],
+) -> TypeStamp<'static> {
+    TypeStamp {
+        class,
+        module: "Tests",
+        revision: 0,
+        fields,
+    }
+}
+
+const STAMPS: &[TypeStamp<'static>] = &[
+    stamp("System.Object", &[]),
+    stamp(
+        "SimpleClass",
+        &[
+            ("<Value>k__BackingField", FieldKind::Integer),
+            ("<Str>k__BackingField", FieldKind::Reference),
+        ],
+    ),
+    stamp(
+        "SimpleContainer",
+        &[
+            ("<First>k__BackingField", FieldKind::Reference),
+            ("<Second>k__BackingField", FieldKind::Reference),
+        ],
+    ),
+    stamp(
+        "CyclicRef",
+        &[
+            ("<Another>k__BackingField", FieldKind::Reference),
+            ("<Val>k__BackingField", FieldKind::Integer),
+        ],
+    ),
+    stamp(
+        "ClassWithReadonly",
+        &[("privateReadonlyField", FieldKind::Integer)],
+    ),
+    stamp(
+        "ClassWithReferenceToTheObjectOfTheSameType",
+        &[("Reference", FieldKind::Reference)],
+    ),
+    stamp(
+        "Tuple<int,int>",
+        &[
+            ("m_Item1", FieldKind::Integer),
+            ("m_Item2", FieldKind::Integer),
+        ],
+    ),
+    stamp(
+        "Tuple<int,double>",
+        &[
+            ("m_Item1", FieldKind::Integer),
+            ("m_Item2", FieldKind::Float),
+        ],
+    ),
+];
 
 fn record(class: &str, fields: Vec<Value>) -> Object {
     Object::Record {
@@ -28,22 +87,41 @@ fn reference(value: &Value) -> ObjectId {
     *id
 }
 
-fn deep_clone(graph: &Graph, root: ObjectId) -> (ObjectReader<Cursor<Vec<u8>>>, ObjectId) {
+fn deep_clone(
+    graph: &Graph,
+    root: ObjectId,
+    stamped: bool,
+) -> (ObjectReader<'static, Cursor<Vec<u8>>>, ObjectId) {
     let mut stream = Cursor::new(Vec::new());
     let mut writer = ObjectWriter::new(&mut stream, graph, References::Preserve, true);
+    if stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
     writer.write_object(root).unwrap();
     writer.finish().unwrap();
     stream.seek(SeekFrom::Start(0)).unwrap();
     let mut reader = ObjectReader::new(stream, References::Preserve, true);
+    if stamped {
+        reader = reader.with_type_stamps(STAMPS);
+    }
     let root = reader.read_object().unwrap();
     (reader, root)
 }
 
 #[test]
 fn should_serialize_object() {
+    should_serialize_object_with_stamping(false);
+}
+
+#[test]
+fn should_serialize_object_stamped() {
+    should_serialize_object_with_stamping(true);
+}
+
+fn should_serialize_object_with_stamping(stamped: bool) {
     let mut graph = Graph::default();
     let object = graph.insert(record("System.Object", vec![]));
-    let (reader, copy) = deep_clone(&graph, object);
+    let (reader, copy) = deep_clone(&graph, object, stamped);
     assert_eq!(
         reader.graph().get(copy),
         Some(&record("System.Object", vec![]))
@@ -52,13 +130,22 @@ fn should_serialize_object() {
 
 #[test]
 fn should_serialize_simple_class() {
+    should_serialize_simple_class_with_stamping(false);
+}
+
+#[test]
+fn should_serialize_simple_class_stamped() {
+    should_serialize_simple_class_with_stamping(true);
+}
+
+fn should_serialize_simple_class_with_stamping(stamped: bool) {
     let mut graph = Graph::default();
     let text = graph.insert(string("Magic"));
     let object = graph.insert(record(
         "SimpleClass",
         vec![Value::Integer(0x69), Value::Ref(text)],
     ));
-    let (reader, copy) = deep_clone(&graph, object);
+    let (reader, copy) = deep_clone(&graph, object, stamped);
     let restored = reader.graph();
     let copy = restored.get(copy).unwrap();
     let (class, original) = (fields(copy), fields(graph.get(object).unwrap()));
@@ -78,11 +165,20 @@ fn cyclic_record(another: Value, val: i64) -> Object {
 
 #[test]
 fn should_serialize_cyclic_reference() {
+    should_serialize_cyclic_reference_with_stamping(false);
+}
+
+#[test]
+fn should_serialize_cyclic_reference_stamped() {
+    should_serialize_cyclic_reference_with_stamping(true);
+}
+
+fn should_serialize_cyclic_reference_with_stamping(stamped: bool) {
     let mut graph = Graph::default();
     let one = graph.insert(cyclic_record(Value::Null, 0));
     let another = graph.insert(cyclic_record(Value::Ref(one), 1));
     *graph.get_mut(one).unwrap() = cyclic_record(Value::Ref(another), 0);
-    let (reader, one_copy) = deep_clone(&graph, one);
+    let (reader, one_copy) = deep_clone(&graph, one, stamped);
     let graph = reader.graph();
     let another = reference(&fields(graph.get(one_copy).unwrap())[0]);
     assert_eq!(
@@ -94,10 +190,19 @@ fn should_serialize_cyclic_reference() {
 
 #[test]
 fn should_serialize_reference_to_self() {
+    should_serialize_reference_to_self_with_stamping(false);
+}
+
+#[test]
+fn should_serialize_reference_to_self_stamped() {
+    should_serialize_reference_to_self_with_stamping(true);
+}
+
+fn should_serialize_reference_to_self_with_stamping(stamped: bool) {
     let mut graph = Graph::default();
     let one = graph.insert(cyclic_record(Value::Null, 0));
     *graph.get_mut(one).unwrap() = cyclic_record(Value::Ref(one), 0);
-    let (reader, copy) = deep_clone(&graph, one);
+    let (reader, copy) = deep_clone(&graph, one, stamped);
     assert_eq!(
         copy,
         reference(&fields(reader.graph().get(copy).unwrap())[0])
@@ -106,10 +211,19 @@ fn should_serialize_reference_to_self() {
 
 #[test]
 fn should_serialize_array_reference_to_self() {
+    should_serialize_array_reference_to_self_with_stamping(false);
+}
+
+#[test]
+fn should_serialize_array_reference_to_self_stamped() {
+    should_serialize_array_reference_to_self_with_stamping(true);
+}
+
+fn should_serialize_array_reference_to_self_with_stamping(stamped: bool) {
     let mut graph = Graph::default();
     let array = graph.insert(Object::Array(vec![Value::Null; 2]));
     *graph.get_mut(array).unwrap() = Object::Array(vec![Value::Ref(array); 2]);
-    let (reader, copy) = deep_clone(&graph, array);
+    let (reader, copy) = deep_clone(&graph, array, stamped);
     let Object::Array(elements) = reader.graph().get(copy).unwrap() else {
         panic!("expected array")
     };
@@ -119,14 +233,32 @@ fn should_serialize_array_reference_to_self() {
 
 #[test]
 fn should_serialize_null_reference() {
+    should_serialize_null_reference_with_stamping(false);
+}
+
+#[test]
+fn should_serialize_null_reference_stamped() {
+    should_serialize_null_reference_with_stamping(true);
+}
+
+fn should_serialize_null_reference_with_stamping(stamped: bool) {
     let mut graph = Graph::default();
     let object = graph.insert(record("SimpleClass", vec![Value::Integer(0), Value::Null]));
-    let (reader, copy) = deep_clone(&graph, object);
+    let (reader, copy) = deep_clone(&graph, object, stamped);
     assert_eq!(graph.get(object), reader.graph().get(copy));
 }
 
 #[test]
 fn should_preserve_identity() {
+    should_preserve_identity_with_stamping(false);
+}
+
+#[test]
+fn should_preserve_identity_stamped() {
+    should_preserve_identity_with_stamping(true);
+}
+
+fn should_preserve_identity_with_stamping(stamped: bool) {
     let mut graph = Graph::default();
     let text = graph.insert(string("This is a string"));
     let first = graph.insert(record(
@@ -141,7 +273,7 @@ fn should_preserve_identity() {
         "SimpleContainer",
         vec![Value::Ref(first), Value::Ref(second)],
     ));
-    let (reader, copy) = deep_clone(&graph, container);
+    let (reader, copy) = deep_clone(&graph, container, stamped);
     let graph = reader.graph();
     let container = fields(graph.get(copy).unwrap());
     let first = fields(graph.get(reference(&container[0])).unwrap());
@@ -151,9 +283,18 @@ fn should_preserve_identity() {
 
 #[test]
 fn should_serialize_readonly_field() {
+    should_serialize_readonly_field_with_stamping(false);
+}
+
+#[test]
+fn should_serialize_readonly_field_stamped() {
+    should_serialize_readonly_field_with_stamping(true);
+}
+
+fn should_serialize_readonly_field_with_stamping(stamped: bool) {
     let mut graph = Graph::default();
     let object = graph.insert(record("ClassWithReadonly", vec![Value::Integer(0xabcd)]));
-    let (reader, copy) = deep_clone(&graph, object);
+    let (reader, copy) = deep_clone(&graph, object, stamped);
     assert_eq!(
         fields(reader.graph().get(copy).unwrap())[0],
         Value::Integer(0xabcd)
@@ -162,6 +303,15 @@ fn should_serialize_readonly_field() {
 
 #[test]
 fn should_serialize_deep_graph() {
+    should_serialize_deep_graph_with_stamping(false);
+}
+
+#[test]
+fn should_serialize_deep_graph_stamped() {
+    should_serialize_deep_graph_with_stamping(true);
+}
+
+fn should_serialize_deep_graph_with_stamping(stamped: bool) {
     let mut graph = Graph::default();
     let class = "ClassWithReferenceToTheObjectOfTheSameType";
     let root = graph.insert(record(class, vec![Value::Null]));
@@ -171,7 +321,7 @@ fn should_serialize_deep_graph() {
         *graph.get_mut(current).unwrap() = record(class, vec![Value::Ref(next)]);
         current = next;
     }
-    let (reader, mut copy) = deep_clone(&graph, root);
+    let (reader, mut copy) = deep_clone(&graph, root, stamped);
     assert!(reader.graph().get(copy).is_some());
     let mut depth = 0;
     loop {
@@ -192,14 +342,16 @@ fn should_handle_two_writes_and_reads() {
     let mut graph = Graph::default();
     let ids = strings.map(|value| graph.insert(string(value)));
     let mut stream = Cursor::new(Vec::new());
-    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true);
+    let mut writer =
+        ObjectWriter::new(&mut stream, &graph, References::Preserve, true).with_type_stamps(STAMPS);
     for id in ids {
         writer.write_object(id).unwrap();
     }
     writer.finish().unwrap();
     let position = stream.position();
     stream.seek(SeekFrom::Start(0)).unwrap();
-    let mut reader = ObjectReader::new(&mut stream, References::Preserve, true);
+    let mut reader =
+        ObjectReader::new(&mut stream, References::Preserve, true).with_type_stamps(STAMPS);
     for expected in strings {
         let id = reader.read_object().unwrap();
         assert_eq!(reader.graph().get(id), Some(&string(expected)));
@@ -213,15 +365,16 @@ fn open_stream(
     roots: &[ObjectId],
     references: References,
     buffered: bool,
-) -> ObjectReader<Cursor<Vec<u8>>> {
+) -> ObjectReader<'static, Cursor<Vec<u8>>> {
     let mut stream = Cursor::new(Vec::new());
-    let mut writer = ObjectWriter::new(&mut stream, graph, references, buffered);
+    let mut writer =
+        ObjectWriter::new(&mut stream, graph, references, buffered).with_type_stamps(STAMPS);
     for &root in roots {
         writer.write_object(root).unwrap();
     }
     writer.finish().unwrap();
     stream.seek(SeekFrom::Start(0)).unwrap();
-    ObjectReader::new(stream, references, buffered)
+    ObjectReader::new(stream, references, buffered).with_type_stamps(STAMPS)
 }
 
 fn tuple(first: i64, second: i64) -> Object {

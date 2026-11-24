@@ -50,6 +50,7 @@ fn hexadecimal_unsigned_long_0ff() {
 mod memory;
 mod migrant;
 mod migrant_descriptor;
+mod migrant_stamping;
 mod multi_tree;
 mod multi_value_dictionary;
 mod migrant_object_stream;

@@ -2,11 +2,80 @@
 //!
 //! This uses Migrant's primitive encoding with a Rust object-record format.
 use super::primitive::{Reader, Writer};
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, hash_map::Entry};
 use std::io::{self, Read, Write};
 
 const MAX_ITEMS: usize = 1_000_000;
 const ROOT: u8 = 1;
+const STAMPED_ROOT: u8 = 2;
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub enum FieldKind {
+    Integer = 1,
+    Float = 2,
+    Reference = 3,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypeStamp<'a> {
+    pub class: &'a str,
+    pub module: &'a str,
+    pub revision: u64,
+    pub fields: &'a [(&'a str, FieldKind)],
+}
+
+fn stamp_for<'a>(stamps: &'a [TypeStamp<'a>], class: &str) -> io::Result<TypeStamp<'a>> {
+    stamps
+        .iter()
+        .copied()
+        .find(|stamp| stamp.class == class)
+        .ok_or_else(|| invalid("missing type stamp for object class"))
+}
+
+impl TypeStamp<'_> {
+    fn validate(self, values: &[Value]) -> io::Result<()> {
+        if self.fields.len() != values.len()
+            || !self.fields.iter().zip(values).all(|((_, kind), value)| {
+                matches!(
+                    (kind, value),
+                    (FieldKind::Integer, Value::Integer(_))
+                        | (FieldKind::Float, Value::Float(_))
+                        | (FieldKind::Reference, Value::Null | Value::Ref(_))
+                )
+            })
+        {
+            return Err(invalid("object fields do not match type stamp"));
+        }
+        Ok(())
+    }
+
+    fn write(self, data: &mut Writer<impl Write>) -> io::Result<()> {
+        data.string(self.module)?;
+        data.unsigned(self.revision)?;
+        data.unsigned(self.fields.len() as u64)?;
+        for &(name, kind) in self.fields {
+            data.string(name)?;
+            data.bytes(&[kind as u8])?;
+        }
+        Ok(())
+    }
+
+    fn verify(self, data: &mut Reader<impl Read>) -> io::Result<()> {
+        if data.string()? != self.module
+            || data.unsigned()? != self.revision
+            || data.unsigned()? != self.fields.len() as u64
+        {
+            return Err(invalid("object type stamp differs from local schema"));
+        }
+        for &(name, kind) in self.fields {
+            if data.string()? != name || data.byte()? != kind as u8 {
+                return Err(invalid("object field stamp differs from local schema"));
+            }
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ObjectId(usize);
@@ -63,6 +132,7 @@ pub struct ObjectWriter<'a, W: Write> {
     references: References,
     ids: HashMap<ObjectId, usize>,
     pending: Vec<ObjectId>,
+    stamps: Option<&'a [TypeStamp<'a>]>,
 }
 
 impl<'a, W: Write> ObjectWriter<'a, W> {
@@ -73,7 +143,13 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
             references,
             ids: HashMap::new(),
             pending: Vec::new(),
+            stamps: None,
         }
+    }
+
+    pub fn with_type_stamps(mut self, stamps: &'a [TypeStamp<'a>]) -> Self {
+        self.stamps = Some(stamps);
+        self
     }
 
     fn intern(&mut self, id: ObjectId) -> io::Result<usize> {
@@ -116,7 +192,13 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
             let object = self.graph.get(id).unwrap();
             let values = match object {
                 Object::String(_) => &[],
-                Object::Record { fields, .. } | Object::Array(fields) => fields.as_slice(),
+                Object::Record { class, fields } => {
+                    if let Some(stamps) = self.stamps {
+                        stamp_for(stamps, class)?.validate(fields)?;
+                    }
+                    fields.as_slice()
+                }
+                Object::Array(fields) => fields.as_slice(),
             };
             if values.len() > MAX_ITEMS {
                 return Err(invalid("object field limit exceeded"));
@@ -133,7 +215,11 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
     }
 
     fn write_frame(&mut self, root: usize) -> io::Result<()> {
-        self.data.bytes(&[ROOT])?;
+        self.data.bytes(&[if self.stamps.is_some() {
+            STAMPED_ROOT
+        } else {
+            ROOT
+        }])?;
         self.data.unsigned(root as u64)?;
         self.data.unsigned(self.pending.len() as u64)?;
         for id in &self.pending {
@@ -145,6 +231,9 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
                 Object::Record { class, fields } => {
                     self.data.bytes(&[1])?;
                     self.data.string(class)?;
+                    if let Some(stamps) = self.stamps {
+                        stamp_for(stamps, class)?.write(&mut self.data)?;
+                    }
                     Self::write_values(&mut self.data, &self.ids, fields)?;
                 }
                 Object::Array(values) => {
@@ -187,19 +276,26 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
     }
 }
 
-pub struct ObjectReader<R: Read> {
+pub struct ObjectReader<'a, R: Read> {
     data: Reader<R>,
     graph: Graph,
     references: References,
+    stamps: Option<&'a [TypeStamp<'a>]>,
 }
 
-impl<R: Read> ObjectReader<R> {
+impl<'a, R: Read> ObjectReader<'a, R> {
     pub fn new(stream: R, references: References, buffered: bool) -> Self {
         Self {
             data: Reader::new(stream, buffered),
             graph: Graph::default(),
             references,
+            stamps: None,
         }
+    }
+
+    pub fn with_type_stamps(mut self, stamps: &'a [TypeStamp<'a>]) -> Self {
+        self.stamps = Some(stamps);
+        self
     }
 
     pub fn graph(&self) -> &Graph {
@@ -233,7 +329,11 @@ impl<R: Read> ObjectReader<R> {
 
     fn next_impl(&mut self) -> io::Result<Option<ObjectId>> {
         match self.data.byte() {
-            Ok(ROOT) => {}
+            Ok(ROOT) if self.stamps.is_none() => {}
+            Ok(STAMPED_ROOT) if self.stamps.is_some() => {}
+            Ok(ROOT | STAMPED_ROOT) => {
+                return Err(invalid("inconsistent object stream stamp configuration"));
+            }
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
             Err(error) => return Err(error),
             Ok(_) => return Err(invalid("invalid object record marker")),
@@ -257,10 +357,21 @@ impl<R: Read> ObjectReader<R> {
         for _ in 0..count {
             objects.push(match self.data.byte()? {
                 0 => Object::String(self.data.string()?),
-                1 => Object::Record {
-                    class: self.data.string()?,
-                    fields: self.read_values(base, limit)?,
-                },
+                1 => {
+                    let class = self.data.string()?;
+                    let stamp = self
+                        .stamps
+                        .map(|stamps| stamp_for(stamps, &class))
+                        .transpose()?;
+                    if let Some(stamp) = stamp {
+                        stamp.verify(&mut self.data)?;
+                    }
+                    let fields = self.read_values(base, limit)?;
+                    if let Some(stamp) = stamp {
+                        stamp.validate(&fields)?;
+                    }
+                    Object::Record { class, fields }
+                }
                 2 => Object::Array(self.read_values(base, limit)?),
                 _ => return Err(invalid("unknown object kind")),
             });
