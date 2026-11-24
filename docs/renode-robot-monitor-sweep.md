@@ -1410,3 +1410,19 @@ Rust モニターテスト24件とログテスト8件が合格。
 未変更の Robot はバス読み出し・書き込みのログ、保存・復元、
 STM32F072b Console Echo の5件合格、残り2,192件は未実行
 （`target/monitor-restored-log-robot/results.json`）。
+
+### 復元した文字列による UART 入力
+
+`d86519d` は、保存境界以降の `WriteTesterUart` を実行時の
+Rust セッションで評価し、復元した文字列変数を入力に使えるようにする。
+STM32F072b で `X` を保存して `Y` に上書きし、復元した `X` を送った。
+固定 Renode、通常 CLI、Robot RPC のすべてで受信レジスターは直後に
+`0x00`、仮想時間を 100 µs 進めると `0x58` を返した。
+固定 Renode と Robot RPC には復元後に読み出した文字を引数として渡し、
+通常 CLI では `WriteTesterUart $character` を使った
+（`target/monitor-restored-uart-input-proof/`）。
+
+Rust モニターテスト24件と UART テスト36件が合格。
+未変更の Robot は全256バイトの UART ケース、STM32F072b Console Echo、
+保存・復元の4件合格、残り2,193件は未実行
+（`target/monitor-restored-uart-input-robot/results.json`）。
