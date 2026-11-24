@@ -85,4 +85,4 @@ tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.Platfo
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.ParserTests	66	66	0	0	0	-
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.PreLexerTests	21	21	0	0	0	-
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.UsingTests	20	17	3	0	0	-
-tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	46	14	0	32	0	Remaining cases require non-CPU factories, typed and nested inline object creation, registration-point validation, IRQ wiring and metadata, and constructor and collection binding.
+tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	46	17	0	29	0	Remaining cases require non-CPU factories beyond EmptyPeripheral and MockExternal, typed and nested inline object creation, registration-point constructor selection, IRQ wiring and metadata, and constructor and collection binding.

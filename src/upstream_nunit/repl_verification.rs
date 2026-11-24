@@ -153,3 +153,31 @@ two: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral"#,
         "TypeMismatch",
     );
 }
+
+#[test]
+fn should_fail_on_missing_reference_in_registration_point() {
+    assert_error(
+        r#"
+device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus regPoint"#,
+        "MissingReference",
+    );
+}
+
+#[test]
+fn should_fail_on_wrong_reference_registration_point_type() {
+    assert_error(
+        r#"
+regPoint: Antmicro.Renode.UnitTests.Mocks.MockCPU
+device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus regPoint"#,
+        "TypeMismatch",
+    );
+}
+
+#[test]
+fn should_fail_on_non_construable_registration_point() {
+    assert_error(
+        r#"
+device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus "something""#,
+        "NoCtorForRegistrationPoint",
+    );
+}

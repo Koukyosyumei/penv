@@ -106,15 +106,32 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             if platform.objects[id].model == Model::External {
                 return Err(entry.error("NoUsableRegisterInterface: external object"));
             }
-            if registration.starts_with("sysbus <") {
-                let (_, Some(RegistrationValue::Range { base, size })) =
-                    registration_point(registration).map_err(|error| entry.error(error))?
-                else {
-                    return Err(entry.error("expected sysbus range registration"));
-                };
-                platform.objects[id].range = Some((base, size));
-            } else {
-                entry.sysbus()?;
+            let (parent, point) =
+                registration_point(registration).map_err(|error| entry.error(error))?;
+            if parent != "sysbus" {
+                return Err(entry.error("NoUsableRegisterInterface: expected sysbus"));
+            }
+            match point {
+                Some(RegistrationValue::Range { base, size }) => {
+                    platform.objects[id].range = Some((base, size));
+                }
+                Some(RegistrationValue::Other(value)) if number(value).is_ok() => {}
+                Some(RegistrationValue::Other(value)) => {
+                    let target = resolve(&entry.source, value)
+                        .ok_or_else(|| entry.error(&format!("MissingReference: {value}")))?;
+                    let model = match platform.objects[target].model {
+                        Model::Cpu => "CPU",
+                        Model::EmptyPeripheral => "peripheral",
+                        Model::External => "external",
+                    };
+                    return Err(entry.error(&format!(
+                        "TypeMismatch: {model} is not a registration point"
+                    )));
+                }
+                Some(RegistrationValue::String(_)) => {
+                    return Err(entry.error("NoCtorForRegistrationPoint: string value"));
+                }
+                None => {}
             }
             let name = format!("sysbus.{}", entry.alias.as_deref().unwrap_or(&entry.name));
             if platform.registered.insert(name, id).is_some() {
