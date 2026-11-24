@@ -3258,8 +3258,8 @@ fn execute(
         _ => None,
     };
     if let Some(action) = action {
-        if !boot.has_platform()
-            || (boot.image.is_none()
+        if !matches!(action, Action::ScriptLog(..) | Action::LastLog(_))
+            && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
                     action,
@@ -3280,8 +3280,6 @@ fn execute(
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint
-                        | Action::ScriptLog(..)
-                        | Action::LastLog(_)
                         | Action::TimeSourceInfo
                         | Action::DescribeSnapshotPlatform
                         | Action::SaveMemory(..)
@@ -3293,7 +3291,7 @@ fn execute(
                         | Action::RtcMode(_)
                         | Action::RtcDateTime
                         | Action::UserState(_)
-                ))
+                )))
         {
             return Err("runtime commands require a loaded platform and firmware".into());
         }
@@ -4081,6 +4079,10 @@ mod tests {
         assert_eq!(inspect("mach create\nstart\n", "echo $var").0, "DEFER");
         assert_eq!(inspect("", "set var 1234").0, "DEFER");
         assert_eq!(inspect("", "echo $var").0, "ERROR");
+        let (status, value) = inspect("log \"hello world\"\n", "lastLog 1");
+        assert_eq!(status, "OK");
+        assert!(value.ends_with("[INFO] Script: hello world\n"));
+
     }
 
     #[test]
