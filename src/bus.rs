@@ -4911,8 +4911,16 @@ impl Bus {
         text: &str,
         ending: &[u8],
     ) -> Result<(), String> {
+        self.write_uart_input(name, text.bytes().chain(ending.iter().copied()))
+    }
+
+    pub(crate) fn write_uart_tester_input(&mut self, name: &str, text: &str, ending: &[u8]) -> Result<(), String> {
+        let bytes = text.encode_utf16().map(|character| character as u8);
+        self.write_uart_input(name, bytes.chain(ending.iter().copied()))
+    }
+
+    fn write_uart_input(&mut self, name: &str, bytes: impl Iterator<Item = u8>) -> Result<(), String> {
         let port = self.tester_port(name)?;
-        let bytes = text.bytes().chain(ending.iter().copied());
         if port == TesterPort::LiteX {
             self.litex_uart.as_mut().unwrap().queue_input(bytes.collect());
             return Ok(());
@@ -4936,7 +4944,7 @@ impl Bus {
             .find(|uart| uart.name == name)
             .ok_or_else(|| format!("unknown STM32 UART {name:?}"))?;
         if usart_clocked(self.h7_network_control.as_ref(), uart) {
-            uart.queue_input(text.bytes().chain(ending.iter().copied()));
+            uart.queue_input(bytes);
         }
         Ok(())
     }
@@ -8263,6 +8271,9 @@ mod tests {
         assert_eq!(bus.read::<4>(usart1 + 0x1c).unwrap() & (1 << 5), 0);
         assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), u32::from(b'A'));
         assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), u32::from(b'\r'));
+        bus.write_uart_tester_input("sysbus.usart2", "éÿ", b"").unwrap();
+        assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), 0xe9);
+        assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), 0xff);
         assert!(
             bus.write_stm32_uart_line("sysbus.usart3", "A", b"\r")
                 .is_err()

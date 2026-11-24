@@ -39,6 +39,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         "Unregister Failing Log String": "unregister_failing_log",
         "Write Line To Uart": "write_line",
         "Write Char On Uart": "write_char",
+        "Write To Uart": "write_to_uart",
+        "Send Key To Uart": "send_key_to_uart",
         "Test If Uart Is Idle": "uart_idle",
         "Create LED Tester": "create_led",
         "Assert LED State": "assert_led",
@@ -1002,21 +1004,38 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
 
     def write_char(self, char, *args):
         options = self.log_options(args, {"testerId"}, ("testerId",))
-        if len(char) != 1 or not char.isascii():
-            raise Unsupported("requires one ASCII character")
         if self.rust_monitor:
+            if len(char) != 1 or ord(char) > 0xFFFF:
+                raise Unsupported("expected one UTF-16 code unit")
             return self.write_tester_uart(char, "None", False, options.get("testerId"))
-        if not self.started:
-            raise Unsupported("requires a running UART tester")
+        if not self.started or len(char) != 1 or not char.isascii():
+            raise Unsupported("requires one ASCII character and a running UART tester")
         _, (uart, _) = self.select_uart(options.get("testerId"))
         self.operation(f"{uart} WriteLine {self.uart_text(char)} None")
         return {"Line": ""}
+
+    def write_to_uart(self, content, *args):
+        if not self.rust_monitor:
+            raise Unsupported("raw UART input requires the Rust monitor")
+        options = self.log_options(args, {"testerId"}, ("testerId",))
+        return self.write_tester_uart(content, "None", False, options.get("testerId"))
+
+    def send_key_to_uart(self, value, *args):
+        try:
+            key = int(str(value), 16 if str(value).lower().startswith("0x") else 10)
+        except ValueError as error:
+            raise Unsupported("expected a byte value") from error
+        if not 0 <= key <= 255:
+            raise Unsupported("expected a byte value")
+        return self.write_to_uart(chr(key), *args)
 
     def write_tester_uart(self, content, ending, echo, tester, pause=""):
         tester = self.parse_tester_id(tester)
         selector = f" testerId={tester}" if tester is not None else ""
         mode = "default" if echo is None else str(echo).lower()
-        self.operation(f"WriteTesterUart {self.uart_text(content)} {ending} {mode}{selector}{pause}")
+        encoded = content.encode().hex()
+        argument = f"hex:{encoded}" if encoded else self.uart_text(content)
+        self.operation(f"WriteTesterUart {argument} {ending} {mode}{selector}{pause}")
         return {"Line": "", "Timestamp": 0.0, "Groups": [], "IsFailingString": False}
 
     def uart_idle(self, timeout, *args):

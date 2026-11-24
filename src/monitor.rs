@@ -1299,7 +1299,7 @@ fn run_commands<'a>(
                 } else {
                     None
                 };
-                machine.external_event(ExternalEvent::UartLine(target, text.clone(), ending.to_vec()))?;
+                machine.bus.write_uart_tester_input(&target, text, ending)?;
                 if let Some(cycles) = cycles {
                     let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt, Some(false))?;
                     let start = machine.elapsed_steps();
