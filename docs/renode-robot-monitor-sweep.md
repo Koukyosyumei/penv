@@ -811,3 +811,24 @@ Rust のモニター 21 件とログ 8 件は合格。
 未変更の HEX は合格した。precise-pause の無通信ケースは新しい構文解析を
 通過し、STM32L071 の `Analog.STM32_ADC` 未対応へ進んだ
 （`target/monitor-repl-decl-b71cbd6-{hex,idle}/results.json`）。
+
+`0cda938` と `3ef06f9` では、起動前の `Execute Script` と
+`include` のパスを Rust モニターが解決する。存在しないファイルは
+その場で拒否される。拒否応答は証跡として記録し、上流 Robot の
+期待エラーのアサーションが通った場合に限りケースを合格とする。
+コンソールだけのスクリプトは、起動前に出力を返し、その代入を
+後続コマンドの入力にも反映する。機種を起動するスクリプトは
+既存の起動キューを通る。
+
+`target/monitor-inspect-include-proof/` の RPC 比較で、欠損ファイル 2 件の
+拒否と診断、空白を含むファイルからの出力 `from script`、
+その後の変数値 `42` が一致した。通常 CLI でも同じ二つの出力を確認した
+（`renode-cli.normalized` と `cli.log`）。
+`3ef06f9` で HEX と STM32F072b Console Echo が合格した。
+欠損ファイルの二つのケースは Robot 上では合格したが、集計では当初、
+捕捉された実行エラーとして `NOT_RUN` だった。
+`2f4d095` で Rust が返した `REJECTED` を一般の実行失敗と区別した。
+Rust モニターテスト 21 件が合格した。
+`Should Fail On Loading Nonexisting Script` と `Should Fail On Command Error`
+を未変更のまま再実行し、両方とも合格した
+（`target/monitor-inspect-include-2f4d095-{script,include}/results.json`）。
