@@ -290,6 +290,7 @@ pub struct RuntimeCommand {
 
 enum Action {
     MonitorLog(String),
+    AssembleBlock(String, u64, String, String, NumberMode),
     RunFor(u64),
     RunUntil(u64),
     RunToSyncPoint,
@@ -479,6 +480,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
             matches!(
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime
+                    | Action::AssembleBlock(..) | Action::BusScalar(_)
             )
         })
 }
@@ -618,6 +620,11 @@ fn run_commands(
                     monitor_timestamp(machine.monitor_elapsed_ns()),
                     monitor_timestamp(u128::from(machine.monitor_quantum) * 10))
                     .map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::AssembleBlock(cpu, address, triple, source, mode) => {
+                crate::monitor_asm::assemble_source(machine, cpu, *address, triple, source)
+                    .and_then(|size| mode.print(size as u64, 4, output.output))
+                    .map(|()| None)
             }
             Action::MonitorLog(command) => {
                 let start = machine.elapsed_steps();
@@ -2079,6 +2086,21 @@ fn execute(
         return Ok(());
     }
     let action = match words {
+        [cpu, "AssembleBlock", address, source, options @ ..] => {
+            let source = resolve(source)?;
+            let source = source.strip_prefix("\"\"\"").and_then(|s| s.strip_suffix("\"\"\""))
+                .or_else(|| source.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
+                .ok_or("expected quoted AssembleBlock source")?;
+            let triple = match options {
+                [] | ["null"] | ["null", "false"] => "default",
+                [triple] | [triple, "false"] if triple.starts_with('"') && triple.ends_with('"') => unquote(triple),
+                _ => return Err("unsupported AssembleBlock triple or alternate dialect".into()),
+            };
+            Some(Action::AssembleBlock(
+                cpu.trim_start_matches("sysbus.").to_owned(), crate::parse_address64(resolve(address)?)?,
+                triple.to_owned(), source.to_owned(), boot.session.number_mode,
+            ))
+        }
         [command, ..] if crate::monitor_log::is_command(command) => {
             Some(Action::MonitorLog(text.to_owned()))
         }
@@ -2816,6 +2838,7 @@ fn execute(
                 && !matches!(
                     action,
                     Action::BusScalar(_)
+                        | Action::AssembleBlock(..)
                         | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)
@@ -3447,7 +3470,9 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
     let mut start = None;
     let mut quote = None;
     let mut escaped = false;
-    for (index, character) in text.char_indices() {
+    let mut triple = false;
+    let mut chars = text.char_indices();
+    while let Some((index, character)) = chars.next() {
         if std::mem::take(&mut escaped) {
             continue;
         }
@@ -3471,11 +3496,24 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
         let new_word = start.is_none();
         start.get_or_insert(index);
         if quote == Some(character) {
+            if triple && !text[index..].starts_with("\"\"\"") {
+                continue;
+            }
+            if triple {
+                chars.next();
+                chars.next();
+            }
             quote = None;
+            triple = false;
         } else if (new_word || start.is_some_and(|start| &text[start..index] == "@"))
             && matches!(character, '"' | '\'')
         {
             quote = Some(character);
+            triple = text[index..].starts_with("\"\"\"");
+            if triple {
+                chars.next();
+                chars.next();
+            }
         }
     }
     if quote.is_some() {

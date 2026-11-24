@@ -26,6 +26,19 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<usize, String> {
         .map(|i| u8::from_str_radix(&text[i..i + 2], 16).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let source = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+    assemble_source(machine, cpu, address, requested_triple, &source)
+}
+
+pub(crate) fn assemble_source(
+    machine: &mut Machine,
+    cpu: &str,
+    address: u64,
+    requested_triple: &str,
+    source: &str,
+) -> Result<usize, String> {
+    if source.len() > 65_536 {
+        return Err("oversized assembly source".into());
+    }
     let instructions: Vec<_> = source
         .lines()
         .map(|line| line.split_once('#').map_or(line, |(code, _)| code))
@@ -50,7 +63,7 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<usize, String> {
         return Err("monitor assembly requires instructions and optional local labels".into());
     }
     let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
-    if *requested_triple != "default" && *requested_triple != triple {
+    if requested_triple != "default" && requested_triple != triple {
         return Err(format!(
             "assembler triple {requested_triple} is unavailable for {triple}"
         ));
