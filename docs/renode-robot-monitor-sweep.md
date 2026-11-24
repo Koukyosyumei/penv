@@ -1073,3 +1073,30 @@ Rust の実行順に組み込む。固定 Renode と通常 CLI で、再定義�
 固定 Renode が拒否したため、このバッチで動作を拡張しなかった
 （`target/monitor-dynamic-path-proof/`）。
 復元後の RESC でエイリアスやマクロを呼び出す箇所の動的解決は残っている。
+
+### 復元した環境での RESC コマンド呼び出し
+
+`7d7c550` はスナップショット境界以降の `runMacro` を実行時に
+解決する。`01e9c7b` はエイリアス呼び出しも現在の Rust モニター状態で
+解決する。`9e4cd90` は変数を参照する `include` / `i` /
+`ExecuteScript` のパスを、実行時のモニター状態から解決する。
+
+固定 Renode と通常 CLI に同じコマンド列を送り、保存後に上書きした
+マクロ・エイリアスが `changed macro`、復元後に `saved macro` を
+返すことを確認した。変数経由の include は同じ順序で
+`changed include` と `saved include` を返した。
+各比較はスナップショットファイル名と出力の空行を除いた
+（`target/monitor-runtime-{macro,alias,include}-proof/`）。
+CLI 回帰テストは相対パスの include も検証する。
+
+最終ビルドの未変更 Robot はモニター状態の保存・復元、HEX、
+STM32F072b UART の4件が合格。他の2,193件は未実行
+（`target/monitor-runtime-include-robot/results.json`）。
+Rust のモニターテストは22件合格した。
+
+遅延呼び出し内の再度の Save / Load、起動後の任意のゲスト状態の復元は
+今回の対応範囲外。ログ待機のサブミリ秒試行では、固定 Renode の
+`LogTester.WaitForEntry` が仮想期限を整数ミリ秒へ変換することを確認した。
+0.125 ms と 0.5 ms の観測で指定時刻への停止は確認できなかったため、
+秒単位の精度を追加する試作差分は取り下げた
+（`target/monitor-subms-log-proof/`）。
