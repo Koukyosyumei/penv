@@ -484,3 +484,13 @@ penv の両方で合格した。`target/monitor-csr-write-proof/native-robot.xml
 `target/monitor-pc-assert-proof/` に PC 比較の成功・失敗の記録がある。
 同じ penv ビルドの未変更 `Should Load HEX` も合格した
 （`target/monitor-csr-hex/results.json`）。
+
+起動前 Cortex-M スナップショットは、RAM とベクターテーブルに加え
+R0–R14 と PC を保存する。旧 RAM 専用形式も読み込める。
+`target/monitor-snapshot-numeric-proof/` と
+`target/monitor-snapshot-clear-proof/` に、固定 Renode、通常 CLI、
+ライブモニターで同じ値を復元した記録がある。
+`Clear` 後は `Load` まで実行を止める。既存の nRF シェル検証では、
+復帰後に実機種モデルの UART から `pong` を得た
+（`target/monitor-snapshot-gpr-proof/nrf-clear.log`）。
+実行後の保存と、周辺機器やイベントキューを含む状態復帰は未対応。
