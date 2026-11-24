@@ -32,6 +32,7 @@ mod python_monitor;
 mod packet_layout;
 mod monitor_tokenizer;
 mod machine_registry;
+mod multi_cpu;
 mod migrant_blocking_collection;
 mod weak_multi_table;
 mod option_validation;

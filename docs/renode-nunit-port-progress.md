@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,257 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,262 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,139 |
+| 移植待ち | 2,134 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 24 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 23 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -270,3 +270,9 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 公式18件のホスト転送、ターゲット側の取得・送信 FIFO、ウォーターマーク、オーバーフロー、モード切り替えを移植した。固定上流と同じアドレスに既存の BMP180 と PAC1934 を登録した。PAC1934 は識別レジスタを実装し、計測チャネルは未実装。I²C コントローラーは同期的に転送し、タイミング制御とアラート線は未実装。
 
 - [公式 ID](nunit-evidence/targeted-opentitan_i2c.tsv)と[実行ログ](nunit-evidence/targeted-opentitan_i2c.log)
+
+## MultiCPUTests
+
+10個の mock CPU のスロットと、1〜4個の CPU から1秒間に行う共有周辺機器読み出しを検証した。外部 CPU はスレッドで動作し、読み出し要求は同じマシンのバス上で直列に実行する。外部 CPU の登録は命令を実行する既存の hart 登録とは独立している。
+
+- [公式 ID](nunit-evidence/targeted-multi-cpu.tsv)と[実行ログ](nunit-evidence/targeted-multi-cpu.log)

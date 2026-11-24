@@ -1,4 +1,5 @@
 mod ble;
+pub mod external_cpu;
 
 use std::{
     cell::{Cell, RefCell},
@@ -152,6 +153,7 @@ pub struct Machine {
     intermediate_frame_matches: Vec<u64>,
     time_source: TimeSource<1>,
     managed_clock: crate::clock_source::ClockSource<'static>,
+    external_cpus: Vec<external_cpu::Registration>,
     pub rtc_clock: RtcClock,
     recorder: Option<Recorder>,
     replay: VecDeque<(u64, ExternalEvent)>,
@@ -421,6 +423,7 @@ impl Machine {
             intermediate_frame_matches: Vec::new(),
             time_source: TimeSource::default(),
             managed_clock: crate::clock_source::ClockSource::default(),
+            external_cpus: Vec::new(),
             rtc_clock: RtcClock::default(),
             recorder: None,
             replay: VecDeque::new(),
