@@ -434,3 +434,17 @@ Renode、penv の RESC ファイル、penv のライブモニターの出力が�
 `target/monitor-machine-context-proof/` では空白を含むマシン名で RAM を
 読み書きした。存在しないマシンを指定した書き込みは失敗し、RAM の値は
 変化しなかった。
+
+`target/monitor-idle-resc-proof/` の通常 CLI 実行では、2つの UART
+テスターを起動前に登録し、アイドル・活動あり・観測予算不足を区別した。
+LiteX の同じ `RunFor` と時刻照会を固定 Renode、RESC ファイル、
+ライブモニターで実行し、1 ms と 3 ms が一致した
+（`target/monitor-rv-resc-proof/`）。
+`pause` 後の `RunFor`、`RunUntil`、`RunToNearestSyncPoint` も固定
+Renode と一致した（`target/monitor-paused-run-proof/`）。
+
+未変更の Arty LiteX `Should Boot` は実 UART で `H2U` を観測し、
+次の `Provides Serialization` で未対応となった
+（`target/monitor-rv-arty/results.json`）。STM32F4 の FAULTMASK ケースは、
+UART アイドル待機中にホスト上限に達して未実行となった
+（`target/monitor-idle-stm/results.json`）。
