@@ -499,7 +499,7 @@ enum Action {
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
-    CreateUartTester(String, bool, Option<u64>, Option<bool>, bool, bool, bool),
+    CreateUartTester(String, Option<String>, bool, Option<u64>, Option<bool>, bool, bool, bool),
     DefaultUartTester(Option<usize>),
     DefaultUartTimeout(u64),
     WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool, Option<bool>, Option<bool>),
@@ -1182,7 +1182,11 @@ fn run_commands<'a>(
             Action::Adc(name, channel, volts) => machine
                 .external_event(ExternalEvent::Adc(name.clone(), *channel, *volts))
                 .map(|()| None),
-            Action::CreateUartTester(target, binary, timeout, echo, carriage_return, next_line, pause) => {
+            Action::CreateUartTester(target, requested_machine, binary, timeout, echo, carriage_return, next_line, pause) => {
+                let available = session.machine.as_deref().unwrap_or("machine-0");
+                if let Some(name) = requested_machine && name != available {
+                    return Err(format!("{}:{}: Machine with name {name} not found. Available machines: [{available}]", command.source.display(), command.line));
+                }
                 machine.bus.default_uart_pause = *pause;
                 machine.bus.set_default_uart_echo(*echo);
                 machine.bus.set_default_uart_next_line(*next_line);
@@ -3282,6 +3286,7 @@ fn execute(
             ))
         }
         ["CreateTerminalTester", target, options @ ..] => {
+            let mut requested_machine = None;
             let mut binary = None;
             let mut timeout = None;
             let mut echo = None;
@@ -3292,6 +3297,10 @@ fn execute(
                 match option.split_once('=') {
                     Some(("timeout", value)) if timeout.is_none() => {
                         timeout = Some(duration_steps(resolve(value)?)?);
+                    }
+                    Some(("machine", value)) if requested_machine.is_none() => {
+                        let name = resolve(value)?;
+                        requested_machine = Some(monitor_string(name).unwrap_or_else(|| name.to_owned()));
                     }
                     Some(("endLineOption", value)) if carriage_return.is_none() => {
                         carriage_return = Some(match resolve(value)? {
@@ -3321,6 +3330,7 @@ fn execute(
             }
             Some(Action::CreateUartTester(
                 resolve(target)?.to_owned(),
+                requested_machine,
                 binary.unwrap_or(false),
                 timeout,
                 echo,
@@ -4635,7 +4645,11 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
             }
             quote = None;
             triple = false;
-        } else if (new_word || start.is_some_and(|start| &text[start..index] == "@"))
+        } else if quote.is_none()
+            && (new_word || start.is_some_and(|start| {
+                let prefix = &text[start..index];
+                prefix == "@" || prefix.ends_with('=')
+            }))
             && matches!(character, '"' | '\'' | '`')
         {
             quote = Some(character);

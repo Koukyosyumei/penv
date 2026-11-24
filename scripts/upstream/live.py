@@ -819,10 +819,16 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def terminal(self, uart, *args):
         if not (self.image or self.rust_monitor) or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", uart):
             raise Unsupported(f"Create Terminal Tester: {uart}")
+        positional = ("timeout",)
         allowed = {"timeout", "defaultPauseEmulation"}
         if self.rust_monitor:
-            allowed.update(("defaultWaitForEcho", "endLineOption", "defaultMatchNextLine", "binaryMode"))
-        options = self.log_options(args, allowed, ("timeout",))
+            positional += ("machine", "endLineOption", "defaultPauseEmulation",
+                           "defaultWaitForEcho", "defaultMatchNextLine", "binaryMode")
+            allowed.update(positional)
+        options = self.log_options(args, allowed, positional)
+        if self.rust_monitor:
+            options = {key: value for key, value in options.items() if value.lower() not in {"none", "null"}}
+        machine = f" machine={self.literal(options['machine'])}" if options.get("machine") else ""
         pause = self.uart_bool_option(options, "defaultPauseEmulation")
         if not self.rust_monitor:
             pause = ""
@@ -837,7 +843,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             enabled = self.log_bool(options["defaultWaitForEcho"])
             echo = f" defaultWaitForEcho={str(enabled).lower()}"
         ending = options.get("endLineOption")
-        if ending is not None and ending not in {"TreatLineFeedAsEndLine", "TreatCarriageReturnAsEndLine"}:
+        if ending and ending not in {"TreatLineFeedAsEndLine", "TreatCarriageReturnAsEndLine"}:
             raise Unsupported(f"invalid endLineOption {ending!r}")
         delimiter = f" endLineOption={ending}" if ending else ""
         first = ""
@@ -846,7 +852,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         binary = ""
         if "binaryMode" in options:
             binary = f" binaryMode={str(self.log_bool(options['binaryMode'])).lower()}"
-        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}{delimiter}{first}{binary}{pause}").strip())
+        result = int(self.operation(f"CreateTerminalTester {uart}{machine}{deadline}{echo}{delimiter}{first}{binary}{pause}").strip())
         if legacy_timeout is not None:
             self.uart_testers.setdefault(result, (uart, legacy_timeout))
         return result
@@ -996,10 +1002,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
 
     def write_char(self, char, *args):
         options = self.log_options(args, {"testerId"}, ("testerId",))
-        if not self.started or len(char) != 1 or not char.isascii():
-            raise Unsupported("requires one ASCII character and a running UART tester")
+        if len(char) != 1 or not char.isascii():
+            raise Unsupported("requires one ASCII character")
         if self.rust_monitor:
             return self.write_tester_uart(char, "None", False, options.get("testerId"))
+        if not self.started:
+            raise Unsupported("requires a running UART tester")
         _, (uart, _) = self.select_uart(options.get("testerId"))
         self.operation(f"{uart} WriteLine {self.uart_text(char)} None")
         return {"Line": ""}
@@ -1009,7 +1017,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         selector = f" testerId={tester}" if tester is not None else ""
         mode = "default" if echo is None else str(echo).lower()
         self.operation(f"WriteTesterUart {self.uart_text(content)} {ending} {mode}{selector}{pause}")
-        return {"Line": ""}
+        return {"Line": "", "Timestamp": 0.0, "Groups": [], "IsFailingString": False}
 
     def uart_idle(self, timeout, *args):
         positional = ("testerId", "pauseEmulation") if self.rust_monitor else ("testerId",)
