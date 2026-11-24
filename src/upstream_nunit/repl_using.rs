@@ -1,13 +1,15 @@
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Files(PathBuf);
 
 impl Files {
     fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
             "penv-nunit-using-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap()
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&directory).unwrap();
         Self(directory)

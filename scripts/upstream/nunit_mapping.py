@@ -23,3 +23,10 @@ def case_parameters(method, display_name):
         if parameters.startswith('("') and parameters.endswith('")'):
             return {"number": parameters[2:-2]}
     return {"display": parameters} if parameters else {}
+
+
+def runtime_host_excluded(fixture, method, windows):
+    # UsingTests calls Assert.Ignore at runtime on the other operating systems.
+    if fixture != "Antmicro.Renode.UnitTests.PlatformDescription.UsingTests":
+        return False
+    return (method.endswith("Windows") and not windows) or (method.endswith("Unix") and windows)

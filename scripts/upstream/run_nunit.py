@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 
-from nunit_mapping import PIN, case_parameters, load_mapping
+from nunit_mapping import PIN, case_parameters, load_mapping, runtime_host_excluded
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,15 +58,6 @@ def host_exclusions():
     system = {"Linux": "linux", "Darwin": "osx"}.get(platform.system(), "windows")
     arch = "aarch64" if platform.machine() in {"aarch64", "arm64"} else "i386"
     return {"excluded", f"exclude_{system}", f"exclude_host_{arch}"}
-
-
-def ignored_by_using_fixture_on_host(case):
-    # UsingTests calls Assert.Ignore at runtime for other operating systems.
-    if case["classname"] != "Antmicro.Renode.UnitTests.PlatformDescription.UsingTests":
-        return False
-    method = case["methodname"]
-    windows = platform.system() == "Windows"
-    return (method.endswith("Windows") and not windows) or (method.endswith("Unix") and windows)
 
 
 def fixture_notes():
@@ -114,7 +105,7 @@ def discover(project, mapping, clone, dotnet, output):
         runstate = case["runstate"]
         if not exclusions.isdisjoint(categories):
             status = "excluded"
-        elif ignored_by_using_fixture_on_host(case):
+        elif runtime_host_excluded(case["classname"], case["methodname"], platform.system() == "Windows"):
             status = "excluded"
         elif runstate != "Runnable":
             status = {"Ignored": "ignored", "Skipped": "skipped",
