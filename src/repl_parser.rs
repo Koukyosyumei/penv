@@ -578,8 +578,20 @@ pub(crate) struct ObjectValue<'a> {
 pub(crate) fn object_fields(input: &str) -> Result<Vec<(&str, &str)>, &'static str> {
     let mut fields = Vec::new();
     let mut start = 0;
-    for end in unquoted_delimiters(input, &[';'])
-        .map(|(index, _)| index)
+    let mut depth = 0;
+    for end in unquoted_delimiters(input, &[';', '{', '}', '[', ']'])
+        .filter_map(|(index, delimiter)| match delimiter {
+            '{' | '[' => {
+                depth += 1;
+                None
+            }
+            '}' | ']' => {
+                depth -= 1;
+                None
+            }
+            ';' if depth == 0 => Some(index),
+            _ => None,
+        })
         .chain([input.len()])
     {
         let text = input[start..end].trim();
@@ -594,6 +606,12 @@ pub(crate) fn object_fields(input: &str) -> Result<Vec<(&str, &str)>, &'static s
     Ok(fields)
 }
 
+fn plain_object_type(value: &str) -> bool {
+    value.trim().strip_prefix("new ").is_some_and(|model| {
+        !model.is_empty() && !model.contains(char::is_whitespace) && !model.contains('{')
+    })
+}
+
 fn object_prefix(input: &str) -> Result<(ObjectValue<'_>, &str), &'static str> {
     let input = input
         .strip_prefix("new ")
@@ -606,12 +624,13 @@ fn object_prefix(input: &str) -> Result<(ObjectValue<'_>, &str), &'static str> {
     if model.is_empty() || model.contains(char::is_whitespace) {
         return Err("expected REPL object type");
     }
-    let (end, delimiter) = unquoted_delimiters(body, &['{', '}'])
-        .next()
+    let mut depth = 1;
+    let end = unquoted_delimiters(body, &['{', '}'])
+        .find_map(|(position, delimiter)| {
+            depth += if delimiter == '{' { 1 } else { -1 };
+            (depth == 0).then_some(position)
+        })
         .ok_or("expected closing brace in REPL object")?;
-    if delimiter != '}' {
-        return Err("nested REPL object attributes are unsupported");
-    }
     Ok((
         ObjectValue {
             model,
@@ -959,6 +978,7 @@ fn parse_text(
                 && !model.contains('{')
             {
                 property.push_str(" {");
+                let mut open = vec![indent];
                 while lines.peek().is_some_and(|(_, raw)| {
                     raw.trim().is_empty()
                         || matches!(
@@ -970,13 +990,30 @@ fn parse_text(
                     let continuation = comments
                         .line(raw)
                         .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
+                    let child_indent = indentation(&continuation);
                     let continuation = continuation.trim();
-                    if !continuation.is_empty() {
-                        property.push_str(continuation);
+                    if continuation.is_empty() {
+                        continue;
+                    }
+                    while open.last().is_some_and(|&level| level >= child_indent) {
+                        open.pop();
+                        property.push_str("};");
+                    }
+                    property.push_str(continuation);
+                    if continuation
+                        .split_once(':')
+                        .is_some_and(|(_, value)| plain_object_type(value))
+                    {
+                        open.push(child_indent);
+                        property.push_str(" {");
+                    } else {
                         property.push(';');
                     }
                 }
-                property.push('}');
+                while open.pop().is_some() {
+                    property.push_str("};");
+                }
+                property.pop();
             }
             if let Some((_, value)) = property.split_once(':')
                 && value.trim().starts_with("new ")

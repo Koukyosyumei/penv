@@ -143,44 +143,105 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                 .split_once(':')
                 .ok_or_else(|| format!("{source}: expected CPU property"))?;
             let value = value.trim();
-            let target = if name.trim() == "OtherCpu" && platform.objects[id].model == Model::Cpu {
-                let target = resolve(&entry.source, value)
-                    .ok_or_else(|| format!("{source}: MissingReference: {value}"))?;
-                if platform.objects[target].model != Model::Cpu {
-                    return Err(format!("{source}: TypeMismatch: OtherCpu requires a CPU"));
-                }
-                Some(target)
-            } else {
-                None
-            };
-            let Some(cpu) = &mut platform.objects[id].cpu else {
-                return Err(format!("{source}: PropertyDoesNotExist: {name}"));
-            };
-            match name.trim() {
-                "Placeholder" => {
-                    cpu.placeholder = Some(
-                        quoted_value(value)
-                            .map_err(|error| format!("{source}: TypeMismatch: {error}"))?,
-                    )
-                }
-                "OtherCpu" => cpu.other_cpu = target,
-                "Model" => return Err(format!("{source}: PropertyNotWritable: Model")),
-                "EnumValue" => {
-                    cpu.enum_value = Some(match symbolic_value(value) {
-                        Some(
-                            SymbolicValue::Reference("One")
-                            | SymbolicValue::Enum(Some("TwoStateEnum"), "One"),
-                        ) => TwoState::One,
-                        Some(
-                            SymbolicValue::Reference("Two")
-                            | SymbolicValue::Enum(Some("TwoStateEnum"), "Two"),
-                        ) => TwoState::Two,
-                        _ => return Err(format!("{source}: TypeMismatch: expected TwoStateEnum")),
-                    });
-                }
-                name => return Err(format!("{source}: PropertyDoesNotExist: {name}")),
-            }
+            platform.set_property(
+                id,
+                name.trim(),
+                value,
+                source,
+                |name| resolve(&entry.source, name),
+                0,
+            )?;
         }
     }
     Ok(platform)
+}
+
+impl CreatedPlatform {
+    fn set_property(
+        &mut self,
+        id: usize,
+        name: &str,
+        value: &str,
+        source: &SourceLine,
+        resolve: impl Fn(&str) -> Option<usize> + Copy,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth >= 64 {
+            return Err(format!("{source}: inline object nesting limit exceeded"));
+        }
+        let target = if name == "OtherCpu" && self.objects[id].model == Model::Cpu {
+            Some(if value.starts_with("new ") {
+                let (object, tail) =
+                    object_prefix(value).map_err(|error| format!("{source}: {error}"))?;
+                if !tail.trim().is_empty() {
+                    return Err(format!("{source}: unexpected text after inline object"));
+                }
+                let model = Model::parse(object.model)
+                    .ok_or_else(|| format!("{source}: TypeNotResolved: {}", object.model))?;
+                if model != Model::Cpu {
+                    return Err(format!("{source}: TypeMismatch: OtherCpu requires a CPU"));
+                }
+                let target = self.objects.len();
+                self.objects.push(CreatedObject {
+                    model,
+                    cpu: Some(Cpu::default()),
+                    range: None,
+                });
+                let mut seen = HashSet::new();
+                for (key, value) in object.fields {
+                    if !seen.insert(key) {
+                        return Err(format!(
+                            "{source}: PropertyOrCtorNameUsedMoreThanOnce: {key}"
+                        ));
+                    }
+                    self.set_property(target, key, value, source, resolve, depth + 1)?;
+                }
+                target
+            } else {
+                let target =
+                    resolve(value).ok_or_else(|| format!("{source}: MissingReference: {value}"))?;
+                if self.objects[target].model != Model::Cpu {
+                    return Err(format!("{source}: TypeMismatch: OtherCpu requires a CPU"));
+                }
+                target
+            })
+        } else {
+            None
+        };
+        let Some(cpu) = &mut self.objects[id].cpu else {
+            return Err(format!("{source}: PropertyDoesNotExist: {name}"));
+        };
+        match name {
+            "Placeholder" => {
+                cpu.placeholder = Some(
+                    quoted_value(value)
+                        .map_err(|error| format!("{source}: TypeMismatch: {error}"))?,
+                )
+            }
+            "OtherCpu" => cpu.other_cpu = target,
+            "Model" => return Err(format!("{source}: PropertyNotWritable: Model")),
+            "EnumValue" => {
+                cpu.enum_value = Some(match symbolic_value(value) {
+                    Some(
+                        SymbolicValue::Reference("One")
+                        | SymbolicValue::Enum(Some("TwoStateEnum"), "One"),
+                    ) => TwoState::One,
+                    Some(
+                        SymbolicValue::Reference("Two")
+                        | SymbolicValue::Enum(Some("TwoStateEnum"), "Two"),
+                    ) => TwoState::Two,
+                    _ => return Err(format!("{source}: TypeMismatch: expected TwoStateEnum")),
+                });
+            }
+            name => return Err(format!("{source}: PropertyDoesNotExist: {name}")),
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn other_cpu(&self, cpu: &Cpu) -> Option<&Cpu> {
+        self.objects
+            .get(cpu.other_cpu?)
+            .and_then(|object| object.cpu.as_ref())
+    }
 }

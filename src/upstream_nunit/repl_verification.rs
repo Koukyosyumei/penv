@@ -181,3 +181,53 @@ device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus "something""#,
         "NoCtorForRegistrationPoint",
     );
 }
+
+#[test]
+fn should_fail_on_non_existing_inline_type() {
+    assert_error(
+        r#"
+external: Antmicro.Renode.UnitTests.Mocks.MockCPU
+    OtherCpu: new NotExistingType"#,
+        "TypeNotResolved",
+    );
+}
+
+#[test]
+fn should_fail_on_incorrect_inline_object_type() {
+    assert_error(
+        r#"
+one: Antmicro.Renode.UnitTests.Mocks.MockCPU
+    OtherCpu: new Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral"#,
+        "TypeMismatch",
+    );
+}
+
+#[test]
+fn should_fail_on_incorrect_property_type_in_nested_inline_object() {
+    assert_error(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU
+    OtherCpu: new Antmicro.Renode.UnitTests.Mocks.MockCPU
+        OtherCpu: new Antmicro.Renode.UnitTests.Mocks.MockCPU
+            EnumValue: "string""#,
+        "TypeMismatch",
+    );
+}
+
+#[test]
+fn should_set_property_of_inline_object() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    OtherCpu: new Antmicro.Renode.UnitTests.Mocks.MockCPU
+        OtherCpu: new Antmicro.Renode.UnitTests.Mocks.MockCPU
+            Placeholder: "something""#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    let nested = platform
+        .other_cpu(platform.other_cpu(cpu).unwrap())
+        .unwrap();
+    assert_eq!(nested.placeholder.as_deref(), Some("something"));
+}
