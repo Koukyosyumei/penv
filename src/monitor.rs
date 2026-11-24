@@ -27,6 +27,7 @@ pub struct Boot {
     pub pcm_outputs: Vec<(String, PathBuf)>,
     pub run_steps: Option<u64>,
     pub quantum: Option<u64>,
+    pub uart_timeout: Option<u64>,
     pub cpu_mips: Option<u32>,
     pub unhandled_access: Option<UnhandledAccess>,
     pub post_run: Vec<PostRun>,
@@ -371,6 +372,7 @@ enum Action {
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
     CreateUartTester(String, bool, Option<u64>),
     DefaultUartTester(Option<usize>),
+    DefaultUartTimeout(u64),
     WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
@@ -946,10 +948,14 @@ fn run_commands(
                 .bus
                 .create_uart_tester(target, *binary)
                 .and_then(|id| {
-                    machine.bus.set_uart_tester_timeout(id, timeout.unwrap_or(8 * CORTEX_M_STEP_HZ));
+                    machine.bus.set_uart_tester_timeout(id, timeout.unwrap_or_else(|| machine.bus.default_uart_timeout()));
                     writeln!(output.output, "{id}").map_err(|e| e.to_string())
                 })
                 .map(|()| None),
+            Action::DefaultUartTimeout(timeout) => {
+                machine.bus.set_default_uart_timeout(*timeout);
+                Ok(None)
+            }
             Action::DefaultUartTester(id) => {
                 machine.bus.set_default_uart_tester(*id).map(|()| None)
             }
@@ -2048,6 +2054,10 @@ fn execute(
     match words {
         [] => return Ok(()),
         ["using", "sysbus"] => return Ok(()),
+        ["SetDefaultUartTimeout", value] if !boot.started && boot.runtime.is_empty() => {
+            boot.uart_timeout = Some(duration_steps(resolve(variables, value)?)?);
+            return Ok(());
+        }
         ["numbersMode", mode] => {
             boot.session.number_mode = match *mode {
                 "Hexadecimal" => NumberMode::Hexadecimal,
@@ -2405,6 +2415,7 @@ fn execute(
                 timeout,
             ))
         }
+        ["SetDefaultUartTimeout", value] => Some(Action::DefaultUartTimeout(duration_steps(resolve(value)?)?)),
         ["SetDefaultTester", id] => {
             let id = resolve(id)?;
             Some(Action::DefaultUartTester(
@@ -2928,6 +2939,7 @@ fn execute(
                         | Action::CpuStep(..)
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)
+                        | Action::DefaultUartTimeout(_)
                         | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)

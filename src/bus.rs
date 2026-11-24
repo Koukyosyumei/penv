@@ -438,6 +438,7 @@ pub struct Bus {
     step_hz: Option<u32>,
     uart_testers: Vec<(TesterPort, TesterHistory)>,
     uart_tester_timeouts: BTreeMap<usize, u64>,
+    default_uart_timeout: Option<u64>,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
@@ -5067,13 +5068,21 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn default_uart_timeout(&self) -> u64 {
+        self.default_uart_timeout.unwrap_or(8 * CORTEX_M_STEP_HZ)
+    }
+
+    pub(crate) fn set_default_uart_timeout(&mut self, timeout: u64) {
+        self.default_uart_timeout = Some(timeout);
+    }
+
     pub(crate) fn set_uart_tester_timeout(&mut self, id: usize, timeout: u64) {
         self.uart_tester_timeouts.entry(id).or_insert(timeout);
     }
 
     pub(crate) fn uart_tester_timeout(&self, id: Option<usize>) -> Result<u64, String> {
         let id = self.uart_tester_id(id)?;
-        Ok(self.uart_tester_timeouts.get(&id).copied().unwrap_or(8 * CORTEX_M_STEP_HZ))
+        Ok(self.uart_tester_timeouts.get(&id).copied().unwrap_or_else(|| self.default_uart_timeout()))
     }
 
     fn uart_tester_id(&self, id: Option<usize>) -> Result<usize, String> {

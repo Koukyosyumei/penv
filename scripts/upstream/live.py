@@ -716,6 +716,15 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             return arg.split("=", 1)[1]
         raise Unsupported(f"unsupported Robot keyword option {arg}")
 
+    def set_timeout(self, timeout):
+        if self.rust_monitor:
+            command = f"SetDefaultUartTimeout {self.duration(timeout)}"
+            if self.proc is None:
+                self.commands.append(command)
+            else:
+                self.operation(command)
+        super().set_timeout(timeout)
+
     def terminal(self, uart, *args):
         if not (self.image or self.rust_monitor) or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", uart):
             raise Unsupported(f"Create Terminal Tester: {uart}")
@@ -723,7 +732,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "defaultPauseEmulation" in options:
             self.log_bool(options["defaultPauseEmulation"])
         timeout = self.duration(options.get("timeout", self.timeout))
-        deadline = f" timeout={timeout}" if self.rust_monitor else ""
+        deadline = f" timeout={timeout}" if self.rust_monitor and "timeout" in options else ""
         result = int(self.operation(f"CreateTerminalTester {uart}{deadline}").strip())
         self.uart_testers.setdefault(result, (uart, timeout))
         return result

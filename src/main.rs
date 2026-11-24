@@ -1389,6 +1389,7 @@ fn run() -> Result<ExitCode, String> {
     let mut riscv_wfi_as_nop = Vec::new();
     let mut monitor_user_state = None;
     let mut monitor_unhandled_access = None;
+    let mut monitor_uart_timeout = None;
     let mut monitor_output = Vec::new();
     let mut monitor_session = monitor::Session::default();
     let mut _generated_repl = None;
@@ -1523,6 +1524,7 @@ fn run() -> Result<ExitCode, String> {
         riscv_wfi_as_nop = boot.riscv_wfi_as_nop;
         monitor_user_state = boot.monitor_user_state;
         monitor_unhandled_access = boot.unhandled_access;
+        monitor_uart_timeout = boot.uart_timeout;
         monitor_output = boot.monitor_output;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
@@ -1685,6 +1687,9 @@ fn run() -> Result<ExitCode, String> {
         }
         if script_elf_addresses.is_some() && !machine.is_cortex_m() {
             machine.bus.use_renode_unmapped_data();
+        }
+        if let Some(timeout) = monitor_uart_timeout {
+            machine.bus.set_default_uart_timeout(timeout);
         }
         if let Some(policy) = monitor_unhandled_access {
             machine.bus.unhandled_access = Some(policy);
