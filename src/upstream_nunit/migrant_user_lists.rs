@@ -27,7 +27,30 @@ const STACK_FIELDS: &[(&str, FieldKind)] = &[
     ("_version", FieldKind::Integer),
 ];
 
+const INT_SET: &str = "HashSet<int>";
+const OBJECT_SET: &str = "HashSet<CustomObject>";
+const INT_SLOT: &str = "HashSet<int>.Slot";
+const OBJECT_SLOT: &str = "HashSet<CustomObject>.Slot";
+
+const SET_FIELDS: &[(&str, FieldKind)] = &[
+    ("m_buckets", FieldKind::Reference),
+    ("m_slots", FieldKind::Reference),
+    ("m_count", FieldKind::Integer),
+    ("m_lastIndex", FieldKind::Integer),
+    ("m_freeList", FieldKind::Integer),
+    ("m_comparer", FieldKind::Reference),
+    ("m_version", FieldKind::Integer),
+];
+
 const CODECS: &[Codec] = &[
+    generated_record!(INT_SET; buckets: reference, slots: reference, count: integer, last: integer, free: integer, comparer: reference, version: integer),
+    generated_record!(OBJECT_SET; buckets: reference, slots: reference, count: integer, last: integer, free: integer, comparer: reference, version: integer),
+    generated_record!(INT_SLOT; hash: integer, next: integer, value: integer),
+    generated_record!(OBJECT_SLOT; hash: integer, next: integer, value: reference),
+    generated_record!("GenericEqualityComparer<int>";),
+    generated_record!("ObjectEqualityComparer<CustomObject>";),
+    generated_record!("CustomObject"; field: reference),
+    generated_record!("System.Object";),
     generated_record!(ARRAY_LIST; items: reference, size: integer, version: integer),
     generated_record!(READ_ONLY; list: reference),
     generated_record!("SimpleClass"; value: integer, string: reference),
@@ -77,6 +100,62 @@ const STAMPS: &[TypeStamp<'static>] = &[
         module: "mscorlib",
         revision: 0,
         fields: &[("m_value", FieldKind::Integer)],
+    },
+    TypeStamp {
+        class: INT_SET,
+        module: "System.Core",
+        revision: 0,
+        fields: SET_FIELDS,
+    },
+    TypeStamp {
+        class: OBJECT_SET,
+        module: "System.Core",
+        revision: 0,
+        fields: SET_FIELDS,
+    },
+    TypeStamp {
+        class: INT_SLOT,
+        module: "System.Core",
+        revision: 0,
+        fields: &[
+            ("hashCode", FieldKind::Integer),
+            ("next", FieldKind::Integer),
+            ("value", FieldKind::Integer),
+        ],
+    },
+    TypeStamp {
+        class: OBJECT_SLOT,
+        module: "System.Core",
+        revision: 0,
+        fields: &[
+            ("hashCode", FieldKind::Integer),
+            ("next", FieldKind::Integer),
+            ("value", FieldKind::Reference),
+        ],
+    },
+    TypeStamp {
+        class: "GenericEqualityComparer<int>",
+        module: "mscorlib",
+        revision: 0,
+        fields: &[],
+    },
+    TypeStamp {
+        class: "ObjectEqualityComparer<CustomObject>",
+        module: "mscorlib",
+        revision: 0,
+        fields: &[],
+    },
+    TypeStamp {
+        class: "CustomObject",
+        module: "Tests",
+        revision: 0,
+        fields: &[("Field", FieldKind::Reference)],
+    },
+    TypeStamp {
+        class: "System.Object",
+        module: "mscorlib",
+        revision: 0,
+        fields: &[],
     },
     user_list::type_stamp(ARRAY_LIST),
     TypeStamp {
@@ -452,6 +531,112 @@ fn read_only_collection(options: Options) {
     assert_string(&restored, third, "cvzxcv");
 }
 
+fn hash_set(options: Options, objects: bool) {
+    let mut graph = Graph::default();
+    let (class, slot, comparer) = if objects {
+        (
+            OBJECT_SET,
+            OBJECT_SLOT,
+            "ObjectEqualityComparer<CustomObject>",
+        )
+    } else {
+        (INT_SET, INT_SLOT, "GenericEqualityComparer<int>")
+    };
+    let mut buckets = [0; 3];
+    let mut slots = Vec::new();
+    for index in 0..3 {
+        let (hash, item) = if objects {
+            let identity = graph.insert(record("System.Object", vec![]));
+            let item = graph.insert(record("CustomObject", vec![Value::Ref(identity)]));
+            // Assign a stable identity hash to each fixture object in this graph.
+            (index * 3, Value::Ref(item))
+        } else {
+            (index + 1, Value::Integer((index + 1) as i64))
+        };
+        let bucket = hash % buckets.len();
+        let next = buckets[bucket] - 1;
+        buckets[bucket] = index as i64 + 1;
+        slots.push(Value::Ref(graph.insert(record(
+            slot,
+            vec![Value::Integer(hash as i64), Value::Integer(next), item],
+        ))));
+    }
+    let buckets = graph.insert(Object::Array(buckets.map(Value::Integer).to_vec()));
+    let slots = graph.insert(Object::Array(slots));
+    let comparer = graph.insert(record(comparer, vec![]));
+    let root = graph.insert(record(
+        class,
+        vec![
+            Value::Ref(buckets),
+            Value::Ref(slots),
+            Value::Integer(3),
+            Value::Integer(3),
+            Value::Integer(-1),
+            Value::Ref(comparer),
+            Value::Integer(3),
+        ],
+    ));
+
+    let (restored, copy) = options.restore(&graph, root);
+    let Some(Object::Record {
+        class: actual,
+        fields,
+    }) = restored.get(copy)
+    else {
+        panic!("expected hash set");
+    };
+    assert_eq!(actual, class);
+    assert_eq!(fields[2], Value::Integer(3));
+    let Some(Object::Array(buckets)) = restored.get(reference(&fields[0])) else {
+        panic!("expected buckets");
+    };
+    let Some(Object::Array(slots)) = restored.get(reference(&fields[1])) else {
+        panic!("expected slots");
+    };
+    let mut visited = std::collections::HashSet::new();
+    let mut integers = std::collections::BTreeSet::new();
+    let mut identities = std::collections::HashSet::new();
+    for (bucket, head) in buckets.iter().enumerate() {
+        let Value::Integer(head) = head else {
+            panic!("expected bucket index");
+        };
+        let mut next = head - 1;
+        while next >= 0 {
+            assert!(visited.insert(next));
+            let Some(Object::Record { class, fields }) =
+                restored.get(reference(&slots[next as usize]))
+            else {
+                panic!("expected slot");
+            };
+            assert_eq!(class, slot);
+            let [Value::Integer(hash), Value::Integer(link), item] = fields.as_slice() else {
+                panic!("expected slot fields");
+            };
+            assert_eq!(*hash as usize % buckets.len(), bucket);
+            if objects {
+                let Some(Object::Record { class, fields }) = restored.get(reference(item)) else {
+                    panic!("expected custom object");
+                };
+                assert_eq!(class, "CustomObject");
+                let identity = reference(&fields[0]);
+                assert_eq!(
+                    restored.get(identity),
+                    Some(&record("System.Object", vec![]))
+                );
+                assert!(identities.insert(identity));
+            } else {
+                assert_eq!(item, &Value::Integer(*hash));
+                integers.insert(*hash);
+            }
+            next = *link;
+        }
+    }
+    assert_eq!(visited.len(), 3);
+    if !objects {
+        assert_eq!(integers, [1, 2, 3].into());
+    }
+}
+
 macro_rules! configurations {
     ($module:ident, $case:expr) => {
         mod $module {
@@ -537,3 +722,5 @@ configurations!(queue, integer_queue);
 configurations!(mixed_array_list, mixed_array_list);
 configurations!(primitive_array_list, primitive_array_list);
 configurations!(read_only_collection, read_only_collection);
+configurations!(integer_set, |m| hash_set(m, false));
+configurations!(custom_set, |m| hash_set(m, true));
