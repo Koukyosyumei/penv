@@ -1972,3 +1972,27 @@ receiver2: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus<2, 3>"#,
     assert_eq!(outputs("8")[0].pin, 18);
     assert_eq!(outputs("8")[0].receiver, receiver1);
 }
+
+#[test]
+fn should_combine_if_interrupt_used_second_time_in_entry_as_destination() {
+    let platform = creation::create_objects(
+        r#"
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSenderWithTwoInterrupts @ sysbus
+    Irq -> receiver@0
+    AnotherIrq -> receiver@0"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let sender = platform.object_id("sysbus.sender").unwrap();
+    let receiver = platform.object_id("sysbus.receiver").unwrap();
+    let first = platform.irq_endpoints(sender, "Irq")[0];
+    let second = platform.irq_endpoints(sender, "AnotherIrq")[0];
+    assert_eq!(first.pin, 0);
+    assert_eq!(second.pin, 1);
+    assert!(platform.is_combined_input(first.receiver));
+    let output = platform.irq_endpoints(first.receiver, "OutputLine")[0];
+    assert_eq!(output.pin, 0);
+    assert_eq!(output.receiver, receiver);
+    assert_eq!(second.receiver, first.receiver);
+}

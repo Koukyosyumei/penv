@@ -5,6 +5,7 @@ const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Model {
     Sysbus,
+    CombinedInput,
     IrqSender,
     DualIrqSender,
     NumberedGpio,
@@ -81,6 +82,7 @@ impl Model {
     fn irq_outputs(self) -> &'static [&'static str] {
         match self {
             Model::IrqSender => &["Irq"],
+            Model::CombinedInput => &["OutputLine"],
             Model::DualIrqSender => &["Irq", "AnotherIrq"],
             Model::NumberedGpio => &["Irq", "OtherIrq"],
             Model::IrqReceiver => &["IRQ"],
@@ -160,6 +162,7 @@ pub(crate) enum TwoState {
 pub(crate) struct CreatedPlatform {
     objects: Vec<CreatedObject>,
     registered: HashMap<String, usize>,
+    next_endpoint: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -173,6 +176,7 @@ pub(crate) struct Endpoint {
     pub(crate) receiver: usize,
     pub(crate) pin: u32,
     pub(crate) local: Option<u32>,
+    sequence: usize,
 }
 
 struct CreatedObject {
@@ -335,6 +339,11 @@ impl Collections {
 
 impl CreatedPlatform {
     #[cfg(test)]
+    pub(crate) fn is_combined_input(&self, id: usize) -> bool {
+        self.objects[id].model == Model::CombinedInput
+    }
+
+    #[cfg(test)]
     pub(crate) fn object_id(&self, name: &str) -> Option<usize> {
         self.registered.get(name).copied()
     }
@@ -432,6 +441,7 @@ pub(crate) fn create_with_init(
     let mut platform = CreatedPlatform {
         objects: Vec::new(),
         registered: HashMap::new(),
+        next_endpoint: 0,
     };
     for entry in &entries {
         validate_entry_properties(&entry.body, |source, name| {
@@ -477,37 +487,11 @@ pub(crate) fn create_with_init(
         if previous.is_some() {
             return Err(entry.error("VariableAlreadyDeclared: repeated type declaration"));
         }
-        platform.objects.push(CreatedObject {
-            model,
-            cpu: (model == Model::Cpu).then(Cpu::default),
-            ranges: Vec::new(),
-            enum_arguments: EnumArguments::default(),
-            scalar: None,
-            empty_peripheral_counter: 1,
-            empty_peripheral_value: None,
-            dependency: None,
-            throw_on_construction: false,
-            gpio_count: 0,
-            endpoints: HashMap::new(),
-            collections: Collections::default(),
-        });
+        platform.objects.push(CreatedObject::new(model));
         targets.push(Some(id));
     }
     let sysbus = platform.objects.len();
-    platform.objects.push(CreatedObject {
-        model: Model::Sysbus,
-        cpu: None,
-        ranges: Vec::new(),
-        enum_arguments: EnumArguments::default(),
-        scalar: None,
-        empty_peripheral_counter: 1,
-        empty_peripheral_value: None,
-        dependency: None,
-        throw_on_construction: false,
-        gpio_count: 0,
-        endpoints: HashMap::new(),
-        collections: Collections::default(),
-    });
+    platform.objects.push(CreatedObject::new(Model::Sysbus));
     globals.insert("sysbus", sysbus);
     let mut init = Vec::new();
     let mut preinit = Vec::new();
@@ -640,6 +624,7 @@ pub(crate) fn create_with_init(
                                 | Model::AmbiguousRegister => "non-peripheral",
                                 Model::MockRegistrationPoint => "mock registration point",
                                 Model::Sysbus => "system bus",
+                                Model::CombinedInput => "IRQ combiner",
                                 Model::IrqSender
                                 | Model::DualIrqSender
                                 | Model::NumberedGpio
@@ -783,6 +768,7 @@ pub(crate) fn create_with_init(
         }
     }
     platform.check_constructor_cycles()?;
+    platform.combine_irq_inputs()?;
     run_scripts(handler, init, false)?;
     for (_, name, commands) in reset {
         handler.register_reset(name, &commands);
@@ -872,6 +858,23 @@ fn run_scripts(
 }
 
 impl CreatedObject {
+    fn new(model: Model) -> Self {
+        Self {
+            model,
+            cpu: (model == Model::Cpu).then(Cpu::default),
+            ranges: Vec::new(),
+            enum_arguments: EnumArguments::default(),
+            scalar: None,
+            empty_peripheral_counter: 1,
+            empty_peripheral_value: None,
+            dependency: None,
+            throw_on_construction: false,
+            gpio_count: 0,
+            endpoints: HashMap::new(),
+            collections: Collections::default(),
+        }
+    }
+
     fn finish_constructor(&mut self) -> Result<(), String> {
         if self.throw_on_construction {
             return Err("ConstructionException: Fake exception".into());
@@ -895,6 +898,53 @@ impl CreatedObject {
 }
 
 impl CreatedPlatform {
+    fn combine_irq_inputs(&mut self) -> Result<(), String> {
+        // Collect after applying overlays, so cancelled wires do not participate in fan-in.
+        let mut incoming = HashMap::<_, Vec<_>>::new();
+        for (id, object) in self.objects.iter().enumerate() {
+            for (&output, endpoints) in &object.endpoints {
+                for (index, endpoint) in endpoints.iter().enumerate() {
+                    incoming
+                        .entry((endpoint.receiver, endpoint.local, endpoint.pin))
+                        .or_default()
+                        .push((endpoint.sequence, id, output, index));
+                }
+            }
+        }
+        let mut shared: Vec<_> = incoming
+            .into_iter()
+            .filter(|(_, edges)| edges.len() > 1)
+            .map(|(destination, mut edges)| {
+                edges.sort_unstable_by_key(|edge| edge.0);
+                (destination, edges)
+            })
+            .collect();
+        shared.sort_unstable_by_key(|(_, edges)| edges[0].0);
+        for ((receiver, local, pin), edges) in shared {
+            let combined = self.objects.len();
+            let mut combiner = CreatedObject::new(Model::CombinedInput);
+            combiner.gpio_count =
+                u32::try_from(edges.len()).map_err(|_| "too many GPIO inputs on combiner")?;
+            combiner.endpoints.insert(
+                IrqOutput::Named("OutputLine"),
+                vec![Endpoint {
+                    receiver,
+                    local,
+                    pin,
+                    sequence: edges[0].0,
+                }],
+            );
+            for (input, (_, id, output, index)) in edges.into_iter().enumerate() {
+                let endpoint = &mut self.objects[id].endpoints.get_mut(&output).unwrap()[index];
+                endpoint.receiver = combined;
+                endpoint.local = None;
+                endpoint.pin = input as u32;
+            }
+            self.objects.push(combiner);
+        }
+        Ok(())
+    }
+
     fn check_constructor_cycles(&self) -> Result<(), String> {
         // Each mock constructor has at most one dependency. Walk each chain once.
         let mut state = vec![0; self.objects.len()];
@@ -1026,7 +1076,9 @@ impl CreatedPlatform {
                     receiver,
                     pin,
                     local: destination.local,
+                    sequence: self.next_endpoint,
                 });
+                self.next_endpoint += 1;
             }
         }
         Ok(())
@@ -1072,20 +1124,7 @@ impl CreatedPlatform {
                 let model = Model::parse(object.model)
                     .ok_or_else(|| format!("{source}: TypeNotResolved: {}", object.model))?;
                 let target = self.objects.len();
-                self.objects.push(CreatedObject {
-                    model,
-                    cpu: (model == Model::Cpu).then(Cpu::default),
-                    ranges: Vec::new(),
-                    enum_arguments: EnumArguments::default(),
-                    scalar: None,
-                    empty_peripheral_counter: 1,
-                    empty_peripheral_value: None,
-                    dependency: None,
-                    throw_on_construction: false,
-                    gpio_count: 0,
-                    endpoints: HashMap::new(),
-                    collections: Collections::default(),
-                });
+                self.objects.push(CreatedObject::new(model));
                 let mut seen = HashSet::new();
                 for (key, value) in object.fields {
                     if !seen.insert(key) {
@@ -1178,20 +1217,7 @@ impl CreatedPlatform {
                     return Err(format!("{source}: TypeMismatch: OtherCpu requires a CPU"));
                 }
                 let target = self.objects.len();
-                self.objects.push(CreatedObject {
-                    model,
-                    cpu: Some(Cpu::default()),
-                    ranges: Vec::new(),
-                    enum_arguments: EnumArguments::default(),
-                    scalar: None,
-                    empty_peripheral_counter: 1,
-                    empty_peripheral_value: None,
-                    dependency: None,
-                    throw_on_construction: false,
-                    gpio_count: 0,
-                    endpoints: HashMap::new(),
-                    collections: Collections::default(),
-                });
+                self.objects.push(CreatedObject::new(model));
                 let mut seen = HashSet::new();
                 for (key, value) in object.fields {
                     if !seen.insert(key) {

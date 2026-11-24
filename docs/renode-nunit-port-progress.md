@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,093 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,094 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 302 |
+| 移植待ち | 301 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -470,3 +470,5 @@ IRQ 接続生成の3件を移植した。明示出力と既定出力の接続の
 IRQ の切断と再接続4件を移植した。単一出力、数値範囲、複数回の切断と置換で、影響する出力と最終接続先を照合した。[公式IDとの対応](nunit-evidence/targeted-repl-wire-cancel.tsv)・[実行ログ](nunit-evidence/targeted-repl-wire-cancel.log)
 
 インクルードをまたぐ複数 IRQ のマージ1件を移植した。上流の各接続先番号、受信側の同一性、指定された接続数を照合した。最終の対象実行で136件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-wire-overlay.tsv)・[実行ログ](nunit-evidence/targeted-repl-wire-overlay.log)
+
+同じ受信ピンへ向かう出力を共有 `CombinedInput` に接続する1件を移植した。入力番号、両出力が参照する結合器の同一性、下流のピンと受信側を照合した。[公式IDとの対応](nunit-evidence/targeted-repl-fanin.tsv)・[実行ログ](nunit-evidence/targeted-repl-fanin.log)
