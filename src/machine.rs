@@ -503,6 +503,18 @@ impl Machine {
         ];
         let hart = self.named_hart(name)?;
         let register = register.to_ascii_lowercase();
+        if let Some(vector) = match register.as_str() {
+            "mtvec" => Some(crate::csr::TrapVector::Machine),
+            "stvec" => Some(crate::csr::TrapVector::Supervisor),
+            _ => None,
+        } {
+            if let Some(cpu) = &mut hart.rv64 {
+                return cpu.privilege.monitor_trap_vector(vector, value);
+            }
+            let value = value.map(u32::try_from).transpose()
+                .map_err(|_| "trap vector exceeds RV32 width")?;
+            return hart.monitor_trap_vector(vector, value).map(|value| value.map(u64::from));
+        }
         if value.is_none() && matches!(register.as_str(), "mepc" | "mcause" | "mtval") {
             let result = match &hart.rv64 {
                 Some(cpu) => cpu.monitor_register(&register),

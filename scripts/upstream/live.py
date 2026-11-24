@@ -10,15 +10,16 @@ import subprocess
 import tempfile
 import time
 
+from memory_keywords import MemoryKeywords
 from monitor_input import MonitorInput, PUBLIC_ASSET, at_path, script_asset_urls, words
 from penv_robot import (AssertionFailed, Endpoint, PenvExecutionError, PenvStartupError,
                         PenvUnsupported, Unsupported)
 
 
-class LiveEndpoint(Endpoint):
+class LiveEndpoint(MemoryKeywords, Endpoint):
     proc = None
     pending_state = None
-    keywords = dict(Endpoint.keywords, **{
+    keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
         "Create Log Tester": "create_log_tester",
         "Wait For Log Entry": "wait_for_log",
@@ -43,6 +44,7 @@ class LiveEndpoint(Endpoint):
         self.log_level = None
         self.log_capacity = None
         self.log_timeout = None
+        self.memory_symbols = {}
         self.monitor_input = MonitorInput(self.root, self.out, self.assets)
         self.replaying = False
         self.inline = []
@@ -322,6 +324,10 @@ class LiveEndpoint(Endpoint):
                 raise Unsupported("AssembleBlock requires quoted assembly")
             return self.operation(
                 f"AssembleMonitorBlock {target.removeprefix('sysbus.')} {address} {body.encode().hex()}")
+        if re.fullmatch(cpu + r'(?:MTVEC|STVEC)(?: ' + number + r')?', command):
+            reading = command.endswith((" MTVEC", " STVEC"))
+            value = self.operation(command, assertion=reading)
+            return self.format_number(value) if reading else value
         if re.fullmatch(cpu + r'ExecutionMode(?: (?:SingleStep|Continuous))?', command):
             return self.operation(command, assertion=command.endswith(" ExecutionMode"))
         if re.fullmatch(cpu + r'(?:GetRegister "?[\w]+"?|SetRegister "?[\w]+"? ' + number

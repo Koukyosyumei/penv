@@ -1868,6 +1868,14 @@ fn execute(
                 None,
             ))
         }
+        [target, register @ ("MTVEC" | "STVEC"), value @ ..]
+            if (boot.started || !boot.runtime.is_empty()) && value.len() <= 1 =>
+        {
+            let value = value.first().map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
+            Some(Action::CpuRegister(
+                resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(), value,
+            ))
+        }
         [target, register @ ("MEPC" | "MCAUSE" | "MTVAL")] => {
             Some(Action::CpuRegister(
                 resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(), None,
