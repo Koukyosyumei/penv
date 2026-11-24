@@ -218,3 +218,34 @@ Cortex-M TrustZone の6件は起動時に `enableTrustZone` プロパティー�
 REPL の CLIC 上書き2件、アセンブリーの再配置4件が残る。
 ケースIDとパラメーターを照合した差分は
 `target/clic-supervisor/grouped-verdict-delta.json` に保存した。
+
+## CLIC の残り8件と共通 Robot 操作
+
+`7e9b7d8` は RISC-V の `AssembleBlock` で LLVM が再配置を出す命令を
+ELF オブジェクトとして組み立て、`ld.lld` で指定アドレスに解決する。
+元の `j .` とローカルラベルを扱い、未解決の外部シンボルはエラーにする。
+CSR テストでは `MSTATUS` を読み、無効な `mcause.MPP` の書き込みで
+以前の MPP を保持する規則も検証した。
+
+REPL の既存エントリーへのプロパティー上書きは、対象名とプロパティー名で
+マージした後、通常のモデル検証に渡す。CLIC では上流が指定する
+`machineLevelBits` を使って割り込みのレベルと優先度を分ける。
+
+実際の TrivialUart 出力を既存テスターに渡す。テキストの不在判定は
+指定された仮想時間内に該当行が現れた場合に失敗する。
+`LoggingUartAnalyzer` は接続した UART の行を Info ログに記録する。
+CLIC の `OnGPIO` と間接 CSR を元のレジスターバンクに接続した。
+
+対象の元の8件はすべて PASS。HEX とメモリアサーションはケースIDごとに
+前回と同じ9 PASS、52 UNSUPPORTED。UART の Rust テスト18件と
+対象のプラットフォームテスト2件も合格した。
+`target/robot-clic-remaining/results.json` と `case-audit.json` に証跡がある。
+
+まとめた全件実行は `--all --jobs 10` で304スイート、2,197件を完了した。
+`target/robot-clic-final-sweep/results.json` の確定値は200 PASS、14 FAIL、
+1,708 UNSUPPORTED、133 SKIP、142 NOT_RUN。前回と比較して、
+今回の CLIC 8件だけが UNSUPPORTED から PASS に移った。
+署名スイート144件と合わせ、CLIC の152件が PASS。
+`target/robot-clic-final-sweep/clic-audit.json` に CLIC の全測定、
+`verdict-delta.json` に全ケースの判定差分がある。
+再配置を含むアセンブリーには `llvm-mc` と `ld.lld` が必要。
