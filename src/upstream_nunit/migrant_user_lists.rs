@@ -10,12 +10,21 @@ const NESTED: &str = "List<List<int>>";
 const OBJECTS: &str = "List<object>";
 const BOXES: &str = "List<Box>";
 
+const INTERFACES: &str = "List<IInterface>";
+const INTERFACE_CONTAINER: &str = "ClassWithTheListOfInterfaces";
+const IMPLEMENTATIONS: [&str; 2] = ["ImplementingInterfaceOne", "ImplementingInterfaceTwo"];
+
 const CODECS: &[Codec] = &[
     generated_record!(INTS; items: reference, size: integer, version: integer),
     generated_record!(NESTED; items: reference, size: integer, version: integer),
     generated_record!(OBJECTS; items: reference, size: integer, version: integer),
     generated_record!(BOXES; items: reference, size: integer, version: integer),
     generated_record!("Box"; element: reference),
+    generated_record!("System.Int32"; value: integer),
+    generated_record!(INTERFACES; items: reference, size: integer, version: integer),
+    generated_record!(INTERFACE_CONTAINER; list: reference),
+    generated_record!(IMPLEMENTATIONS[0];),
+    generated_record!(IMPLEMENTATIONS[1];),
 ];
 
 const STAMPS: &[TypeStamp<'static>] = &[
@@ -23,6 +32,31 @@ const STAMPS: &[TypeStamp<'static>] = &[
     user_list::type_stamp(NESTED),
     user_list::type_stamp(OBJECTS),
     user_list::type_stamp(BOXES),
+    user_list::type_stamp(INTERFACES),
+    TypeStamp {
+        class: "System.Int32",
+        module: "mscorlib",
+        revision: 0,
+        fields: &[("m_value", FieldKind::Integer)],
+    },
+    TypeStamp {
+        class: INTERFACE_CONTAINER,
+        module: "Tests",
+        revision: 0,
+        fields: &[("List", FieldKind::Reference)],
+    },
+    TypeStamp {
+        class: IMPLEMENTATIONS[0],
+        module: "Tests",
+        revision: 0,
+        fields: &[],
+    },
+    TypeStamp {
+        class: IMPLEMENTATIONS[1],
+        module: "Tests",
+        revision: 0,
+        fields: &[],
+    },
     TypeStamp {
         class: "Box",
         module: "Tests",
@@ -135,6 +169,47 @@ fn list_identity(options: Options) {
     assert_eq!(element(0), element(1));
 }
 
+fn record(class: &str, fields: Vec<Value>) -> Object {
+    Object::Record {
+        class: class.into(),
+        fields,
+    }
+}
+
+fn boxed_identity(options: Options) {
+    let mut graph = Graph::default();
+    let primitive = graph.insert(record("System.Int32", vec![Value::Integer(1234)]));
+    let boxes = std::array::from_fn::<_, 2, _>(|_| {
+        Value::Ref(graph.insert(record("Box", vec![Value::Ref(primitive)])))
+    });
+    let root = store(&mut graph, BOXES, boxes);
+    let (restored, copy) = options.restore(&graph, root);
+    let items = UserList::restore(&restored, copy, BOXES).unwrap();
+    let element = |index: usize| {
+        let Some(Object::Record { fields, .. }) = restored.get(reference(&items[index])) else {
+            panic!("expected box");
+        };
+        reference(&fields[0])
+    };
+    assert_eq!(element(0), element(1));
+}
+
+fn interface_list(options: Options) {
+    let mut graph = Graph::default();
+    let items: Vec<_> = (0..100)
+        .map(|i| Value::Ref(graph.insert(record(IMPLEMENTATIONS[i % 2], vec![]))))
+        .collect();
+    let list = store(&mut graph, INTERFACES, items);
+    let root = graph.insert(record(INTERFACE_CONTAINER, vec![Value::Ref(list)]));
+    let (restored, copy) = options.restore(&graph, root);
+    let Some(Object::Record { class, fields }) = restored.get(copy) else {
+        panic!("expected restored interface list owner");
+    };
+    assert_eq!(class, INTERFACE_CONTAINER);
+    let items = UserList::restore(&restored, reference(&fields[0]), INTERFACES).unwrap();
+    assert_eq!(items.len(), 100);
+}
+
 macro_rules! configurations {
     ($module:ident, $case:expr) => {
         mod $module {
@@ -212,3 +287,5 @@ configurations!(empty, |m| primitive_list(m, 0..0));
 configurations!(nested, nested_lists);
 configurations!(with_null, list_with_null);
 configurations!(identity, list_identity);
+configurations!(boxed_identity, boxed_identity);
+configurations!(interface_list, interface_list);
