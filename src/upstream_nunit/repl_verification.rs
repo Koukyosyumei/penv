@@ -1197,3 +1197,47 @@ cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ emptyIterestingType
         "CastException",
     );
 }
+
+#[test]
+fn should_catch_exception_on_registration() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ {
+    sysbus <0x100, +0x100>;
+    sysbus <0x150, +0x100>
+}"#,
+        "RegistrationException",
+    );
+}
+
+#[test]
+fn should_handle_name_conflict() {
+    assert_error(
+        r#"
+p1: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0x100, +0x50>
+p2: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0x200, +0x50> as "p1"
+"#,
+        "NameSettingException",
+    );
+}
+
+#[test]
+fn should_reject_previous_incompatible_registration_point() {
+    assert_error(
+        r#"
+mock: @ sysbus <0, 1>
+mock: Antmicro.Renode.UnitTests.Mocks.MockCPU"#,
+        "NoCtorForRegistrationPoint",
+    );
+}
+
+#[test]
+fn should_accept_previous_registration_point() {
+    creation::create_objects(
+        r#"
+mock: @ sysbus
+mock: Antmicro.Renode.UnitTests.Mocks.MockCPU"#,
+        Path::new("."),
+    )
+    .unwrap();
+}

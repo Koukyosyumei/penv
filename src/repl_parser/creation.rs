@@ -489,6 +489,11 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                     parents.push(None);
                     match point {
                         Some(RegistrationValue::Range { base, size }) => {
+                            if platform.objects[id].model == Model::Cpu {
+                                return Err(entry.error(
+                                    "NoCtorForRegistrationPoint: CPU does not accept a bus range",
+                                ));
+                            }
                             platform.objects[id].ranges.push((base, size));
                         }
                         Some(RegistrationValue::Other(value)) if number(value).is_ok() => {}
@@ -568,6 +573,28 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             .finish_constructor()
             .map_err(|error| entry.error(&error))?;
     }
+    let mut ranges = Vec::new();
+    for &id in pending.keys() {
+        ranges.extend(
+            platform.objects[id]
+                .ranges
+                .iter()
+                .map(|&(base, size)| (base, size)),
+        );
+    }
+    ranges.sort_unstable();
+    let mut end = 0;
+    for (base, size) in ranges {
+        if size == 0 {
+            continue;
+        }
+        if base < end {
+            return Err("RegistrationException: overlapping sysbus ranges".into());
+        }
+        end = base
+            .checked_add(size)
+            .ok_or("RegistrationException: registration range overflow")?;
+    }
     while !pending.is_empty() {
         let ready: Vec<_> = pending
             .iter()
@@ -606,7 +633,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                         .insert(path, id)
                         .is_some_and(|previous| previous != id)
                     {
-                        return Err("RegistrationException: duplicate registration".into());
+                        return Err("NameSettingException: duplicate registration name".into());
                     }
                 }
             }
