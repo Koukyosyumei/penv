@@ -777,36 +777,31 @@ fn run_commands<'a>(
                 .map(|()| None),
             Action::InvokeMonitorMacro(name, root) => (|| {
                 let body = session.macros.get(name).ok_or("unknown macro")?;
-                let mut boot = live_command_boot(&body.script, session);
-                let mut existing_machine = true;
-                expand_macro(body, &session.variables, &mut existing_machine, &mut boot, root)?;
+                let mut state = deferred_script_state(&body.script, session);
+                let canonical = if body.script.is_absolute() {
+                    body.script.clone()
+                } else {
+                    std::env::current_dir().map_err(|error| error.to_string())?.join(&body.script)
+                };
+                for (index, text) in &body.commands {
+                    load_text_at(&body.script, canonical.clone(), root, &mut state, text, *index)?;
+                }
+                validate_deferred_commands(&state.boot, depth, true)?;
                 let start = machine.elapsed_steps();
-                validate_deferred_commands(&boot, depth, false)?;
+                let boot = apply_deferred_state(session, state);
                 let (stop, count) = run_deferred_commands(machine, boot, budget, &mut output, session, depth)?;
                 retired += count;
                 budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
                 Ok((stop != Stop::ScriptComplete).then_some(stop))
             })(),
             Action::InvokeMonitorScript(text, canonical, root) => (|| {
-                let mut state = ScriptState {
-                    boot: live_command_boot(&command.source, session),
-                    machine: true,
-                    variables: session.variables.clone(),
-                    macros: session.macros.clone(),
-                    aliases: session.aliases.clone(),
-                    ..ScriptState::default()
-                };
+                let mut state = deferred_script_state(&command.source, session);
                 load_text(&command.source, canonical.clone(), root, &mut state, text)?;
                 let start = machine.elapsed_steps();
                 let allow_snapshots = matches!(command_words(text)?.first(), Some(&("include" | "i" | "ExecuteScript")));
                 validate_deferred_commands(&state.boot, depth, allow_snapshots)?;
-                session.machine_cleared = state.boot.session.machine_cleared;
-                session.variables = state.variables;
-                session.macros = state.macros;
-                session.aliases = state.aliases;
-                let (stop, count) = run_deferred_commands(
-                    machine, state.boot, budget, &mut output, session, depth,
-                )?;
+                let boot = apply_deferred_state(session, state);
+                let (stop, count) = run_deferred_commands(machine, boot, budget, &mut output, session, depth)?;
                 retired += count;
                 budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
                 Ok((stop != Stop::ScriptComplete).then_some(stop))
@@ -1424,6 +1419,25 @@ fn live_command_boot(path: &Path, session: &Session) -> Boot {
     boot
 }
 
+fn deferred_script_state(path: &Path, session: &Session) -> ScriptState {
+    ScriptState {
+        boot: live_command_boot(path, session),
+        machine: true,
+        variables: session.variables.clone(),
+        macros: session.macros.clone(),
+        aliases: session.aliases.clone(),
+        ..ScriptState::default()
+    }
+}
+
+fn apply_deferred_state(session: &mut Session, state: ScriptState) -> Boot {
+    session.machine_cleared = state.boot.session.machine_cleared;
+    session.variables = state.variables;
+    session.macros = state.macros;
+    session.aliases = state.aliases;
+    state.boot
+}
+
 fn validate_deferred_commands(boot: &Boot, depth: usize, allow_snapshots: bool) -> Result<(), String> {
     if depth >= 32 {
         return Err("recursive or excessively deep deferred monitor script".into());
@@ -1516,8 +1530,17 @@ pub fn serve(
                 });
                 return Ok(());
             }
+            if let ["runMacro", name] = words.as_slice()
+                && let Some(name) = name.strip_prefix('$')
+            {
+                boot.runtime.push(RuntimeCommand {
+                    line: 1, source: path.to_owned(),
+                    action: Action::InvokeMonitorMacro(name.to_owned(), root.to_owned()),
+                });
+                return Ok(());
+            }
             if words.first().is_some_and(|verb|
-                matches!(*verb, "alias" | "macro" | "runMacro" | "printenv")
+                matches!(*verb, "alias" | "macro" | "printenv")
                     || matches!(words.as_slice(), ["mach" | "machine", "set" | "clear", ..])
                     || monitor_alias(&session.aliases, session.selected_machine(), verb).is_some())
             {
@@ -2491,6 +2514,10 @@ fn has_snapshot_boundary(boot: &Boot) -> bool {
 }
 
 fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptState, content: &str) -> Result<(), String> {
+    load_text_at(path, canonical, root, state, content, 0)
+}
+
+fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptState, content: &str, offset: usize) -> Result<(), String> {
     if state.visiting.len() >= 64 || !state.visiting.insert(canonical.clone()) {
         return Err(format!(
             "{}: recursive or excessively deep script include",
@@ -2502,7 +2529,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
         "global.ORIGIN".into(),
         format!("@{}", origin.display()),
     );
-    let mut cursor = content.lines().enumerate();
+    let mut cursor = content.lines().enumerate().map(|(line, text)| (offset.saturating_add(line), text));
     while let Some((line, raw)) = cursor.next() {
         let mut text = std::borrow::Cow::Borrowed(raw.trim());
         let error = |message: &str| format!("{}:{}: {message}", path.display(), line + 1);
