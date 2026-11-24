@@ -148,6 +148,7 @@ struct CreatedObject {
     empty_peripheral_counter: u32,
     empty_peripheral_value: Option<String>,
     dependency: Option<usize>,
+    throw_on_construction: bool,
     collections: Collections,
 }
 
@@ -404,6 +405,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             empty_peripheral_counter: 1,
             empty_peripheral_value: None,
             dependency: None,
+            throw_on_construction: false,
             collections: Collections::default(),
         });
         targets.push(Some(id));
@@ -645,6 +647,9 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
 
 impl CreatedObject {
     fn finish_constructor(&mut self) -> Result<(), String> {
+        if self.throw_on_construction {
+            return Err("ConstructionException: Fake exception".into());
+        }
         if let Some(value) = &self.empty_peripheral_value {
             if value.parse::<i32>().is_ok() {
                 // An integer fits both the int overload with optional enabled and the double overload.
@@ -701,6 +706,12 @@ impl CreatedPlatform {
             return Err(format!("{source}: inline object nesting limit exceeded"));
         }
         if self.objects[id].model == Model::DependentPeripheral {
+            if name == "throwException" {
+                self.objects[id].throw_on_construction = boolean_value(value).ok_or_else(|| {
+                    format!("{source}: TypeMismatch: expected boolean constructor argument")
+                })?;
+                return Ok(());
+            }
             if name != "other" {
                 return Err(format!(
                     "{source}: NoCtor: unknown constructor argument {name}"
@@ -726,6 +737,7 @@ impl CreatedPlatform {
                     empty_peripheral_counter: 1,
                     empty_peripheral_value: None,
                     dependency: None,
+                    throw_on_construction: false,
                     collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();
@@ -771,6 +783,14 @@ impl CreatedPlatform {
             return self.objects[id].enum_arguments.bind(name, value, source);
         }
         if self.objects[id].model == Model::EmptyPeripheral {
+            if name == "ThrowingProperty" {
+                value
+                    .parse::<i32>()
+                    .map_err(|_| format!("{source}: TypeMismatch: expected integer property"))?;
+                return Err(format!(
+                    "{source}: PropertySettingException: Fake exception"
+                ));
+            }
             if value.starts_with("new ") {
                 let (object, _) =
                     object_prefix(value).map_err(|error| format!("{source}: {error}"))?;
@@ -821,6 +841,7 @@ impl CreatedPlatform {
                     empty_peripheral_counter: 1,
                     empty_peripheral_value: None,
                     dependency: None,
+                    throw_on_construction: false,
                     collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();

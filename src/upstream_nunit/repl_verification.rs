@@ -1241,3 +1241,34 @@ mock: Antmicro.Renode.UnitTests.Mocks.MockCPU"#,
     )
     .unwrap();
 }
+
+#[test]
+fn should_catch_exception_on_entry_construction() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    throwException: true"#,
+        "ConstructionException",
+    );
+}
+
+#[test]
+fn should_catch_exception_on_object_value_construction() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+        throwException: true"#,
+        "ConstructionException",
+    );
+}
+
+#[test]
+fn should_catch_exception_on_property_setting() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    ThrowingProperty: 1"#,
+        "PropertySettingException",
+    );
+}

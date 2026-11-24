@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,057 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,060 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 338 |
+| 移植待ち | 335 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -452,3 +452,5 @@ CPU参照を要素、キー、値に含むコレクション4件を移植した�
 登録診断4件を移植した。整数による登録点コンストラクタの競合、浮動小数点による登録インターフェースの競合、両方の型を実装する登録点、および周辺機器ではない登録先を区別した。最終の対象実行で96件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-registration-types.tsv)・[実行ログ](nunit-evidence/targeted-repl-registration-types.log)
 
 登録処理の4件を移植した。先行宣言の登録点について型の互換性を確認し、範囲の重複と登録名の衝突を別の診断として検証した。[公式IDとの対応](nunit-evidence/targeted-repl-registration-errors.tsv)・[実行ログ](nunit-evidence/targeted-repl-registration-errors.log)
+
+通常の宣言とインライン生成でのコンストラクタ例外、およびプロパティ設定例外の3件を移植した。登録処理を含む最終の対象実行で103件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-lifecycle-errors.tsv)・[実行ログ](nunit-evidence/targeted-repl-lifecycle-errors.log)
