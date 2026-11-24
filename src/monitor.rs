@@ -489,7 +489,7 @@ enum Action {
     SetQuantum(u64),
     LogLevel(i8),
     ScriptLog(i8, String),
-    LastLog(usize),
+    LastLog(i32),
     UserState(Option<String>),
     Echo(String),
     Illuminance(String, f64),
@@ -1467,7 +1467,7 @@ fn run_deferred_commands(
     run_commands(machine, &boot.runtime, budget, &mut *output.output, session, replies, depth + 1)
 }
 
-fn write_last_log(count: usize, output: &mut impl Write) -> Result<(), String> {
+fn write_last_log(count: i32, output: &mut impl Write) -> Result<(), String> {
     for entry in crate::monitor_log::tail(count) {
         writeln!(output, "{entry}").map_err(|error| error.to_string())?;
     }
@@ -2415,7 +2415,8 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
     }
     state.boot.monitor_output.clear();
     if let Err(error) = load_text(&source, source.clone(), root, &mut state, &command) {
-        return Ok(StartupInput::Reply("ERROR", error));
+        let status = if error.ends_with(LAST_LOG_PARAMETERS) { "REJECTED" } else { "ERROR" };
+        return Ok(StartupInput::Reply(status, error));
     }
     let mut output = Vec::new();
     run_console_script(&state.boot, &mut output)?;
@@ -2930,11 +2931,12 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
 }
 
 const LOG_LEVEL_PARAMETERS: &str = "Bad parameters for command logLevel";
+const LAST_LOG_PARAMETERS: &str = "Bad parameters for command lastLog";
 const LOG_PARAMETERS: &str = "Bad parameters for command log";
 const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expected @snapshot-path or quoted path";
 
 fn invalid_command_parameters(error: &str) -> bool {
-    matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | SNAPSHOT_PARAMETERS)
+    matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | LAST_LOG_PARAMETERS | SNAPSHOT_PARAMETERS)
 }
 
 fn inspect_snapshot_destination(path: &Path) -> Option<String> {
@@ -3512,10 +3514,20 @@ fn execute(
         }
         ["log", ..] => return Err(LOG_PARAMETERS.into()),
         ["lastLog", count @ ..] if count.len() <= 1 => {
-            let count = count.first().map(|count| resolve(count)?.parse::<i32>()
-                .map_err(|_| "invalid log entry count".to_string())).transpose()?
-                .map_or(crate::monitor_log::DEFAULT_TAIL, |count| count.max(0) as usize);
-            if count > crate::monitor_log::HISTORY_LIMIT {
+            let count = match count {
+                [] => crate::monitor_log::DEFAULT_TAIL,
+                [count] => {
+                    let token = resolve(count)?;
+                    let value = if let Some(hex) = token.strip_prefix("0x") {
+                        u64::from_str_radix(hex, 16).map(|value| value as i64)
+                    } else {
+                        token.parse::<i64>()
+                    }.map_err(|_| LAST_LOG_PARAMETERS)?;
+                    value as i32
+                }
+                _ => unreachable!(),
+            };
+            if count > crate::monitor_log::HISTORY_LIMIT as i32 {
                 return Err(format!("The number of entries cannot be larger than {}", crate::monitor_log::HISTORY_LIMIT));
             }
             Some(Action::LastLog(count))
@@ -5293,6 +5305,10 @@ greet "hello world"
         };
         assert_eq!(inspect("$var=1234\n$var?=5678\n", "echo $var"), ("OK", "1234".into()));
         assert_eq!(inspect("mach create\nstart\n", "echo $var").0, "DEFER");
+        let (status, output) = inspect("log \"marker\"\n", "lastLog 0x1");
+        assert_eq!(status, "OK");
+        assert!(output.contains("[INFO] Script: marker"));
+        assert_eq!(inspect("", r#"lastLog "1""#).0, "REJECTED");
         assert_eq!(inspect("", "set var 1234").0, "DEFER");
         let machine = "mach create \"bench board\"\n";
         assert_eq!(inspect("", "emulation IsStarted"), ("OK", "False\n".into()));

@@ -42,7 +42,7 @@ impl LogPattern {
 }
 
 pub(crate) const HISTORY_LIMIT: usize = 1000;
-pub(crate) const DEFAULT_TAIL: usize = 20;
+pub(crate) const DEFAULT_TAIL: i32 = 20;
 
 #[derive(Default)]
 struct History {
@@ -54,10 +54,11 @@ pub(crate) fn enable_history() {
     HISTORY.with_borrow_mut(|history| *history = Some(History::default()));
 }
 
-pub(crate) fn tail(count: usize) -> Vec<String> {
+pub(crate) fn tail(count: i32) -> Vec<String> {
     HISTORY.with_borrow(|history| {
         history.as_ref().map_or_else(Vec::new, |history| {
-            history.entries.iter().skip(history.entries.len().saturating_sub(count))
+            let skip = (history.entries.len() as i32).wrapping_sub(count).max(0) as usize;
+            history.entries.iter().skip(skip)
                 .cloned().collect()
         })
     })
@@ -347,11 +348,13 @@ mod tests {
             record(1, &format!("Script: unique {index:04}"));
         }
         record(0, "filtered");
-        let entries = tail(HISTORY_LIMIT);
+        let entries = tail(HISTORY_LIMIT as i32);
         assert_eq!(entries.len(), HISTORY_LIMIT);
         assert!(entries[0].ends_with("Script: unique 0001"));
         assert!(entries.last().unwrap().ends_with("Script: unique 1000"));
         assert_eq!(tail(1), entries[HISTORY_LIMIT - 1..]);
+        assert!(tail(-1).is_empty());
+        assert_eq!(tail(i32::MIN), entries);
     }
 
     #[test]
