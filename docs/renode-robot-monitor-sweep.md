@@ -309,3 +309,65 @@ nRF52840 の集計ではタイムアウト中のリモート呼び出しに完�
 集計エラーを修正した `56acad4` は、未完了の時間切れと測定済みの合格を
 分ける小テストで検証した。上記の全件結果は修正前の生データである。
 UART の Rust テスト18件と H7 タイマーの Rust テスト3件も合格した。
+
+## 起動バイナリーと既存のセンサーモデル
+
+`c7df138` で、Robot から複数の `sysbus LoadBinary` を既存の
+RESC バイナリーローダーへ渡せるようにした。LiteX の PHY
+`VendorSpecific1` と LED 状態読出しを既存モデルに接続した。
+nRF52840 の ADXL372 は SPI/I2C コントローラーとセンサーの名前で解決し、
+軸の値を g からモデルが使う 0.1 g 刻みに変換する。
+`9f3dfaf` は raw バイナリー起動で指定された PC を READY 前に適用する。
+
+Arty LiteX の `Should Read Ethernet PHY Status` は
+10 Mbps リンクダウンと100 Mbps リンクアップを元の UART アサーションで
+確認した。結果は `target/common-phy/results.json`。
+nRF52840 の SPI/I2C 代表ケースでは既存 ADXL372 の更新を受理した。
+起動時 UART 出力待ちがホスト時間上限に達したため、
+ここではセンサー測定アサーションを合格として数えていない。
+
+`4a7672d` は固定上流のテキスト UART テスターに合わせて、照合前に ANSI の
+色・装飾設定を除去する。バイナリーテスターと生の UART 出力はそのまま扱う。
+CrossLink の `Should Run LiteX BIOS` は BIOS CRC と CPU 表示、コンソールの
+`help`、LED の False から True への変化を元のアサーションで確認した。
+結果は `target/common-crosslink-final/results.json`。Rust の UART テストは19件合格。
+
+全件再実行は `--all --jobs 10` で、最終ペイロードは `4a7672d`。
+NUnit は実行しない。
+
+固定上流 `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` の304スイート、
+2,197件を完了した。penv バイナリーの SHA-256 は
+`b08b988112420ad797eb68d5ae8b45cc883edd879ac3a70cadcbc718d1c41726`。
+
+| 判定 | 前回 | 今回 |
+| --- | ---: | ---: |
+| PASS | 213 | 220 |
+| FAIL | 20 | 24 |
+| UNSUPPORTED | 1,677 | 1,677 |
+| SKIP | 133 | 133 |
+| NOT_RUN | 154 | 143 |
+
+合格の差分は Arty の PHY、CrossLink の BIOS、LiteX SMP の OpenSBI と
+Linux の計4件、および `56acad4` により全件報告に反映された nRF52840 の
+WFE、カーネル割り込み、CMSIS DSP の計3件。nRF52840 本体のスイートは
+UART シェルを含む4 PASS、2 FAIL、6 UNSUPPORTED、1 SKIP、4 NOT_RUN。
+別スイートの GPIO PullUp は UNSUPPORTED。Alarm、SPI、I2C、
+タスクウォッチドッグはそれぞれ Robot の時間上限に達した。
+I2C チップ ID とバス走査の2件は `0xe000ef34` への未マップアクセスで停止した。
+
+全件実行の再現コマンドは以下。
+
+```sh
+target/renode-venv/bin/python scripts/upstream/run.py --all --jobs 10 --out target/robot-common-sweep
+```
+
+結果とケースIDごとの証跡は `target/robot-common-sweep/results.json`、
+`board-audit.json`、`verdict-delta.json`、進捗は `progress.jsonl` にある。
+上流 Renode 本体での実行はこの集計の対象外。
+
+全件計測後に `c85951e` で、ADXL372 として解決できない
+LSM330、LIS2DS12、LSM303 への加速度設定を UNSUPPORTED に分類した。
+対象3スイートの再実行で3件が FAIL から UNSUPPORTED に変わったことを
+確認した。ケースごとの差分は
+`target/common-adxl-classification/classification-delta.json` にある。
+表の値は全件計測時の固定バイナリーの結果を示す。
