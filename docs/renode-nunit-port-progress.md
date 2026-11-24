@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,943 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,985 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 1,453 |
+| 移植待ち | 1,411 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -348,3 +348,9 @@ nullable 整数、ボックス化された整数の参照共有、文字列タ�
 GUID と BigInteger の型別フィールド処理を追加した。カスタムシリアライズのデータと参照共有、ストリーム位置のずれ、入れ子のジェネリック型、インターフェース型リストも検証し、54件が対象実行で合格した。可変長データや配列は既存の Rust ストリーム表現を再利用する。
 
 - [公式 ID](nunit-evidence/targeted-migrant-serialization-payloads.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-payloads.log)
+
+## Migrant SerializationTests の復元時初期化
+
+一時クラス・フィールドの除外、コンストラクターでの復元、後処理フック、GitHub Issue 60 の Decimal を生成読み書き3組み合わせと型スタンプ有無で検証した。追加42件が合格した。
+
+- [公式 ID](nunit-evidence/targeted-migrant-serialization-initialization.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-initialization.log)

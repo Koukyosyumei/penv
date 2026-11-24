@@ -15,6 +15,7 @@ pub trait RecordOutput {
     fn nullable_integer(&mut self, value: &Value) -> io::Result<()>;
     fn integer(&mut self, value: &Value) -> io::Result<()>;
     fn float(&mut self, value: &Value) -> io::Result<()>;
+    fn decimal(&mut self, value: &Value) -> io::Result<()>;
     fn guid(&mut self, value: &Value) -> io::Result<()>;
     fn big_integer(&mut self, value: &Value) -> io::Result<()>;
     fn reference(&mut self, value: &Value) -> io::Result<()>;
@@ -26,6 +27,7 @@ pub trait RecordInput {
     fn nullable_integer(&mut self) -> io::Result<Value>;
     fn integer(&mut self) -> io::Result<Value>;
     fn float(&mut self) -> io::Result<Value>;
+    fn decimal(&mut self) -> io::Result<Value>;
     fn guid(&mut self) -> io::Result<Value>;
     fn big_integer(&mut self) -> io::Result<Value>;
     fn reference(&mut self) -> io::Result<Value>;

@@ -391,6 +391,13 @@ const GRAPH_CODECS: &[Codec] = &[
     generated_record!("List<IInterface>"; items: reference),
     generated_record!("ImplementingInterfaceOne"; ),
     generated_record!("ImplementingInterfaceTwo"; ),
+    generated_record!("ClassWithTransientField"; a: integer, c: integer),
+    generated_record!("StructWithConstructorAttribute"; ),
+    generated_record!("StructWithConstructorAttributeOnNestedStruct"; ),
+    generated_record!("WithConstructorAttribute"; ),
+    generated_record!("GenericClassWithLatePostDeserializationHook"; ),
+    generated_record!("Issue60InnerClass"; first: decimal, second: decimal),
+    generated_record!("Issue60OuterClass"; value: decimal, inner: reference),
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -415,12 +422,22 @@ impl GraphMethods {
         graph: &Graph,
         root: ObjectId,
     ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
+        self.clone_with_hooks(graph, root, None, &[])
+    }
+
+    fn clone_with_hooks(
+        self,
+        graph: &Graph,
+        root: ObjectId,
+        transients: Option<&'static Transients<'static>>,
+        hooks: &'static [LateRecordHook<'static>],
+    ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
         clone_using_methods(
             graph,
             root,
             self.stamped,
-            None,
-            &[],
+            transients,
+            hooks,
             self.write.then_some(GRAPH_CODECS),
             self.read.then_some(GRAPH_CODECS),
         )
@@ -2074,22 +2091,26 @@ const TRANSIENTS: Transients<'static> = Transients {
     )],
 };
 
-fn omit_transient_class(stamped: bool) {
+fn omit_transient_class(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let omitted = graph.insert(record("TransientClass", vec![Value::Null]));
     let root = graph.insert(record("Box", vec![Value::Ref(omitted)]));
-    let (reader, copy) = deep_clone_transient(&graph, root, stamped, Some(&TRANSIENTS));
+    let (reader, copy) = methods
+        .into()
+        .clone_with_hooks(&graph, root, Some(&TRANSIENTS), &[]);
     // The C# assertion is successful completion; inspect the omitted value as well.
     assert_eq!(fields(reader.graph().get(copy).unwrap()), [Value::Null]);
 }
 
-fn omit_transient_field(stamped: bool) {
+fn omit_transient_field(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let root = graph.insert(record(
         "ClassWithTransientField",
         [147, 256, 850].map(Value::Integer).to_vec(),
     ));
-    let (reader, copy) = deep_clone_transient(&graph, root, stamped, Some(&TRANSIENTS));
+    let (reader, copy) = methods
+        .into()
+        .clone_with_hooks(&graph, root, Some(&TRANSIENTS), &[]);
     let actual = fields(reader.graph().get(copy).unwrap());
     assert_eq!(
         actual,
@@ -2210,7 +2231,7 @@ fn decimal_value(value: u32) -> Value {
     })
 }
 
-fn issue_60(stamped: bool) {
+fn issue_60(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let inner = graph.insert(record(
         "Issue60InnerClass",
@@ -2220,7 +2241,7 @@ fn issue_60(stamped: bool) {
         "Issue60OuterClass",
         vec![decimal_value(0), Value::Ref(inner)],
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let restored = fields(graph.get(copy).unwrap());
     assert_eq!(restored[0], decimal_value(0));
@@ -2479,23 +2500,29 @@ const CONSTRUCTOR_FIELDS: Transients<'static> = Transients {
     ],
 };
 
-fn constructor_for_event_field(stamped: bool, class: &str) {
+fn constructor_for_event_field(methods: impl Into<GraphMethods>, class: &str) {
     let mut graph = Graph::default();
     let root = graph.insert(record(class, vec![Value::Null]));
-    let (reader, copy) = deep_clone_transient(&graph, root, stamped, Some(&CONSTRUCTOR_FIELDS));
+    let (reader, copy) =
+        methods
+            .into()
+            .clone_with_hooks(&graph, root, Some(&CONSTRUCTOR_FIELDS), &[]);
     assert!(matches!(
         fields(reader.graph().get(copy).unwrap())[0],
         Value::NativeResource(NativeResource::ManualResetEvent { .. })
     ));
 }
 
-fn constructor_for_nested_field(stamped: bool) {
+fn constructor_for_nested_field(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let root = graph.insert(record(
         "StructWithConstructorAttributeOnNestedStruct",
         vec![Value::Integer(0)],
     ));
-    let (reader, copy) = deep_clone_transient(&graph, root, stamped, Some(&CONSTRUCTOR_FIELDS));
+    let (reader, copy) =
+        methods
+            .into()
+            .clone_with_hooks(&graph, root, Some(&CONSTRUCTOR_FIELDS), &[]);
     assert_eq!(
         fields(reader.graph().get(copy).unwrap())[0],
         Value::Integer(5)
@@ -2518,7 +2545,7 @@ stamp_modes!(
     constructor_for_nested_field
 );
 
-fn generic_late_hook(stamped: bool) {
+fn generic_late_hook(methods: impl Into<GraphMethods>) {
     const CLASS: &str = "GenericClassWithLatePostDeserializationHook";
     const TRANSIENTS: Transients<'static> = Transients {
         classes: &[],
@@ -2535,7 +2562,9 @@ fn generic_late_hook(stamped: bool) {
     }];
     let mut graph = Graph::default();
     let root = graph.insert(record(CLASS, vec![Value::Integer(150)]));
-    let (reader, copy) = deep_clone_with_hooks(&graph, root, stamped, Some(&TRANSIENTS), HOOKS);
+    let (reader, copy) = methods
+        .into()
+        .clone_with_hooks(&graph, root, Some(&TRANSIENTS), HOOKS);
     assert_eq!(
         fields(reader.graph().get(copy).unwrap())[0],
         Value::Integer(147)
@@ -2848,4 +2877,21 @@ mod serial_generated_payloads {
     configurations!(stream_shift, detect_stream_shift);
     configurations!(nested_generic_array, nested_generic_array);
     configurations!(interface_list, list_of_interfaces);
+}
+
+mod serial_generated_initialization {
+    use super::*;
+    configurations!(transient_class, omit_transient_class);
+    configurations!(transient_field, omit_transient_field);
+    configurations!(constructor_field, |m| constructor_for_event_field(
+        m,
+        "WithConstructorAttribute"
+    ));
+    configurations!(constructor_struct, |m| constructor_for_event_field(
+        m,
+        "StructWithConstructorAttribute"
+    ));
+    configurations!(constructor_nested, constructor_for_nested_field);
+    configurations!(late_hook, generic_late_hook);
+    configurations!(issue_60, issue_60);
 }

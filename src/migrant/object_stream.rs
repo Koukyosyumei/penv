@@ -1248,6 +1248,14 @@ impl RecordOutput for ValidateGeneratedFields {
         }
     }
 
+    fn decimal(&mut self, value: &Value) -> io::Result<()> {
+        if matches!(value, Value::Decimal(_)) {
+            Ok(())
+        } else {
+            Err(invalid("expected generated decimal field"))
+        }
+    }
+
     fn guid(&mut self, value: &Value) -> io::Result<()> {
         if matches!(value, Value::Guid(_)) {
             Ok(())
@@ -1312,6 +1320,14 @@ impl<W: Write> RecordOutput for GeneratedOutput<'_, W> {
         };
         self.data.bytes(&[2])?;
         self.data.bytes(&value.to_le_bytes())
+    }
+
+    fn decimal(&mut self, value: &Value) -> io::Result<()> {
+        let Value::Decimal(value) = value else {
+            return Err(invalid("expected generated decimal field"));
+        };
+        self.data.bytes(&[6])?;
+        self.data.decimal(*value)
     }
 
     fn guid(&mut self, value: &Value) -> io::Result<()> {
@@ -1394,6 +1410,13 @@ impl<R: Read> RecordInput for GeneratedInput<'_, R> {
         let mut bytes = [0; 8];
         self.data.bytes(&mut bytes)?;
         Ok(Value::Float(f64::from_le_bytes(bytes)))
+    }
+
+    fn decimal(&mut self) -> io::Result<Value> {
+        if self.data.byte()? != 6 {
+            return Err(invalid("expected generated decimal field"));
+        }
+        Ok(Value::Decimal(self.data.decimal()?))
     }
 
     fn guid(&mut self) -> io::Result<Value> {
