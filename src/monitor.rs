@@ -267,7 +267,7 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
 }
 
 fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<String>), String> {
-    let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| e.to_string())?);
+    let mut input = open_snapshot_input(path)?;
     let selected = match read_snapshot_metadata(&mut input)? {
         Some(metadata) if metadata.cpu_mips == Some(0) => {
             (!metadata.selected.is_empty()).then_some(metadata.selected)
@@ -377,13 +377,7 @@ impl Session {
     }
 
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
-        let mut input = io::BufReader::new(fs::File::open(path).map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                missing_snapshot(path)
-            } else {
-                format!("{}: {error}", path.display())
-            }
-        })?);
+        let mut input = open_snapshot_input(path)?;
         let result = (|| {
             let Some(SnapshotMetadata { selected, user_state, number_mode, machine_cleared, quantum, cpu_mips, mut variables, macros, aliases }) =
                 read_snapshot_metadata(&mut input)?
@@ -2920,6 +2914,7 @@ fn inspect_snapshot_destination(path: &Path) -> Option<String> {
 fn inspect_snapshot_input(path: &Path) -> Option<String> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => return Some(nonregular_snapshot(path)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(missing_snapshot(path)),
         _ => return None,
     };
@@ -2937,6 +2932,28 @@ fn inspect_snapshot_input(path: &Path) -> Option<String> {
             "This snapshot is incompatible or the emulation's state is corrupted: {}: {reason}",
             path.display(),
         ))
+}
+
+fn nonregular_snapshot(path: &Path) -> String {
+    format!("Parameters did not match the signature: snapshot input is not a regular file: {}", path.display())
+}
+
+fn open_snapshot_input(path: &Path) -> Result<io::BufReader<fs::File>, String> {
+    let describe_error = |error: io::Error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            missing_snapshot(path)
+        } else {
+            format!("{}: {error}", path.display())
+        }
+    };
+    if !fs::metadata(path).map_err(describe_error)?.is_file() {
+        return Err(nonregular_snapshot(path));
+    }
+    let file = fs::File::open(path).map_err(describe_error)?;
+    if !file.metadata().map_err(describe_error)?.is_file() {
+        return Err(nonregular_snapshot(path));
+    }
+    Ok(io::BufReader::new(file))
 }
 
 fn missing_snapshot(path: &Path) -> String {
@@ -5221,6 +5238,7 @@ greet "hello world"
         let no_directory = format!("@/tmp/penv-missing-snapshot-directory-{}/state.save", std::process::id());
         assert_eq!(inspect(machine, &format!("Save {no_directory}")).0, "REJECTED");
         assert_eq!(inspect(machine, "Save @.").0, "REJECTED");
+        assert_eq!(inspect(machine, "Load @.").0, "REJECTED");
         let pending = format!("{machine}Save {missing}\n");
         assert_eq!(inspect(&pending, &format!("Load {missing}")).0, "DEFER");
         assert_eq!(inspect(machine, "logLevel 2").0, "DEFER");
