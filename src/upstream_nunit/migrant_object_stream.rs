@@ -1298,3 +1298,51 @@ stamp_modes!(
     read_only_collection_stamped,
     read_only_collection
 );
+
+fn byte_array(stamped: bool) {
+    let mut graph = Graph::default();
+    let expected = Object::Bytes(vec![2, 4, 6, 8, 10]);
+    let root = graph.insert(expected.clone());
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(reader.graph().get(copy), Some(&expected));
+}
+
+fn empty_array(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = graph.insert(Object::Array(Vec::new()));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert!(array_values(reader.graph(), copy).is_empty());
+}
+
+fn empty_rectangular(stamped: bool, dimensions: &[usize]) {
+    let mut graph = Graph::default();
+    let root = graph.insert(Object::Rectangular {
+        dimensions: dimensions.to_vec(),
+        elements: Vec::new(),
+    });
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let Some(Object::Rectangular {
+        dimensions: actual,
+        elements,
+    }) = reader.graph().get(copy)
+    else {
+        panic!("expected a rectangular array");
+    };
+    assert_eq!(actual, dimensions);
+    assert!(elements.is_empty());
+}
+
+stamp_modes!(byte_array_plain, byte_array_stamped, byte_array);
+stamp_modes!(empty_array_plain, empty_array_stamped, empty_array);
+stamp_modes!(empty_list_plain, empty_list_stamped, |s| primitive_list(
+    s,
+    0..0
+));
+stamp_modes!(empty_2d_plain, empty_2d_stamped, |s| empty_rectangular(
+    s,
+    &[0, 0]
+));
+stamp_modes!(empty_3d_plain, empty_3d_stamped, |s| empty_rectangular(
+    s,
+    &[2, 0, 2]
+));

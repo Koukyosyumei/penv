@@ -95,6 +95,7 @@ pub enum Value {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Object {
     String(String),
+    Bytes(Vec<u8>),
     Record {
         class: String,
         fields: Vec<Value>,
@@ -321,6 +322,12 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             let object = replacement.as_ref().unwrap_or(original);
             let values = match object {
                 Object::String(_) => &[],
+                Object::Bytes(bytes) => {
+                    if bytes.len() > MAX_ITEMS {
+                        return Err(invalid("byte array limit exceeded"));
+                    }
+                    &[]
+                }
                 Object::Record { class, fields } => {
                     if let Some(stamps) = self.stamps {
                         stamp_for(stamps, class)?.validate(fields)?;
@@ -368,6 +375,11 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                 .or_else(|| graph.get(*id))
                 .unwrap()
             {
+                Object::Bytes(bytes) => {
+                    self.data.bytes(&[4])?;
+                    self.data.unsigned(bytes.len() as u64)?;
+                    self.data.bytes(bytes)?;
+                }
                 Object::String(value) => {
                     self.data.bytes(&[0])?;
                     self.data.string(value)?;
@@ -497,7 +509,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                                 _ => None,
                             }));
                         }
-                        Object::String(_) => {}
+                        Object::String(_) | Object::Bytes(_) => {}
                     }
                     entry.insert(Arc::clone(object));
                 }
@@ -607,6 +619,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                         elements,
                     }
                 }
+                4 => {
+                    let mut bytes = vec![0; self.count()?];
+                    self.data.bytes(&mut bytes)?;
+                    Object::Bytes(bytes)
+                }
                 _ => return Err(invalid("unknown object kind")),
             });
         }
@@ -615,7 +632,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                 let id = ObjectId(old_len + index);
                 if let Some(replacement) = surrogates.convert(id, object)? {
                     let fields = match &replacement {
-                        Object::String(_) => &[][..],
+                        Object::String(_) | Object::Bytes(_) => &[][..],
                         Object::Record { fields, .. } | Object::Array(fields) => fields,
                         Object::Rectangular {
                             dimensions,

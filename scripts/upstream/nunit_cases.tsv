@@ -867,3 +867,13 @@ lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.Parser
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ParserTests.ShouldRecreateUnparsedArgument6	upstream_nunit::option_parser::should_recreate_unparsed_argument6	new
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ParserTests.ShouldRecreateUnparsedArgument7	upstream_nunit::option_parser::should_recreate_unparsed_argument7	new
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ParserTests.ShoulNotParseOnMissingRequiredPositionalValues	upstream_nunit::option_parser::shoul_not_parse_on_missing_required_positional_values	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerialize2DArrayWithAllDimensionZero	upstream_nunit::migrant_object_stream::empty_2d_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerialize3DArrayWithOneDimensionZero	upstream_nunit::migrant_object_stream::empty_3d_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeByteArray	upstream_nunit::migrant_object_stream::byte_array_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeEmptyArray	upstream_nunit::migrant_object_stream::empty_array_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeEmptyList	upstream_nunit::migrant_object_stream::empty_list_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerialize2DArrayWithAllDimensionZero	upstream_nunit::migrant_object_stream::empty_2d_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerialize3DArrayWithOneDimensionZero	upstream_nunit::migrant_object_stream::empty_3d_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeByteArray	upstream_nunit::migrant_object_stream::byte_array_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeEmptyArray	upstream_nunit::migrant_object_stream::empty_array_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeEmptyList	upstream_nunit::migrant_object_stream::empty_list_stamped	new
