@@ -6,6 +6,7 @@ mod collapsed_profile;
 mod compressed;
 mod constant_mmio;
 mod crc;
+mod cpu_python_hook;
 mod csr;
 mod designware_usb;
 mod dwt;
@@ -1374,6 +1375,7 @@ fn run() -> Result<ExitCode, String> {
     let mut sd_setup_only = false;
     let mut mpfs_buttons = Vec::new();
     let mut halt_hooks = Vec::new();
+    let mut python_hooks = Vec::new();
     let mut virtual_mips = None;
     let mut boot_writes = Vec::new();
     let mut zephyr = zephyr_boot::BootOptions::default();
@@ -1519,6 +1521,10 @@ fn run() -> Result<ExitCode, String> {
         }
         sd_cards = boot.sd_cards;
         mpfs_buttons = boot.mpfs_buttons;
+        for (cpu, symbol, source, file) in boot.python_hooks {
+            let file = file.resolve(root, asset_dir.as_deref())?;
+            python_hooks.push((cpu, symbol, source, file));
+        }
         for (cpu, symbol, target, value) in boot.halt_hooks {
             let file = monitor::Asset::new(&value, script).resolve(root, asset_dir.as_deref())?;
             let address = fs::read(&file)
@@ -1715,6 +1721,10 @@ fn run() -> Result<ExitCode, String> {
             gpio.set_button(*pressed);
         }
         machine.stop_when_halted = stop_when_halted;
+        for (cpu, symbol, source, file) in &python_hooks {
+            let pc = cpu_python_hook::symbol(file, symbol)?;
+            machine.install_python_hook(cpu, pc, source, file.clone())?;
+        }
         for (source, pc, target) in &halt_hooks {
             machine.halt_on_pc(source, *pc, target)?;
         }

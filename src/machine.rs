@@ -131,6 +131,7 @@ pub struct Machine {
     next_hart: usize,
     pc_trace: Option<(usize, PcTrace)>,
     halt_hooks: Vec<(usize, u64, usize)>,
+    python_hooks: Vec<(usize, u64, crate::cpu_python_hook::Hook)>,
     halted: u8,
     pub(crate) stop_when_halted: bool,
     elapsed_steps: u64,
@@ -401,6 +402,7 @@ impl Machine {
             next_hart: 0,
             pc_trace: None,
             halt_hooks: Vec::new(),
+            python_hooks: Vec::new(),
             halted: 0,
             stop_when_halted: false,
             elapsed_steps: 0,
@@ -511,6 +513,14 @@ impl Machine {
         } else {
             hart.monitor_reset(initial)
         }
+    }
+
+    pub(crate) fn install_python_hook(&mut self, name: &str, pc: u64, source: &str, file: std::path::PathBuf) -> Result<(), String> {
+        let index = std::iter::once(&self.primary).chain(&self.secondary)
+            .position(|hart| hart.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown hook CPU {name:?}"))?;
+        self.python_hooks.push((index, pc, crate::cpu_python_hook::Hook::new(source, file)?));
+        Ok(())
     }
 
     pub(crate) fn monitor_named_pc(&mut self, name: &str) -> Result<u64, String> {
@@ -1587,6 +1597,11 @@ impl Machine {
                     return Ok((Stop::OutputMatch, retired));
                 }
                 continue;
+            }
+            for (cpu, address, hook) in &mut self.python_hooks {
+                if *cpu == index && *address == hart.program_counter() {
+                    hook.execute(&mut self.bus, *address)?;
+                }
             }
             let trace = self.pc_trace.as_ref().filter(|(id, _)| *id == index);
             let trace_pc = trace.map(|_| {

@@ -48,6 +48,7 @@ pub struct Boot {
     pub supervisor_mask: Option<u32>,
     pub mpfs_buttons: Vec<(String, String, bool)>,
     pub halt_hooks: Vec<(String, String, String, String)>,
+    pub python_hooks: Vec<(String, String, String, Asset)>,
     symbols: Vec<String>,
     hooks: HashMap<String, String>,
     pub sd_cards: Vec<SdAttachment>,
@@ -949,6 +950,7 @@ impl Boot {
 }
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct Asset {
     value: String,
     script: PathBuf,
@@ -2257,7 +2259,13 @@ fn execute(
             let hook = match boot.hooks.get(name) {
                 Some(hook) => hook,
                 None if variables.contains_key(name) => {
-                    return Err(format!("unsupported CPU Python hook ${name} at symbol {symbol}"));
+                    let file = boot.symbols.last().map(|file| Asset::new(file, script))
+                        .or_else(|| boot.image.clone())
+                        .ok_or("CPU Python hook requires a loaded ELF symbol table")?;
+                    let source = unquote(resolve(callback)?);
+                    boot.python_hooks.push((cpu.trim_start_matches("sysbus.").to_owned(),
+                        symbol.to_owned(), source.to_owned(), file));
+                    return Ok(());
                 }
                 None => return Err(format!("unknown CPU hook ${name}")),
             };

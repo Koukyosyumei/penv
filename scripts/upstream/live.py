@@ -276,7 +276,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 self.platform = self.monitor_input.path(tokens[2])
                 return ""
             prefix = "machine LoadPlatformDescriptionFromString "
-            if command.startswith(prefix) and self.platform is None and not self.image:
+            if command.startswith(prefix) and not self.image:
                 arg = command[len(prefix):]
                 if arg.startswith('"""') and arg.endswith('"""'):
                     repl = arg[3:-3]
@@ -401,7 +401,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         platform = self.platform
         if self.inline:
             platform = self.out / "platform.repl"
-            platform.write_text("\n".join(self.inline) + "\n")
+            source = self.inline
+            if self.platform:
+                source = [f"using {json.dumps(str(self.platform))}", *source]
+            platform.write_text("\n".join(source) + "\n")
         cmd = [str(self.binary), "run", "--platform-root", str(self.root), "--monitor-stdio"]
         if self.log_capacity is not None:
             cmd.extend(["--monitor-log-capacity", str(self.log_capacity)])
