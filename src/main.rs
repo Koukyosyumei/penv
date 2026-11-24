@@ -1382,6 +1382,7 @@ fn run() -> Result<ExitCode, String> {
     let mut cpu_registers = Vec::new();
     let mut log_function_names = false;
     let mut monitor_log_level = None;
+    let mut trace_memory = Vec::new();
     let mut monitor_user_state = None;
     let mut monitor_output = Vec::new();
     if let Some(capacity) = monitor_log_capacity {
@@ -1500,6 +1501,7 @@ fn run() -> Result<ExitCode, String> {
         cpu_registers = boot.cpu_registers;
         log_function_names = boot.log_function_names;
         monitor_log_level = boot.monitor_log_level;
+        trace_memory = boot.trace_memory;
         monitor_user_state = boot.monitor_user_state;
         monitor_output = boot.monitor_output;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
@@ -1623,6 +1625,9 @@ fn run() -> Result<ExitCode, String> {
         };
         if let Some(level) = monitor_log_level {
             machine.bus.set_monitor_log_level(level);
+        }
+        for (name, enabled) in &trace_memory {
+            machine.bus.set_trace_memory(name, *enabled)?;
         }
         if let Some(value) = &monitor_user_state {
             machine.bus.monitor_user_state.clone_from(value);
