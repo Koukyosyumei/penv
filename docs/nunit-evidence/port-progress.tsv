@@ -15,7 +15,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.VersionToleranceTests	148	
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ParserTests	49	49	0	0	0	-
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ValidationTests	4	4	0	0	0	-
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	60	0	0	60	0	The monitor has no reflection-driven action binder for optional, named, array and variadic arguments on the fixture's test emulation object.
-src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	5	0	0	5	0	There is no general IronPython monitor command context with the fixture's stateful next-value command and Python execution, sleep, or arbitrary dump helpers.
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	5	3	0	2	0	Three cases are ported as native session commands. DumpTest and DumpFileTest still need monitor bulk memory output and file writing.
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.FeaturesTests	2	0	0	2	0	There is no dynamic CLR command auto-registration or runtime loading of C# extension methods.
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.TokenizerTests	18	18	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests	6	6	0	0	0	-

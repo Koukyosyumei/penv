@@ -9,7 +9,7 @@ Antmicro.Migrant.Tests.SurrogateTests	Reflection substitutions cover exact, inhe
 Antmicro.Migrant.Tests.TwoDomainTests	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
 Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
 Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	The monitor has no reflection-driven action binder for optional, named, array and variadic arguments on the fixture's test emulation object.
-Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	There is no general IronPython monitor command context with the fixture's stateful next-value command and Python execution, sleep, or arbitrary dump helpers.
+Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	Three cases are ported as native session commands. DumpTest and DumpFileTest still need monitor bulk memory output and file writing.
 Antmicro.Renode.MonitorTests.FeaturesTests	There is no dynamic CLR command auto-registration or runtime loading of C# extension methods.
 Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.
 Antmicro.Renode.PeripheralsTests.CortexA9GICTests	The Cortex-A9 host platform and its ARM Generic Interrupt Controller are absent.

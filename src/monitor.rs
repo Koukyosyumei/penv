@@ -586,6 +586,40 @@ pub fn run(
 
 /// Execute one runtime command at a time on the same machine. Separate command
 /// status from UART/monitor bytes so firmware output cannot create a reply frame.
+#[derive(Default)]
+pub(crate) struct MonitorBuiltins {
+    next_value: i64,
+}
+
+impl MonitorBuiltins {
+    pub(crate) fn execute(&mut self, text: &str) -> Option<Result<String, String>> {
+        let command = text.split_whitespace().next()?;
+        if !matches!(command, "next_value" | "sleep" | "echo") {
+            return None;
+        }
+        Some(command_words(text).and_then(|words| match words.as_slice() {
+            ["next_value"] | ["next_value", _] => {
+                let offset = words.get(1).map_or(Ok(0), |value| value.parse::<i64>())
+                    .map_err(|_| "expected a next_value offset")?;
+                let current = self.next_value.checked_add(offset).ok_or("next_value overflow")?;
+                self.next_value = self.next_value.checked_add(1).ok_or("next_value overflow")?;
+                Ok(format!("{current}\n"))
+            }
+            ["sleep", seconds] => {
+                let seconds = seconds.parse::<f64>().map_err(|_| "invalid sleep duration")?;
+                let duration = Duration::try_from_secs_f64(seconds).map_err(|_| "invalid sleep duration")?;
+                std::thread::sleep(duration);
+                Ok(String::new())
+            }
+            ["echo"] => Ok("\n".to_owned()),
+            ["echo", value] => Ok(format!("{}\n", unquote(value))),
+            ["echo", "-n", value] => Ok(unquote(value).to_owned()),
+            ["echo", ..] => Ok("usage: echo [-n] [string]\n".to_owned()),
+            _ => Err(format!("invalid {command} arguments")),
+        }))
+    }
+}
+
 pub fn serve(
     machine: &mut Machine,
     mut input: impl BufRead,
@@ -599,6 +633,7 @@ pub fn serve(
 
     let path = Path::new("<monitor>");
     let mut line = String::new();
+    let mut builtins = MonitorBuiltins::default();
     frame(&mut output, "READY", &[]).map_err(|error| error.to_string())?;
     loop {
         line.clear();
@@ -606,6 +641,14 @@ pub fn serve(
             return Ok(());
         }
         let text = line.trim();
+        if let Some(result) = builtins.execute(text) {
+            let reply = match result {
+                Ok(body) => frame(&mut output, "OK", body.as_bytes()),
+                Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+            };
+            reply.map_err(|error| error.to_string())?;
+            continue;
+        }
         let mut boot = Boot {
             platform: Some(path.into()),
             image: Some(Asset::new("", path)),
