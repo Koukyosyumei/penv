@@ -1,3 +1,4 @@
+use super::generated_record::Codec;
 use super::object_stream::{Graph, Object, ObjectId, ObjectWriter, References, TypeStamp, Value};
 use std::{
     collections::HashSet,
@@ -24,6 +25,17 @@ pub fn write_hooked(
     root: ObjectId,
     stamps: Option<&[TypeStamp<'_>]>,
     hooks: &[WriteHook<'_>],
+) -> io::Result<()> {
+    write_hooked_with_codecs(stream, graph, root, stamps, hooks, None)
+}
+
+pub fn write_hooked_with_codecs(
+    stream: impl Write,
+    graph: &mut Graph,
+    root: ObjectId,
+    stamps: Option<&[TypeStamp<'_>]>,
+    hooks: &[WriteHook<'_>],
+    codecs: Option<&[Codec]>,
 ) -> io::Result<()> {
     let mut visited = HashSet::new();
     let mut order = Vec::new();
@@ -57,6 +69,9 @@ pub fn write_hooked(
         let mut writer = ObjectWriter::new(stream, graph, References::Preserve, true);
         if let Some(stamps) = stamps {
             writer = writer.with_type_stamps(stamps);
+        }
+        if let Some(codecs) = codecs {
+            writer = writer.with_generated_records(codecs);
         }
         writer.write_object(root)?;
         writer.finish()

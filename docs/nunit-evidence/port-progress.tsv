@@ -1,7 +1,7 @@
 project	fixture	discovered	ported	ported_excluded	pending	inactive	remaining_api
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	48	48	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests	16	16	0	0	0	-
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests	160	40	0	120	0	All 40 reflection read/write cases are ported across both stamp modes. The other 120 cases require generated reader and/or writer paths.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests	160	160	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.IdGeneratorTests	1	1	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.ObjectReaderWriterTests	1	1	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.OpenStreamSerializationTests	28	28	0	0	0	-

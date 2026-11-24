@@ -1211,6 +1211,14 @@ impl RecordOutput for ValidateGeneratedFields {
     fn count(&mut self, _: usize) -> io::Result<()> {
         Ok(())
     }
+    fn boolean(&mut self, value: &Value) -> io::Result<()> {
+        if matches!(value, Value::Boolean(_)) {
+            Ok(())
+        } else {
+            Err(invalid("expected generated boolean field"))
+        }
+    }
+
     fn integer(&mut self, value: &Value) -> io::Result<()> {
         if matches!(value, Value::Integer(_)) {
             Ok(())
@@ -1242,6 +1250,13 @@ struct GeneratedOutput<'a, W: Write> {
 impl<W: Write> RecordOutput for GeneratedOutput<'_, W> {
     fn count(&mut self, count: usize) -> io::Result<()> {
         self.data.unsigned(count as u64)
+    }
+
+    fn boolean(&mut self, value: &Value) -> io::Result<()> {
+        let Value::Boolean(value) = value else {
+            return Err(invalid("expected generated boolean field"));
+        };
+        self.data.bytes(&[7, u8::from(*value)])
     }
 
     fn integer(&mut self, value: &Value) -> io::Result<()> {
@@ -1287,6 +1302,17 @@ impl<R: Read> RecordInput for GeneratedInput<'_, R> {
             return Err(invalid("incorrect generated record field count"));
         }
         Ok(())
+    }
+
+    fn boolean(&mut self) -> io::Result<Value> {
+        if self.data.byte()? != 7 {
+            return Err(invalid("expected generated boolean field"));
+        }
+        match self.data.byte()? {
+            0 => Ok(Value::Boolean(false)),
+            1 => Ok(Value::Boolean(true)),
+            _ => Err(invalid("invalid boolean value")),
+        }
     }
 
     fn integer(&mut self) -> io::Result<Value> {
