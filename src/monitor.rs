@@ -139,7 +139,7 @@ impl Session {
         write_snapshot(path, |file| {
             file.write_all(SESSION_SNAPSHOT).map_err(|e| e.to_string())?;
             file.write_all(&machine.monitor_quantum.to_le_bytes()).map_err(|e| e.to_string())?;
-            let mips = (machine.bus.monitor_step_hz() / 1_000_000) as u32;
+            let mips = if machine.cpu_less { 0 } else { (machine.bus.monitor_step_hz() / 1_000_000) as u32 };
             file.write_all(&mips.to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&(data.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&data).map_err(|e| e.to_string())?;
@@ -176,10 +176,11 @@ impl Session {
                 let mut bytes = [0; 4];
                 input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
                 let mips = u32::from_le_bytes(bytes);
-                if !machine.is_cortex_m() || mips == 0 || mips.checked_mul(1_000_000).is_none() {
-                    return Err("invalid snapshot CPU speed".into());
+                match mips {
+                    0 if machine.cpu_less => None,
+                    mips if machine.is_cortex_m() && mips != 0 && mips.checked_mul(1_000_000).is_some() => Some(mips),
+                    _ => return Err("invalid snapshot CPU speed".into()),
                 }
-                Some(mips)
             } else {
                 None
             };
@@ -497,7 +498,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint
-                    | Action::TimeSourceInfo
+                    | Action::TimeSourceInfo | Action::SaveMemory(_) | Action::LoadMemory(_)
             )
         })
 }
@@ -3097,6 +3098,8 @@ fn execute(
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint
                         | Action::TimeSourceInfo
+                        | Action::SaveMemory(_)
+                        | Action::LoadMemory(_)
                         | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)

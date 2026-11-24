@@ -958,7 +958,53 @@ impl Machine {
         Ok(())
     }
 
+    fn cpu_less_snapshot_prefix(&self) -> Result<Vec<u8>, String> {
+        if self.recorder.is_some() || !self.replay.is_empty() || !self.inputs.is_empty() {
+            return Err("CPU-less snapshots require an idle event queue".into());
+        }
+        let (base, name) = self.bus.snapshot_trivial_uart()?;
+        let mut data = b"PENVIOST\x01".to_vec();
+        data.extend_from_slice(&base.to_le_bytes());
+        data.extend_from_slice(&(name.len() as u64).to_le_bytes());
+        data.extend_from_slice(name.as_bytes());
+        Ok(data)
+    }
+
+    fn write_cpu_less_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
+        let mut data = self.cpu_less_snapshot_prefix()?;
+        data.extend_from_slice(&self.elapsed_steps().to_le_bytes());
+        data.extend_from_slice(&self.monitor_quantum.to_le_bytes());
+        data.push(u8::from(self.primary.monitor_paused));
+        output.write_all(&data).map_err(|error| error.to_string())
+    }
+
+    fn read_cpu_less_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
+        let prefix = self.cpu_less_snapshot_prefix()?;
+        let mut data = vec![0; prefix.len() + 17];
+        input.read_exact(&mut data).map_err(|error| error.to_string())?;
+        if !data.starts_with(&prefix) || input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {
+            return Err("CPU-less snapshot does not match the platform or format".into());
+        }
+        let state = &data[prefix.len()..];
+        let steps = u64::from_le_bytes(state[..8].try_into().unwrap());
+        let quantum = u64::from_le_bytes(state[8..16].try_into().unwrap());
+        if steps == u64::MAX || quantum == 0 || state[16] > 1 {
+            return Err("invalid CPU-less snapshot clock state".into());
+        }
+        self.time_source = TimeSource::default();
+        self.time_source.grant_until(steps);
+        self.elapsed_steps = steps;
+        self.monitor_quantum = quantum;
+        self.monitor_clock_ns = 0;
+        self.monitor_clock_step = 0;
+        self.primary.monitor_paused = state[16] != 0;
+        Ok(())
+    }
+
     pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
+        if self.cpu_less {
+            return self.write_cpu_less_snapshot(output);
+        }
         self.check_memory_snapshot()?;
         if self.boot_memory_cleared {
             return Err("Load a boot snapshot after Clear".into());
@@ -986,6 +1032,9 @@ impl Machine {
     }
 
     pub(crate) fn read_boot_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
+        if self.cpu_less {
+            return self.read_cpu_less_snapshot(input);
+        }
         self.check_memory_snapshot()?;
         let mut load = || -> std::io::Result<_> {
             fn read_word(input: &mut impl Read) -> std::io::Result<u32> {

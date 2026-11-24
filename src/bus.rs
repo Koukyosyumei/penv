@@ -3073,6 +3073,14 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn snapshot_trivial_uart(&self) -> Result<(u32, &str), String> {
+        if !self.uart_testers.is_empty() || !self.uart_logs.is_empty() {
+            return Err("CPU-less snapshots require an unattached UART".into());
+        }
+        self.trivial_uart.as_ref().map(|(base, name)| (*base, name.as_str()))
+            .ok_or_else(|| "CPU-less snapshot requires a TrivialUart".into())
+    }
+
     pub fn map_trivial_uart(&mut self, base: u32, name: &str) -> Result<(), String> {
         let start = u64::from(base);
         if self.trivial_uart.is_some() || base & 3 != 0 || self.overlaps(start, start + 4) {
