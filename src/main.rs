@@ -1683,7 +1683,11 @@ fn run() -> Result<ExitCode, String> {
         if script_elf_addresses.is_some() && !machine.is_cortex_m() {
             machine.bus.use_renode_unmapped_data();
         }
-        if let Some(mips) = cli_mips.or(virtual_mips) {
+        // The pinned Renode BaseCPU starts at 100 MIPS unless the script
+        // overrides it. Configure the CPU budget and SysTick from one rate.
+        let renode_default_mips = (script.is_some() && machine.is_cortex_m())
+            .then_some((bus::CORTEX_M_STEP_HZ / 1_000_000) as u32);
+        if let Some(mips) = cli_mips.or(virtual_mips).or(renode_default_mips) {
             if !machine.is_cortex_m() {
                 return Err("--virtual-mips requires Cortex-M".into());
             }
