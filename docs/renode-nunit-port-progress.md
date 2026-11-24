@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,044 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,049 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 351 |
+| 移植待ち | 346 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -446,3 +446,5 @@ CPU参照を要素、キー、値に含むコレクション4件を移植した�
 コンストラクタの診断3件を移植した。インライン引数の型解決をコンストラクタ候補の判定より先に行い、オーバーレイを適用した引数から候補なしと候補の競合を区別した。対象の81件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-constructor-candidates.tsv)・[実行ログ](nunit-evidence/targeted-repl-constructor-candidates.log)
 
 コンストラクタ依存の6件を移植した。入れ子の候補なし・候補競合、未解決参照、自己循環と複数オブジェクトの循環、インクルードをまたぐ循環を検証した。対象の87件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-dependencies.tsv)・[実行ログ](nunit-evidence/targeted-repl-dependencies.log)
+
+親周辺機器への登録5件を移植した。前方参照、登録先の更新と取り消し、複数の親への登録、未登録の親の拒否を、登録後の完全修飾名と診断で照合した。[公式IDとの対応](nunit-evidence/targeted-repl-parent-registration.tsv)・[実行ログ](nunit-evidence/targeted-repl-parent-registration.log)

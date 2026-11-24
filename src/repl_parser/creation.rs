@@ -6,6 +6,7 @@ const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 enum Model {
     Cpu,
     EmptyPeripheral,
+    Register,
     DependentPeripheral,
     EnumPeripheral,
     CollectionPeripheral,
@@ -98,6 +99,8 @@ impl Model {
             "Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency" => {
                 Some(Self::DependentPeripheral)
             }
+            "Antmicro.Renode.UnitTests.Mocks.NullRegister"
+            | "Antmicro.Renode.UnitTests.Mocks.MockRegister" => Some(Self::Register),
             MOCK_CPU => Some(Self::Cpu),
             "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
             "Antmicro.Renode.UnitTests.Mocks.MockExternal" => Some(Self::External),
@@ -402,6 +405,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             .copied()
     };
 
+    let mut pending = HashMap::new();
     for (entry, declared) in entries.iter().zip(targets) {
         let id = declared
             .or_else(|| resolve(&entry.source, &entry.name))
@@ -410,58 +414,83 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             if platform.objects[id].model == Model::External {
                 return Err(entry.error("NoUsableRegisterInterface: external object"));
             }
-            let points = if let Some(list) = registration
-                .strip_prefix('{')
-                .and_then(|list| list.strip_suffix('}'))
-            {
-                registration_points(list).map_err(|error| entry.error(error))?
+            if registration == "none" {
+                pending.remove(&id);
             } else {
-                vec![registration_point(registration).map_err(|error| entry.error(error))?]
-            };
-            for (parent, point) in points {
-                if parent != "sysbus" {
-                    return Err(entry.error("NoUsableRegisterInterface: expected sysbus"));
+                let mut parents = Vec::new();
+                platform.objects[id].ranges.clear();
+                let points = if let Some(list) = registration
+                    .strip_prefix('{')
+                    .and_then(|list| list.strip_suffix('}'))
+                {
+                    registration_points(list).map_err(|error| entry.error(error))?
+                } else {
+                    vec![registration_point(registration).map_err(|error| entry.error(error))?]
+                };
+                for (parent, point) in points {
+                    if parent != "sysbus" {
+                        let target = resolve(&entry.source, parent)
+                            .ok_or_else(|| entry.error(&format!("MissingReference: {parent}")))?;
+                        if platform.objects[target].model != Model::Register || point.is_some() {
+                            return Err(entry
+                                .error("NoUsableRegisterInterface: unsupported parent or point"));
+                        }
+                        parents.push(Some(target));
+                        continue;
+                    }
+                    parents.push(None);
+                    match point {
+                        Some(RegistrationValue::Range { base, size }) => {
+                            platform.objects[id].ranges.push((base, size));
+                        }
+                        Some(RegistrationValue::Other(value)) if number(value).is_ok() => {}
+                        Some(RegistrationValue::Other(value)) if value.starts_with("new ") => {
+                            let (object, _) =
+                                object_prefix(value).map_err(|error| entry.error(error))?;
+                            if object.model
+                                == "Antmicro.Renode.Peripherals.Bus.BusRangeRegistration"
+                            {
+                                let [("range", value)] = object.fields.as_slice() else {
+                                    return Err(entry.error(
+                                        "NoCtorForRegistrationPoint: expected range argument",
+                                    ));
+                                };
+                                platform.objects[id]
+                                    .ranges
+                                    .push(range_value(value).map_err(|error| entry.error(error))?);
+                                continue;
+                            }
+                            Model::parse(object.model).ok_or_else(|| {
+                                entry.error(&format!("TypeNotResolved: {}", object.model))
+                            })?;
+                            return Err(entry
+                                .error("TypeMismatch: inline object is not a registration point"));
+                        }
+                        Some(RegistrationValue::Other(value)) => {
+                            let target = resolve(&entry.source, value).ok_or_else(|| {
+                                entry.error(&format!("MissingReference: {value}"))
+                            })?;
+                            let model = match platform.objects[target].model {
+                                Model::Cpu => "CPU",
+                                Model::EmptyPeripheral
+                                | Model::DependentPeripheral
+                                | Model::Register
+                                | Model::EnumPeripheral
+                                | Model::ScalarPeripheral(_)
+                                | Model::CollectionPeripheral => "peripheral",
+                                Model::External => "external",
+                            };
+                            return Err(entry.error(&format!(
+                                "TypeMismatch: {model} is not a registration point"
+                            )));
+                        }
+                        Some(RegistrationValue::String(_)) => {
+                            return Err(entry.error("NoCtorForRegistrationPoint: string value"));
+                        }
+                        None => {}
+                    }
                 }
-                match point {
-                    Some(RegistrationValue::Range { base, size }) => {
-                        platform.objects[id].ranges.push((base, size));
-                    }
-                    Some(RegistrationValue::Other(value)) if number(value).is_ok() => {}
-                    Some(RegistrationValue::Other(value)) if value.starts_with("new ") => {
-                        let (object, _) =
-                            object_prefix(value).map_err(|error| entry.error(error))?;
-                        Model::parse(object.model).ok_or_else(|| {
-                            entry.error(&format!("TypeNotResolved: {}", object.model))
-                        })?;
-                        return Err(
-                            entry.error("TypeMismatch: inline object is not a registration point")
-                        );
-                    }
-                    Some(RegistrationValue::Other(value)) => {
-                        let target = resolve(&entry.source, value)
-                            .ok_or_else(|| entry.error(&format!("MissingReference: {value}")))?;
-                        let model = match platform.objects[target].model {
-                            Model::Cpu => "CPU",
-                            Model::EmptyPeripheral
-                            | Model::DependentPeripheral
-                            | Model::EnumPeripheral
-                            | Model::ScalarPeripheral(_)
-                            | Model::CollectionPeripheral => "peripheral",
-                            Model::External => "external",
-                        };
-                        return Err(entry.error(&format!(
-                            "TypeMismatch: {model} is not a registration point"
-                        )));
-                    }
-                    Some(RegistrationValue::String(_)) => {
-                        return Err(entry.error("NoCtorForRegistrationPoint: string value"));
-                    }
-                    None => {}
-                }
-            }
-            let name = format!("sysbus.{}", entry.alias.as_deref().unwrap_or(&entry.name));
-            if platform.registered.insert(name, id).is_some() {
-                return Err(entry.error("duplicate sysbus registration"));
+                pending.insert(id, (entry.alias.as_deref().unwrap_or(&entry.name), parents));
             }
         }
         for (source, property) in &entry.body {
@@ -487,6 +516,50 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
         object
             .finish_constructor()
             .map_err(|error| entry.error(&error))?;
+    }
+    while !pending.is_empty() {
+        let ready: Vec<_> = pending
+            .iter()
+            .filter_map(|(&id, (_, parents))| {
+                parents
+                    .iter()
+                    .all(|parent| {
+                        parent.is_none_or(|parent| {
+                            platform
+                                .registered
+                                .values()
+                                .any(|&registered| registered == parent)
+                        })
+                    })
+                    .then_some(id)
+            })
+            .collect();
+        if ready.is_empty() {
+            return Err("RegistrationException: unregistered or cyclic parent".into());
+        }
+        for id in ready {
+            let (name, parents) = pending.remove(&id).unwrap();
+            for parent in parents {
+                let paths: Vec<_> = match parent {
+                    None => vec![format!("sysbus.{name}")],
+                    Some(parent) => platform
+                        .registered
+                        .iter()
+                        .filter(|(_, registered)| **registered == parent)
+                        .map(|(path, _)| format!("{path}.{name}"))
+                        .collect(),
+                };
+                for path in paths {
+                    if platform
+                        .registered
+                        .insert(path, id)
+                        .is_some_and(|previous| previous != id)
+                    {
+                        return Err("RegistrationException: duplicate registration".into());
+                    }
+                }
+            }
+        }
     }
     platform.check_constructor_cycles()?;
     Ok(platform)

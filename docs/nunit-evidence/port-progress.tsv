@@ -80,7 +80,7 @@ src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTes
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.STMCANTest	3	1	0	0	2	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.UnitTests.Cadence_TTCTests	6	6	0	0	0	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.UnitTests.Cadence_UARTTests	6	6	0	0	0	-
-tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	104	57	0	44	3	Remaining cases need duplicate dictionary-key exception chaining, additional collection binding and constructor exception propagation, general mock registration and lifecycle binding, and upstream multiline edge behavior for lone end-of-line escaped delimiters and a missing delimiter between quoted values.
+tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	104	62	0	39	3	Remaining cases need duplicate dictionary-key exception chaining, additional collection binding and constructor exception propagation, general mock registration and lifecycle binding, and upstream multiline edge behavior for lone end-of-line escaped delimiters and a missing delimiter between quoted values.
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.ParserPrimitivesTest	25	25	0	0	0	-
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.ParserTests	66	66	0	0	0	-
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.PreLexerTests	21	21	0	0	0	-

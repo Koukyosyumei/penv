@@ -1088,3 +1088,70 @@ peri3: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
     let error = result.err().expect("expected constructor dependency cycle");
     assert!(error.starts_with("CreationOrderCycle:"), "{error}");
 }
+
+#[test]
+fn should_update_registration_point() {
+    let platform = creation::create_objects(r#"
+register1: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus <0, 100>
+register2: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus new Antmicro.Renode.Peripherals.Bus.BusRangeRegistration { range: <100, +100> }
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ register1
+cpu: @register2"#, Path::new(".")).unwrap();
+    assert!(platform.cpu("sysbus.register2.cpu").is_some());
+    assert!(platform.cpu("sysbus.register1.cpu").is_none());
+}
+
+#[test]
+fn should_cancel_registration() {
+    let platform = creation::create_objects(
+        r#"
+register: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus <0, 100>
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ register
+cpu: @none"#,
+        Path::new("."),
+    )
+    .unwrap();
+    assert!(platform.cpu("sysbus.register.cpu").is_none());
+}
+
+#[test]
+fn should_handle_registration_in_reverse_order() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ register
+register: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus <0, 100>
+"#,
+        Path::new("."),
+    )
+    .unwrap();
+    assert!(platform.cpu("sysbus.register.cpu").is_some());
+}
+
+#[test]
+fn should_process_repeated_registration() {
+    let platform = creation::create_objects(
+        r#"
+mockRegister1: Antmicro.Renode.UnitTests.Mocks.MockRegister @ sysbus 0x0
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ {
+    mockRegister1;
+    mockRegister2
+}
+mockRegister2: Antmicro.Renode.UnitTests.Mocks.MockRegister @ sysbus 0x100
+"#,
+        Path::new("."),
+    )
+    .unwrap();
+    assert!(platform.cpu("sysbus.mockRegister1.cpu").is_some());
+    assert!(platform.cpu("sysbus.mockRegister2.cpu").is_some());
+}
+
+#[test]
+fn should_fail_registration_on_unregistered_parent() {
+    assert_error(
+        r#"
+unregisteredParent: Antmicro.Renode.UnitTests.Mocks.MockRegister
+
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ unregisteredParent
+"#,
+        "RegistrationException",
+    );
+}
