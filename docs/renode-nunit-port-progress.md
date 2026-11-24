@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,857 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,905 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 539 |
+| 移植待ち | 491 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -397,3 +397,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 `ConcurrentDictionary<int,int>` の10組を、テーブル、バケット、ノード、ロック配列、ロック別カウンターを持つ内部表現で復元した。テスト環境に依存しないようロックは4個に固定した。対象実行で8件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-concurrent-dictionary.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-concurrent-dictionary.log)
 
 イベントの単独・複数購読、transient な購読先を含むイベント、および有効な購読先が残らないイベントの4メソッドを各16構成で移植した。Rust では登録済みコールバックを名前で解決し、復元された購読先を購読順に呼び出す。transient な購読先の参照は `null` として復元し、呼び出し対象から除外する。対象実行で64件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-events.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-events.log)
+
+別モジュールの受信側に対する拡張メソッド、`null` 引数を渡すインターフェースメソッド、受信側をキャプチャするラムダを各16構成で移植した。Rust では型スタンプで受信側のモジュールを識別し、登録されたコールバックに復元済みの引数と受信側を渡す。対象実行で48件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-bound-methods.tsv)・[実行ログ](nunit-evidence/targeted-migrant-bound-methods.log)

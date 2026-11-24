@@ -2,7 +2,7 @@ use super::object_stream::{Graph, Object, ObjectId, Value};
 use std::io;
 
 pub const ENTRY: &str = "DelegateEntry";
-pub type Callback = fn(&mut Graph, ObjectId) -> io::Result<()>;
+pub type Callback = fn(&mut Graph, ObjectId, &[Value]) -> io::Result<()>;
 
 /// Save a receiver together with the registered name of its method.
 pub fn bind(graph: &mut Graph, method: ObjectId, target: ObjectId) -> Value {
@@ -13,7 +13,12 @@ pub fn bind(graph: &mut Graph, method: ObjectId, target: ObjectId) -> Value {
 }
 
 /// Invoke entries in subscription order, omitting transient receivers.
-pub fn invoke(graph: &mut Graph, list: ObjectId, methods: &[(&str, Callback)]) -> io::Result<()> {
+pub fn invoke(
+    graph: &mut Graph,
+    list: ObjectId,
+    arguments: &[Value],
+    methods: &[(&str, Callback)],
+) -> io::Result<()> {
     let invalid = || {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -51,7 +56,7 @@ pub fn invoke(graph: &mut Graph, list: ObjectId, methods: &[(&str, Callback)]) -
         calls.push(target);
     }
     for (target, callback) in calls {
-        callback(graph, target)?;
+        callback(graph, target, arguments)?;
     }
     Ok(())
 }

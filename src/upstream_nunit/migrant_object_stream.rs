@@ -19,6 +19,30 @@ const fn stamp(
 }
 
 const STAMPS: &[TypeStamp<'static>] = &[
+    TypeStamp {
+        class: "CompanionSecondModule",
+        module: "SecondModule",
+        revision: 0,
+        fields: &[("Counter", FieldKind::Integer)],
+    },
+    TypeStamp {
+        class: "ClassWithEvent<IInterfaceForDelegate>",
+        module: "Tests",
+        revision: 0,
+        fields: &[("Event", FieldKind::Reference)],
+    },
+    TypeStamp {
+        class: "ClassImplementingInterfaceForDelegate",
+        module: "Tests",
+        revision: 0,
+        fields: &[("Invoked", FieldKind::Boolean)],
+    },
+    TypeStamp {
+        class: "LambdaForInterfaceMethod",
+        module: "Tests",
+        revision: 0,
+        fields: &[("companion", FieldKind::Reference)],
+    },
     stamp(
         "DelegateEntry",
         &[
@@ -357,6 +381,10 @@ fn clone_using_methods(
 }
 
 const GRAPH_CODECS: &[Codec] = &[
+    generated_record!("CompanionSecondModule"; field0: integer),
+    generated_record!("ClassWithEvent<IInterfaceForDelegate>"; field0: reference),
+    generated_record!("ClassImplementingInterfaceForDelegate"; field0: boolean),
+    generated_record!("LambdaForInterfaceMethod"; field0: reference),
     generated_record!(delegate::ENTRY; method: reference, target: reference),
     generated_record!("ClassWithEvent"; event: reference),
     generated_record!("CompanionToClassWithEvent"; counter: integer),
@@ -3254,7 +3282,7 @@ const EVENT_TRANSIENTS: Transients<'static> = Transients {
 
 fn invoke_event(graph: &mut Graph, event: ObjectId) {
     const HANDLERS: &[(&str, delegate::Callback)] =
-        &[("CompanionToClassWithEvent.Method", |graph, id| {
+        &[("CompanionToClassWithEvent.Method", |graph, id, _| {
             let Some(Object::Record { class, fields }) = graph.get_mut(id) else {
                 return Err(std::io::ErrorKind::InvalidData.into());
             };
@@ -3266,7 +3294,7 @@ fn invoke_event(graph: &mut Graph, event: ObjectId) {
             Ok(())
         })];
     let list = reference(&fields(graph.get(event).unwrap())[0]);
-    delegate::invoke(graph, list, HANDLERS).unwrap();
+    delegate::invoke(graph, list, &[], HANDLERS).unwrap();
 }
 
 fn event_with_companions(methods: GraphMethods, count: usize) {
@@ -3353,4 +3381,120 @@ mod serial_events {
     event_configs!(multicast, |m| event_with_companions(m, 2));
     event_configs!(transient, |m| event_with_transient(m, true));
     event_configs!(empty, |m| event_with_transient(m, false));
+}
+
+fn mark_interface_invoked(
+    graph: &mut Graph,
+    target: ObjectId,
+    arguments: &[Value],
+) -> std::io::Result<()> {
+    assert_eq!(arguments, [Value::Null]);
+    let Some(Object::Record { class, fields }) = graph.get_mut(target) else {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    };
+    assert_eq!(class, "ClassImplementingInterfaceForDelegate");
+    fields[0] = Value::Boolean(true);
+    Ok(())
+}
+
+fn invoke_bound_pair(
+    methods: GraphMethods,
+    graph: &mut Graph,
+    event_class: &str,
+    method_name: &str,
+    receiver: ObjectId,
+    companion: ObjectId,
+    arguments: &[Value],
+    callback: delegate::Callback,
+) -> Value {
+    let name = graph.insert(string(method_name));
+    let subscription = delegate::bind(graph, name, receiver);
+    let list = graph.insert(Object::Array(vec![subscription]));
+    let event = graph.insert(record(event_class, vec![Value::Ref(list)]));
+    let root = graph.insert(record(
+        "EventPair",
+        vec![Value::Ref(event), Value::Ref(companion)],
+    ));
+    let (reader, copy) = methods.clone(graph, root);
+    let mut restored = reader.finish_into_graph().unwrap();
+    let pair = fields(restored.get(copy).unwrap());
+    let event = reference(&pair[0]);
+    let companion = reference(&pair[1]);
+    let list = reference(&fields(restored.get(event).unwrap())[0]);
+    delegate::invoke(&mut restored, list, arguments, &[(method_name, callback)]).unwrap();
+    fields(restored.get(companion).unwrap())[0].clone()
+}
+
+fn external_method_delegate(methods: GraphMethods) {
+    let mut graph = Graph::default();
+    let companion = graph.insert(record("CompanionSecondModule", vec![Value::Integer(0)]));
+    let counter = invoke_bound_pair(
+        methods,
+        &mut graph,
+        "ClassWithEvent",
+        "CompanionExtensions.MethodAsExtension",
+        companion,
+        companion,
+        &[],
+        |graph, target, arguments| {
+            assert!(arguments.is_empty());
+            let Some(Object::Record { class, fields }) = graph.get_mut(target) else {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            };
+            assert_eq!(class, "CompanionSecondModule");
+            let Value::Integer(counter) = &mut fields[0] else {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            };
+            *counter += 1;
+            Ok(())
+        },
+    );
+    assert_eq!(counter, Value::Integer(1));
+}
+
+fn interface_delegate(methods: GraphMethods, lambda: bool) {
+    let mut graph = Graph::default();
+    let companion = graph.insert(record(
+        "ClassImplementingInterfaceForDelegate",
+        vec![Value::Boolean(false)],
+    ));
+    let invoked = if lambda {
+        let closure = graph.insert(record(
+            "LambdaForInterfaceMethod",
+            vec![Value::Ref(companion)],
+        ));
+        invoke_bound_pair(
+            methods,
+            &mut graph,
+            "ClassWithEvent",
+            "LambdaForInterfaceMethod.Invoke",
+            closure,
+            companion,
+            &[],
+            |graph, closure, arguments| {
+                assert!(arguments.is_empty());
+                let target = reference(&fields(graph.get(closure).unwrap())[0]);
+                mark_interface_invoked(graph, target, &[Value::Null])
+            },
+        )
+    } else {
+        invoke_bound_pair(
+            methods,
+            &mut graph,
+            "ClassWithEvent<IInterfaceForDelegate>",
+            "IInterfaceForDelegate.Method",
+            companion,
+            companion,
+            &[Value::Null],
+            mark_interface_invoked,
+        )
+    };
+    assert_eq!(invoked, Value::Boolean(true));
+}
+
+mod serial_bound_methods {
+    use super::*;
+    event_configs!(external, external_method_delegate);
+    event_configs!(interface, |m| interface_delegate(m, false));
+    event_configs!(lambda, |m| interface_delegate(m, true));
 }
