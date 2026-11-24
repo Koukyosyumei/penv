@@ -249,3 +249,63 @@ CLIC の `OnGPIO` と間接 CSR を元のレジスターバンクに接続した
 `target/robot-clic-final-sweep/clic-audit.json` に CLIC の全測定、
 `verdict-delta.json` に全ケースの判定差分がある。
 再配置を含むアセンブリーには `llvm-mc` と `ld.lld` が必要。
+
+## 既存機種の Robot 縦断対応
+
+基準は `target/robot-clic-final-sweep/results.json`。表示する母数は
+スイートパスに機種名または代表ボード名が含まれるケース。
+実行対象を絞るときも、元のスイート、入力、アサーションを使った。
+
+| 系統 | 変更前に確認した主な停止点 |
+| --- | --- |
+| STM32F072 | GPIO ボタン操作と、ボタンを保持する間のホスト Sleep |
+| STM32F407 | UART アナライザー、起動後の GPIO 配線、UART 正規表現のキャプチャグループ |
+| STM32H7 | 単一マシンの名前指定、タイマー周波数と RCC クロックゲート・リセット |
+| LiteX | UART テスターに既存の UART 出力が未接続 |
+| BeagleV | 先頭に連続する `@` を含むパス指定、RV64 UART テスター |
+| nRF52840 | UART テスター、経過時計の読み取り |
+
+`e1d7e13` は複数の UART バックエンドの実出力を Robot テスターに接続する。
+STM32 の GPIO 配線は既存の端子・信号を使い、正規表現のグループを
+Robot の上流アサーションに返す。単一マシンの作成と選択を既存経路に通す。
+
+`5448066` は H7 の既存 RCC 状態と実レジスター書き込みを公開し、
+F072 スイートのボタン保持中にゲスト時間を進める。
+`fecf28d` は RV64 の UART も同じテスターに接続する。
+`91c8bb7` は nRF のタイミングと UART 不在判定に実際の機種別クロックを使う。
+NUnit の discovery とケース実行は省略した。
+
+F072 のボタンと LED 保持、F407 の PWM・直交デコーダー・RTC アラーム、
+H7 の ADC DMA・暗号サンプル・RCC の3件、LiteX の Tock が元のアサーションに合格した。
+F407 の4チャネル PWM は観測周波数が許容範囲を外れた。
+BeagleV-StarLight は `SetGlobalSerialExecution` または外部 PMP の追加で止まった。
+BeagleV-Fire は OpenSBI、U-Boot、ボード名を実測し、後続のログイン前に
+Robot の制限時間に達した。証跡は
+`target/robot-board-sweep/suite-0181/robot.xml` と `case-0000/monitor.jsonl`。
+
+nRF52840 の集計ではタイムアウト中のリモート呼び出しに完了状態がなく、
+そのケース以降の記録が集計エラーで落ちた。残った Robot XML と
+個別モニターの実測から WFE、kernel.interrupt、CMSIS DSP の3件で
+元のアサーションの合格を確認した。
+`target/board-nrf-verified-pass.json` に別途記録し、元の全件結果を保存した。
+この3件は先行の代表実行 `target/robot-board-probes/results.json` でも PASS。
+
+最終の固定バイナリは `91c8bb7`。Robot を304スイート、2,197件、
+最大10並列で実行した。機種別の元の集計を下に示す。
+
+| 系統 | 件数 | 変更前 PASS | 実行報告の PASS | 代表的な測定 |
+| --- | ---: | ---: | ---: | --- |
+| STM32F072 | 6 | 5 | 6 | ボタンと LED 保持 |
+| STM32F407 | 13 | 5 | 8 | PWM、直交デコーダー、RTC |
+| STM32H7 | 40 | 11 | 16 | ADC DMA、暗号と RCC |
+| LiteX | 26 | 0 | 1 | Tock の D1/D2 UART 出力 |
+| BeagleV | 8 | 0 | 0 | Fire のブート途中まで |
+| nRF52840 | 18 | 0 | 1 | シェル。別照合でさらに3件 |
+
+全件の生の判定は213 PASS、20 FAIL、1,677 UNSUPPORTED、133 SKIP、
+154 NOT_RUN。前回の生の判定では200 PASSだった。
+差分と各機種のケースID別の停止点は
+`target/robot-board-sweep/verdict-delta.json` および `board-audit.json` にある。
+集計エラーを修正した `56acad4` は、未完了の時間切れと測定済みの合格を
+分ける小テストで検証した。上記の全件結果は修正前の生データである。
+UART の Rust テスト18件と H7 タイマーの Rust テスト3件も合格した。
