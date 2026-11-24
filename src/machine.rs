@@ -137,6 +137,7 @@ pub struct Machine {
     elapsed_steps: u64,
     monitor_clock_ns: u128,
     monitor_clock_step: u64,
+    boot_memory_cleared: bool,
     pub(crate) monitor_quantum: u64,
     cpu_paused: bool,
     cpu_halted: bool,
@@ -415,6 +416,7 @@ impl Machine {
             elapsed_steps: 0,
             monitor_clock_ns: 0,
             monitor_clock_step: 0,
+            boot_memory_cleared: false,
             monitor_quantum: 10_000, // 100 microseconds in 10 ns monitor units.
             cpu_paused: false,
             cpu_halted: false,
@@ -946,6 +948,9 @@ impl Machine {
 
     pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
         self.check_memory_snapshot()?;
+        if self.boot_memory_cleared {
+            return Err("Load a boot snapshot after Clear".into());
+        }
         (|| -> std::io::Result<()> {
             output.write_all(b"PENVBOOT\x02")?;
             output.write_all(&self.raw_load_address().to_le_bytes())?;
@@ -959,7 +964,13 @@ impl Machine {
     pub fn clear_memory_snapshot(&mut self) -> Result<(), String> {
         self.check_memory_snapshot()?;
         self.bus.clear_memory();
-        self.reset_cortex_m_machine()
+        self.bus.reset_cortex_m_machine_devices();
+        self.primary.thumb.as_mut().unwrap().reset_state();
+        self.primary.monitor_halted = false;
+        self.primary.registers.fill(0);
+        self.primary.pc = 0;
+        self.boot_memory_cleared = true;
+        Ok(())
     }
 
     pub fn load_memory_snapshot(&mut self, path: &Path) -> Result<(), String> {
@@ -1005,7 +1016,9 @@ impl Machine {
         let thumb = self.primary.thumb.as_mut().unwrap();
         thumb.set_vector_base(address);
         let Some(registers) = registers else {
-            return self.primary.reset_cortex_m(&mut self.bus);
+            self.primary.reset_cortex_m(&mut self.bus)?;
+            self.boot_memory_cleared = false;
+            return Ok(());
         };
         thumb.reset_state();
         if let Some(nvic) = self.bus.nvic.as_mut() {
@@ -1016,6 +1029,7 @@ impl Machine {
         self.primary.registers.fill(0);
         self.primary.registers[..15].copy_from_slice(&registers[..15]);
         self.primary.pc = registers[15];
+        self.boot_memory_cleared = false;
         Ok(())
     }
 
@@ -1494,6 +1508,9 @@ impl Machine {
         output: &mut W,
         matched: impl Fn(&Bus, &W) -> bool,
     ) -> Result<(Stop, u64), String> {
+        if self.boot_memory_cleared {
+            return Err("Load a boot snapshot after Clear".into());
+        }
         let all_harts = ((1u16 << self.hart_count()) - 1) as u8;
         let stop_when_halted = self.stop_when_halted && selected.is_none();
         if stop_when_halted && self.halted == all_harts {
@@ -2972,6 +2989,35 @@ mod tests {
             machine.bus.read::<4>(0xe000e018).unwrap(),
             machine.bus.read::<4>(0xe0001004).unwrap(),
         )
+    }
+
+    #[test]
+    fn boot_snapshot_restores_registers_only_after_validating_memory() {
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(0, 4096).unwrap();
+        machine.primary.configure_cortex_m(Some(0), false);
+        machine.primary.pc = 0x102;
+        machine.primary.registers[0] = 42;
+        machine.bus.write(0x200, 4, 7, &mut std::io::sink()).unwrap();
+        let mut snapshot = Vec::new();
+        machine.write_boot_snapshot(&mut snapshot).unwrap();
+
+        machine.primary.pc = 0x104;
+        machine.primary.registers[0] = 84;
+        machine.bus.write(0x200, 4, 8, &mut std::io::sink()).unwrap();
+        let mut truncated = &snapshot[..snapshot.len() - 1];
+        assert!(machine.read_boot_snapshot(&mut truncated).is_err());
+        assert_eq!(machine.primary.pc, 0x104);
+        assert_eq!(machine.primary.registers[0], 84);
+        assert_eq!(machine.bus.read_ram::<4>(0x200).unwrap(), 8);
+
+        machine.clear_memory_snapshot().unwrap();
+        assert_eq!(machine.bus.read_ram::<4>(0x200).unwrap(), 0);
+        assert!(machine.run(1, &mut std::io::sink()).is_err());
+        machine.read_boot_snapshot(&mut snapshot.as_slice()).unwrap();
+        assert_eq!(machine.primary.pc, 0x102);
+        assert_eq!(machine.primary.registers[0], 42);
+        assert_eq!(machine.bus.read_ram::<4>(0x200).unwrap(), 7);
     }
 
     #[test]
