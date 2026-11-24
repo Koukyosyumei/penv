@@ -651,3 +651,20 @@ cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
         creation::TwoState::One
     );
 }
+
+#[test]
+fn should_handle_multiple_escaped_multiline_string_signs_in_one_line() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is \''' \''' \''' \'''
+not a single line '''"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("this is ''' ''' ''' '''\nnot a single line ")
+    );
+}
