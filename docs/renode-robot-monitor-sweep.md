@@ -1220,3 +1220,17 @@ Rust モニターテスト22件と CLI スナップショット回帰テスト�
 （`target/monitor-mach-clear-robot/results.json`）。
 起動前検証の変更単体では全256バイトのUARTケースも合格した
 （`target/monitor-mach-selection-robot/results.json`）。
+
+`c28d7ce` は RESC のスナップショット操作以降にある `mach set` と
+`sysbus` の操作を実行時の選択状態と変数で解決する。
+固定 Renode と通常 CLI で、選択を解除して保存し、再選択した場合と、
+復元後に再選択した場合の両方で同じ `0x00000000` を読み出した。
+penv の負例は、選択を解除したスナップショットを復元し、再選択なしで
+`sysbus` を呼ぶと終了コード 1 になることを確認した
+（`target/monitor-selection-ordered-proof/`）。
+Rust モニターテスト22件と起動前メモリ保存・復元の CLI テストが合格。
+
+固定 Renode でも同じ解除状態を Load した後、再選択なしの `sysbus`
+を拒否した（`target/monitor-selection-cleared-negative/renode.jsonl`）。
+未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
+残り2,193件は未実行（`target/monitor-selection-ordered-robot/results.json`）。
