@@ -1096,10 +1096,12 @@ impl Machine {
 
     pub fn pause_cpu(&mut self) {
         self.cpu_paused = true;
+        self.bus.pause_registered_peripherals();
     }
 
     pub fn resume_cpu(&mut self) {
         self.cpu_paused = false;
+        self.bus.start_registered_peripherals();
     }
 
     pub fn set_cpu_halted(&mut self, halted: bool) {

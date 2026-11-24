@@ -16,6 +16,10 @@ impl Bus {
     pub fn is_peripheral_registered(&self, peripheral: &PeripheralHandle) -> bool {
         self.is_translated_peripheral_registered(peripheral)
             || self
+                .registered_cpu_identities
+                .iter()
+                .any(|cpu| &cpu.handle == peripheral)
+            || self
                 .translated_children
                 .iter()
                 .any(|(_, child)| child == peripheral)

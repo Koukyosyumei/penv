@@ -1,3 +1,6 @@
+#[path = "bus_cpu_registration.rs"]
+mod cpu_registration;
+pub use cpu_registration::CpuRegistrationPoint;
 #[path = "bus_children.rs"]
 mod children;
 pub use children::NULL_REGISTRATION_POINT;
@@ -348,6 +351,14 @@ struct NrfGpioConnector {
     led: Weak<RefCell<GpioLed>>,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum PeripheralRunState {
+    #[default]
+    Cold,
+    Running,
+    Paused,
+}
+
 #[derive(Default)]
 pub struct Bus {
     #[cfg(test)]
@@ -373,6 +384,8 @@ pub struct Bus {
     rv64_reservations: [Option<Reservation64>; crate::machine::MAX_HARTS],
     constant_mmio: Vec<ConstantMmio>,
     translated_peripherals: Vec<crate::bus_translation::Registration>,
+    registered_cpu_identities: Vec<cpu_registration::RegisteredCpu>,
+    registered_peripheral_state: PeripheralRunState,
     translated_children: Vec<(crate::bus_translation::PeripheralHandle, crate::bus_translation::PeripheralHandle)>,
     translated_peripheral_groups: std::collections::BTreeMap<String, Vec<crate::bus_translation::PeripheralHandle>>,
     translations_enabled: bool,
@@ -1348,7 +1361,11 @@ impl Bus {
                 return Err("invalid or overlapping translated peripheral port".into());
             }
         }
-        self.translated_peripherals.push(crate::bus_translation::Registration::new(handle.clone(), ports, peripheral));
+        let mut device = crate::bus_translation::Registration::new(handle.clone(), ports, peripheral);
+        if self.registered_peripheral_state == PeripheralRunState::Running {
+            device.start();
+        }
+        self.translated_peripherals.push(device);
         Ok(())
     }
 
@@ -1407,6 +1424,28 @@ impl Bus {
             self.remove_translated_children(handle);
         }
         Ok(())
+    }
+
+    pub(crate) fn pause_registered_peripherals(&mut self) {
+        if self.registered_peripheral_state == PeripheralRunState::Running {
+            self.registered_peripheral_state = PeripheralRunState::Paused;
+            for device in &mut self.translated_peripherals {
+                device.pause();
+            }
+        }
+    }
+
+    pub(crate) fn start_registered_peripherals(&mut self) {
+        let old = std::mem::replace(&mut self.registered_peripheral_state, PeripheralRunState::Running);
+        match old {
+            PeripheralRunState::Cold => {
+                for device in &mut self.translated_peripherals { device.start(); }
+            }
+            PeripheralRunState::Paused => {
+                for device in &mut self.translated_peripherals { device.resume(); }
+            }
+            PeripheralRunState::Running => {}
+        }
     }
 
     pub fn enable_all_translations(&mut self, enabled: bool) {

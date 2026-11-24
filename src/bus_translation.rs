@@ -23,11 +23,17 @@ pub enum RegistrationError {
     GroupNotFound,
     ContainerOccupied,
     AlreadyRegistered,
+    MissingCpuRegistrationPoint,
+    CpuSlotOccupied,
 }
 
 pub trait NativePeripheral {
     fn read(&mut self, region: Option<&str>, offset: u64) -> u64;
     fn write(&mut self, region: Option<&str>, offset: u64, value: u64);
+    fn start(&mut self) {}
+    fn pause(&mut self) {}
+    fn resume(&mut self) {}
+
     fn read_width(&mut self, region: Option<&str>, offset: u64, _width: Width) -> u64 {
         self.read(region, offset)
     }
@@ -63,6 +69,18 @@ impl Registration {
             widths,
             peripheral,
         }
+    }
+
+    pub fn start(&mut self) {
+        self.peripheral.start();
+    }
+
+    pub fn pause(&mut self) {
+        self.peripheral.pause();
+    }
+
+    pub fn resume(&mut self) {
+        self.peripheral.resume();
     }
 
     pub fn remove_port(&mut self, address: u32) {

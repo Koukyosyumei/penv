@@ -229,3 +229,78 @@ fn should_register_parametrized_peripheral() {
         ],
     );
 }
+
+#[test]
+fn should_fail_to_register_non_clustered_cpu_on_null() {
+    use crate::bus_translation::RegistrationError;
+    let mut machine = Machine::without_default_ram();
+    let cpu = PeripheralHandle::default();
+    assert_eq!(
+        machine.bus.register_cpu_identity(&cpu, "empty", None),
+        Err(RegistrationError::MissingCpuRegistrationPoint)
+    );
+    assert!(!machine.bus.is_peripheral_registered(&cpu));
+}
+
+#[test]
+fn should_pause_and_resume_only_once() {
+    use crate::bus::CpuRegistrationPoint;
+    use std::cell::Cell;
+
+    struct LifecycleMock(Rc<Cell<[usize; 3]>>);
+
+    impl LifecycleMock {
+        fn count(&self, index: usize) {
+            let mut counters = self.0.get();
+            counters[index] += 1;
+            self.0.set(counters);
+        }
+    }
+
+    impl NativePeripheral for LifecycleMock {
+        fn read(&mut self, _: Option<&str>, _: u64) -> u64 {
+            0
+        }
+        fn write(&mut self, _: Option<&str>, _: u64, _: u64) {}
+        fn start(&mut self) {
+            self.count(0);
+        }
+        fn pause(&mut self) {
+            self.count(1);
+        }
+        fn resume(&mut self) {
+            self.count(2);
+        }
+    }
+
+    let mut machine = Machine::without_default_ram();
+    let calls = Rc::new(Cell::new([0; 3]));
+    machine
+        .bus
+        .map_translated_peripheral(
+            vec![Port {
+                base: 0,
+                length: 101,
+                region: None,
+            }],
+            Width::DoubleWord,
+            Box::new(LifecycleMock(Rc::clone(&calls))),
+        )
+        .unwrap();
+    let cpu = PeripheralHandle::default();
+    let slot = machine
+        .bus
+        .register_cpu_identity(&cpu, "mock", Some(CpuRegistrationPoint::default()))
+        .unwrap();
+    assert_eq!(machine.bus.registered_cpu_architecture(slot), Some("mock"));
+
+    machine.resume_cpu();
+    for _ in 0..5 {
+        machine.pause_cpu();
+    }
+    assert_eq!(calls.get()[1], 1);
+    for _ in 0..5 {
+        machine.resume_cpu();
+    }
+    assert_eq!(calls.get()[2], 1);
+}
