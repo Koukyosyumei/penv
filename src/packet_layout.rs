@@ -27,8 +27,11 @@ pub enum FieldKind {
     },
 }
 
+pub type Presence = fn(&[Decoded]) -> bool;
+
 pub struct Layout {
     pub order: ByteOrder,
+    pub conditions: &'static [(usize, Presence)],
     pub fields: &'static [Field],
 }
 
@@ -39,6 +42,7 @@ pub enum Decoded {
     Nested(Vec<Decoded>),
     Elements(Vec<u64>),
     NullBytes,
+    Absent,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -54,11 +58,11 @@ pub enum DecodeError {
 impl Layout {
     fn visit(
         &self,
-        mut f: impl FnMut(usize, usize, FieldKind) -> Result<(), DecodeError>,
+        mut f: impl FnMut(usize, usize, usize, FieldKind) -> Result<Option<usize>, DecodeError>,
     ) -> Result<usize, DecodeError> {
         let mut cursor = 0;
         let mut size = 0;
-        for field in self.fields {
+        for (index, field) in self.fields.iter().enumerate() {
             let mut offset = field
                 .offset
                 .unwrap_or(cursor)
@@ -97,17 +101,19 @@ impl Layout {
                     .checked_mul(8)
                     .ok_or(DecodeError::LayoutOverflow)?,
             };
+            let Some(width) = f(index, offset, width, field.kind)? else {
+                continue;
+            };
             cursor = offset
                 .checked_add(width)
                 .ok_or(DecodeError::LayoutOverflow)?;
             size = size.max(cursor);
-            f(offset, width, field.kind)?;
         }
         Ok(size.div_ceil(8))
     }
 
     pub fn byte_len(&self) -> Result<usize, DecodeError> {
-        self.visit(|_, _, _| Ok(()))
+        self.visit(|_, _, width, _| Ok(Some(width)))
     }
 
     pub fn decode_at(&self, data: &[u8], offset: isize) -> Result<Vec<Decoded>, DecodeError> {
@@ -151,14 +157,73 @@ impl Layout {
         });
     }
 
-    pub fn encode(&self, values: &[Decoded]) -> Result<Vec<u8>, DecodeError> {
+    fn present(&self, index: usize, earlier: &[Decoded]) -> bool {
+        self.conditions
+            .iter()
+            .filter(|(field, _)| *field == index)
+            .all(|(_, condition)| condition(earlier))
+    }
+
+    fn present_width(
+        &self,
+        index: usize,
+        width: usize,
+        kind: FieldKind,
+        values: &[Decoded],
+    ) -> Result<Option<usize>, DecodeError> {
+        if !self.present(index, &values[..index]) {
+            return Ok(None);
+        }
+        if let FieldKind::Nested(layout) = kind {
+            let Decoded::Nested(fields) = &values[index] else {
+                return Err(DecodeError::InvalidValue);
+            };
+            return layout
+                .encoded_len(fields)?
+                .checked_mul(8)
+                .map(Some)
+                .ok_or(DecodeError::LayoutOverflow);
+        }
+        Ok(Some(width))
+    }
+
+    pub fn encoded_len(&self, values: &[Decoded]) -> Result<usize, DecodeError> {
         if values.len() != self.fields.len() {
             return Err(DecodeError::InvalidValue);
         }
-        let mut data = vec![0; self.byte_len()?];
-        let mut values = values.iter();
-        self.visit(|offset, width, kind| {
-            let value = values.next().unwrap();
+        self.visit(|index, _, width, kind| self.present_width(index, width, kind, values))
+    }
+
+    pub fn field_offset(
+        &self,
+        target: usize,
+        values: Option<&[Decoded]>,
+    ) -> Result<Option<usize>, DecodeError> {
+        if values.is_some_and(|values| values.len() != self.fields.len()) {
+            return Err(DecodeError::InvalidValue);
+        }
+        let mut result = None;
+        self.visit(|index, offset, width, kind| {
+            let width = if let Some(values) = values {
+                self.present_width(index, width, kind, values)?
+            } else {
+                Some(width)
+            };
+            if index == target && width.is_some() {
+                result = Some(offset / 8);
+            }
+            Ok(width)
+        })?;
+        Ok(result)
+    }
+
+    pub fn encode(&self, values: &[Decoded]) -> Result<Vec<u8>, DecodeError> {
+        let mut data = vec![0; self.encoded_len(values)?];
+        self.visit(|index, offset, width, kind| {
+            let Some(width) = self.present_width(index, width, kind, values)? else {
+                return Ok(None);
+            };
+            let value = &values[index];
             match (kind, value) {
                 (FieldKind::Scalar { .. }, Decoded::Scalar(value)) => {
                     if width == 0 && offset != 0 && offset / 8 >= data.len() {
@@ -189,17 +254,31 @@ impl Layout {
                 }
                 _ => return Err(DecodeError::InvalidValue),
             }
-            Ok(())
+            Ok(Some(width))
         })?;
         Ok(data)
     }
 
     pub fn decode(&self, data: &[u8]) -> Result<Vec<Decoded>, DecodeError> {
-        if data.len() < self.byte_len()? {
-            return Err(DecodeError::InsufficientData);
-        }
+        self.decode_with_length(data).map(|(values, _)| values)
+    }
+
+    fn decode_with_length(&self, data: &[u8]) -> Result<(Vec<Decoded>, usize), DecodeError> {
         let mut result = Vec::new();
-        self.visit(|offset, width, kind| {
+        let length = self.visit(|index, offset, width, kind| {
+            if !self.present(index, &result) {
+                result.push(Decoded::Absent);
+                return Ok(None);
+            }
+            if !matches!(kind, FieldKind::Nested(_))
+                && offset
+                    .checked_add(width)
+                    .ok_or(DecodeError::LayoutOverflow)?
+                    .div_ceil(8)
+                    > data.len()
+            {
+                return Err(DecodeError::InsufficientData);
+            }
             let value = match kind {
                 FieldKind::Scalar { .. } => Decoded::Scalar(self.read_scalar(data, offset, width)),
                 _ if offset % 8 != 0 => return Err(DecodeError::Unaligned),
@@ -218,11 +297,21 @@ impl Layout {
                 FieldKind::Bytes(bytes) => {
                     Decoded::Bytes(data[offset / 8..offset / 8 + bytes].to_vec())
                 }
-                FieldKind::Nested(layout) => Decoded::Nested(layout.decode(&data[offset / 8..])?),
+                FieldKind::Nested(layout) => {
+                    let remaining = data
+                        .get(offset / 8..)
+                        .ok_or(DecodeError::InsufficientData)?;
+                    let (fields, length) = layout.decode_with_length(remaining)?;
+                    result.push(Decoded::Nested(fields));
+                    return length
+                        .checked_mul(8)
+                        .map(Some)
+                        .ok_or(DecodeError::LayoutOverflow);
+                }
             };
             result.push(value);
-            Ok(())
+            Ok(Some(width))
         })?;
-        Ok(result)
+        Ok((result, length))
     }
 }

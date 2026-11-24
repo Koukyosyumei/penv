@@ -1091,3 +1091,10 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestWidthInElementsErrors	upstream_nunit::packet_layout::test_width_in_elements_errors	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestPaddingBefore	upstream_nunit::packet_layout::test_padding_before	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestAlignment	upstream_nunit::packet_layout::test_alignment	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestPresentIf	upstream_nunit::packet_layout::test_present_if	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestMultiargumentPresentIfMethod	upstream_nunit::packet_layout::test_multiargument_present_if_method	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestPresentIfBitfield	upstream_nunit::packet_layout::test_present_if_bitfield	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestCalculateLengthWithOptionalFields	upstream_nunit::packet_layout::test_calculate_length_with_optional_fields	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestCalculateOffsetWithOptionalFields	upstream_nunit::packet_layout::test_calculate_offset_with_optional_fields	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestNestedStructWithOptionalFields	upstream_nunit::packet_layout::test_nested_struct_with_optional_fields	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestSerializingReadOnlyProperties	upstream_nunit::packet_layout::test_serializing_read_only_properties	new

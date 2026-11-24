@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,089 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,096 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,307 |
+| 移植待ち | 2,300 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 34 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 33 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -199,3 +199,10 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 
 - [サロゲートの公式 ID](nunit-evidence/targeted-migrant-surrogate-order.tsv)と[実行ログ](nunit-evidence/targeted-migrant-surrogate-order.log)
 - [Packet の公式 ID](nunit-evidence/targeted-packet-layout.tsv)と[実行ログ](nunit-evidence/targeted-packet-layout.log)
+
+## PacketTests の残り14件
+
+静的レイアウトのエンコード、開始オフセット、配列要素幅、パディング、アラインメントを検証した。続いて先行フィールドで決まる条件付きフィールド、実行時の長さとオフセット、入れ子、読み取り専用プロパティを移植し、公式 discovery の18件すべてが対象実行で合格した。C# の公開メソッド TestDecodeInto には NUnit 属性がなく、公式インベントリに含まれない。
+
+- [エンコード等の公式 ID](nunit-evidence/targeted-packet-encode.tsv)と[実行ログ](nunit-evidence/targeted-packet-encode.log)
+- [条件付きフィールド等の公式 ID](nunit-evidence/targeted-packet-conditions.tsv)と[18件の実行ログ](nunit-evidence/targeted-packet-conditions.log)

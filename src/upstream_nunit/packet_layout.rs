@@ -34,6 +34,7 @@ const fn nested(layout: &'static Layout) -> Field {
 const fn little(fields: &'static [Field]) -> Layout {
     Layout {
         order: Little,
+        conditions: &[],
         fields,
     }
 }
@@ -77,19 +78,23 @@ const ENDIAN_FIELDS: &[Field] = &[
 const LSB: Layout = little(ENDIAN_FIELDS);
 const MSB: Layout = Layout {
     order: Big,
+    conditions: &[],
     fields: ENDIAN_FIELDS,
 };
 const ONE_BIT: Layout = little(&[at(63, 1, 1)]);
 const INNER_B: Layout = Layout {
     order: Big,
+    conditions: &[],
     fields: &[next(16)],
 };
 const INNER_A: Layout = Layout {
     order: Big,
+    conditions: &[],
     fields: &[nested(&INNER_B), next(32)],
 };
 const NESTED: Layout = Layout {
     order: Big,
+    conditions: &[],
     fields: &[next(64), nested(&INNER_A), nested(&INNER_A)],
 };
 const NO_PACKET: Layout = little(&[]);
@@ -263,6 +268,7 @@ fn test_encode() {
     const ENUMS: Layout = little(&[next(8), next(8), next(32), scalar(None, 8, 32)]);
     const NULLABLE_BYTES: Layout = Layout {
         order: Big,
+        conditions: &[],
         fields: &[Field {
             kind: FieldKind::Bytes(2),
             ..ARRAY.fields[0]
@@ -389,4 +395,171 @@ fn test_alignment() {
         u32::from_le_bytes(encoded[4..8].try_into().unwrap()),
         0x11223344
     );
+}
+
+fn scalar_value(value: &Decoded) -> u64 {
+    match value {
+        Scalar(value) => *value,
+        Decoded::Absent => 0,
+        _ => panic!("expected scalar"),
+    }
+}
+
+fn flag(fields: &[Decoded]) -> bool {
+    scalar_value(&fields[0]) != 0
+}
+
+const OPTIONAL: Layout = Layout {
+    conditions: &[(1, flag)],
+    ..little(&[next(8), next(32)])
+};
+
+const MASKED: Layout = Layout {
+    conditions: &[
+        (1, |fields| scalar_value(&fields[0]) & 1 != 0),
+        (2, |fields| scalar_value(&fields[0]) & 2 != 0),
+    ],
+    ..little(&[next(8), next(8), next(8)])
+};
+
+#[test]
+fn test_present_if() {
+    let data_true = [1, 0xaa, 0xbb, 0xcc, 0xdd];
+    let data_false = [0, 0x12, 0x34, 0x56, 0x78];
+    let present = OPTIONAL.decode(&data_true).unwrap();
+    assert!(flag(&present));
+    assert_eq!(scalar_value(&present[1]), 0xddccbbaa);
+    let absent = OPTIONAL.decode(&data_false).unwrap();
+    assert!(!flag(&absent));
+    assert_eq!(scalar_value(&absent[1]), 0);
+    assert_eq!(OPTIONAL.encode(&present).unwrap(), data_true);
+    assert_eq!(OPTIONAL.encode(&absent).unwrap(), [0]);
+}
+
+#[test]
+fn test_multiargument_present_if_method() {
+    fn has(fields: &[Decoded], expected: u64) -> bool {
+        fields[..3]
+            .iter()
+            .any(|field| scalar_value(field) == expected)
+    }
+
+    const MULTI: Layout = Layout {
+        order: Big,
+        conditions: &[
+            (3, |fields| has(fields, 1) ^ has(fields, 2)),
+            (4, |fields| has(fields, 3) && has(fields, 4)),
+        ],
+        ..little(&[next(8), next(8), next(8), next(8), next(8)])
+    };
+
+    use Decoded::Absent;
+    for (data, expected) in [
+        (&[0, 1, 2][..], [Absent, Absent]),
+        (&[0, 0, 1, 1][..], [Scalar(1), Absent]),
+        (&[0, 3, 4, 1][..], [Absent, Scalar(1)]),
+        (&[1, 3, 4, 1, 2][..], [Scalar(1), Scalar(2)]),
+    ] {
+        assert_eq!(MULTI.decode(data).unwrap()[3..], expected);
+    }
+}
+
+#[test]
+fn test_present_if_bitfield() {
+    use Decoded::Absent;
+    for (data, mask, expected_a, expected_b) in [
+        (&[0, 0xaa][..], 0, 0, Absent),
+        (&[1, 0xaa][..], 1, 0xaa, Absent),
+        (&[2, 0xbb][..], 2, 0, Scalar(0xbb)),
+        (&[3, 0xaa, 0xbb][..], 3, 0xaa, Scalar(0xbb)),
+    ] {
+        let decoded = MASKED.decode(data).unwrap();
+        assert_eq!(decoded[0], Scalar(mask));
+        assert_eq!(scalar_value(&decoded[1]), expected_a);
+        assert_eq!(decoded[2], expected_b);
+        if mask != 0 {
+            assert_eq!(MASKED.encode(&decoded).unwrap(), data);
+        }
+    }
+}
+
+#[test]
+fn test_calculate_length_with_optional_fields() {
+    use Decoded::Absent;
+    assert_eq!(OPTIONAL.byte_len().unwrap(), 5);
+    assert_eq!(
+        OPTIONAL
+            .encoded_len(&[Scalar(1), Scalar(0x12345678)])
+            .unwrap(),
+        5
+    );
+    assert_eq!(OPTIONAL.encoded_len(&[Scalar(0), Scalar(0)]).unwrap(), 1);
+    assert_eq!(MASKED.byte_len().unwrap(), 3);
+    for (mask, expected) in [(0, 1), (1, 2), (2, 2), (3, 3)] {
+        assert_eq!(
+            MASKED
+                .encoded_len(&[Scalar(mask), Scalar(0), Absent])
+                .unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn test_calculate_offset_with_optional_fields() {
+    const GAP: Layout = Layout {
+        conditions: &[(1, flag)],
+        ..little(&[next(8), next(8), next(8)])
+    };
+    let off = [Scalar(0), Scalar(0), Scalar(0)];
+    let on = [Scalar(1), Scalar(0), Scalar(0)];
+    for (fields, expected) in [
+        (None, [Some(0), Some(1), Some(2)]),
+        (Some(&off[..]), [Some(0), None, Some(1)]),
+        (Some(&on[..]), [Some(0), Some(1), Some(2)]),
+    ] {
+        for (field, offset) in expected.into_iter().enumerate() {
+            assert_eq!(GAP.field_offset(field, fields).unwrap(), offset);
+        }
+    }
+}
+
+#[test]
+fn test_nested_struct_with_optional_fields() {
+    const PARENT: Layout = little(&[nested(&OPTIONAL), next(8)]);
+    for (data, has_flag, expected_value, after) in [
+        (&[0x00, 0x11][..], false, 0, 0x11),
+        (
+            &[0x01, 0x44, 0x33, 0x22, 0x11, 0x55][..],
+            true,
+            0x11223344,
+            0x55,
+        ),
+    ] {
+        let parent = PARENT.decode(data).unwrap();
+        let Nested(fields) = &parent[0] else {
+            panic!("expected nested packet")
+        };
+        assert_eq!(flag(fields), has_flag);
+        assert_eq!(scalar_value(&fields[1]), expected_value);
+        assert_eq!(parent[1], Scalar(after));
+    }
+}
+
+#[test]
+fn test_serializing_read_only_properties() {
+    struct ReadOnly;
+    impl ReadOnly {
+        fn value(&self) -> u8 {
+            0xaa
+        }
+    }
+    const PROPERTY: Layout = Layout {
+        order: Little,
+        conditions: &[],
+        fields: &[next(8)],
+    };
+    let data = ReadOnly;
+    let encoded = PROPERTY.encode(&[Scalar(data.value().into())]).unwrap();
+    assert_eq!(data.value(), encoded[0]);
 }
