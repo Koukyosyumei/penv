@@ -2,5 +2,5 @@ fixture	missing_api
 Antmicro.Renode.MonitorTests.FeaturesTests	The remaining case requires compiling and loading a C# extension and discovering its methods at runtime.
 Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	The remaining case requires two Cortex-M cores with distinct CPU-scoped NVIC registrations at the same address; the production Cortex-M loader supports a single core and NVIC.
 Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The remaining case needs whole-machine cloning that preserves the live Python scope and SystemBus registration independently of peripheral size.
-Antmicro.Renode.UnitTests.SerializationTests	The remaining cases need whole-machine CPU registration and local-name restoration (five) and GPIO graph serialization with shared receiver identity and latched inputs (one).
+Antmicro.Renode.UnitTests.SerializationTests	The remaining five cases require restoring the Machine SystemBus CPU registration slots, CPU identity and the relationship between each mock CPU placeholder and its machine-local name.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.

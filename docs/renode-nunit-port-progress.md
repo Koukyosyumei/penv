@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,384 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,385 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 11 |
+| 移植待ち | 10 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -549,3 +549,8 @@ SerializationTests の MappedMemory 単体ケースを移植した。128 MiB の
 100 KiB の非重複バッファー30個を書き込み、LZ4 圧縮したストリームから復元して全バイトを比較した。
 Rust 側では既存の固定シード乱数器を使用した。対象実行は1件合格、0件失敗。
 [公式 ID 別の結果](nunit-evidence/targeted-emulation-mapped-memory.tsv) · [対象実行ログ](nunit-evidence/targeted-emulation-mapped-memory.log)
+
+SerializationTests の GPIO ケースを追加した。既存の GPIO 経路と Migrant の
+参照付きストリームを使い、共有レシーバー、接続順、入力と出力の状態、復元後の接続を確認した。
+対象実行では MappedMemory と合わせて2件合格、0件失敗。
+[追加ケースの公式 ID 別結果](nunit-evidence/targeted-emulation-gpio.tsv) · [対象実行ログ](nunit-evidence/targeted-emulation-gpio.log)

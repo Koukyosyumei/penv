@@ -44,7 +44,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RegistersTests	34	34	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SVDParserTests	38	38	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializableMappedSegmentTests	2	2	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests	7	1	0	6	0	The remaining cases need whole-machine CPU registration and local-name restoration (five) and GPIO graph serialization with shared receiver identity and latched inputs (one).
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests	7	2	0	5	0	The remaining five cases require restoring the Machine SystemBus CPU registration slots, CPU identity and the relationship between each mock CPU placeholder and its machine-local name.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.StorageTests	1	1	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.DeduplicationTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.ElfMergeTests	19	19	0	0	0	-
