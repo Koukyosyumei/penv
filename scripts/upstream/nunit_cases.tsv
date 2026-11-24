@@ -761,3 +761,11 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerialize4DArrayWithPrimitives	upstream_nunit::migrant_object_stream::four_dimensional_array_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeTwodimensionalArrayWithPrimitives	upstream_nunit::migrant_object_stream::rectangular_primitives_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeTwodimensionalArrayWithStrings	upstream_nunit::migrant_object_stream::rectangular_strings_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeBoxWithLazyScan	upstream_nunit::migrant_object_stream::box_with_lazy_scan_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeBoxWithLong	upstream_nunit::migrant_object_stream::box_with_long_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeFieldWithDifferentFormalAndActualType	upstream_nunit::migrant_object_stream::field_actual_type_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeTuple	upstream_nunit::migrant_object_stream::string_tuple_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeBoxWithLazyScan	upstream_nunit::migrant_object_stream::box_with_lazy_scan_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeBoxWithLong	upstream_nunit::migrant_object_stream::box_with_long_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeFieldWithDifferentFormalAndActualType	upstream_nunit::migrant_object_stream::field_actual_type_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeTuple	upstream_nunit::migrant_object_stream::string_tuple_stamped	new

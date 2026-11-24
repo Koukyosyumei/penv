@@ -17,6 +17,19 @@ const fn stamp(
 
 const STAMPS: &[TypeStamp<'static>] = &[
     stamp("System.Object", &[]),
+    stamp("Box", &[("<Element>k__BackingField", FieldKind::Reference)]),
+    stamp(
+        "GenericBox<long>",
+        &[("<Element>k__BackingField", FieldKind::Integer)],
+    ),
+    stamp(
+        "Tuple<string,string,string>",
+        &[
+            ("m_Item1", FieldKind::Reference),
+            ("m_Item2", FieldKind::Reference),
+            ("m_Item3", FieldKind::Reference),
+        ],
+    ),
     stamp(
         "SimpleClass",
         &[
@@ -507,7 +520,7 @@ fn mixed_array(stamped: bool) {
     assert_ne!(reference(&values[3]), reference(&values[4]));
 }
 
-macro_rules! array_modes {
+macro_rules! stamp_modes {
     ($plain:ident, $stamped:ident, $check:ident) => {
         #[test]
         fn $plain() {
@@ -520,13 +533,13 @@ macro_rules! array_modes {
     };
 }
 
-array_modes!(
+stamp_modes!(
     primitives_array_plain,
     primitives_array_stamped,
     primitives_array
 );
-array_modes!(strings_array_plain, strings_array_stamped, strings_array);
-array_modes!(mixed_array_plain, mixed_array_stamped, mixed_array);
+stamp_modes!(strings_array_plain, strings_array_stamped, strings_array);
+stamp_modes!(mixed_array_plain, mixed_array_stamped, mixed_array);
 
 fn weak_open_stream(
     graph: &Graph,
@@ -668,18 +681,78 @@ fn four_dimensional_array(stamped: bool) {
     assert_eq!(reader.graph().get(copy), Some(&array));
 }
 
-array_modes!(
+stamp_modes!(
     rectangular_primitives_plain,
     rectangular_primitives_stamped,
     rectangular_primitives
 );
-array_modes!(
+stamp_modes!(
     rectangular_strings_plain,
     rectangular_strings_stamped,
     rectangular_strings
 );
-array_modes!(
+stamp_modes!(
     four_dimensional_array_plain,
     four_dimensional_array_stamped,
     four_dimensional_array
 );
+
+fn box_with_lazy_scan(stamped: bool) {
+    let mut graph = Graph::default();
+    let text = graph.insert(string("Something"));
+    let root = graph.insert(record("Box", vec![Value::Ref(text)]));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let field = &fields(reader.graph().get(copy).unwrap())[0];
+    assert_eq!(reader.graph().get(reference(field)), graph.get(text));
+}
+
+fn field_with_different_formal_and_actual_type(stamped: bool) {
+    let mut graph = Graph::default();
+    let inner = graph.insert(record("Box", vec![Value::Null]));
+    let root = graph.insert(record("Box", vec![Value::Ref(inner)]));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let field = &fields(reader.graph().get(copy).unwrap())[0];
+    let Some(Object::Record { class, .. }) = reader.graph().get(reference(field)) else {
+        panic!("expected the concrete record type");
+    };
+    assert_eq!(class, "Box");
+}
+
+fn box_with_long(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("GenericBox<long>", vec![Value::Integer(1234)]));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(
+        fields(reader.graph().get(copy).unwrap())[0],
+        fields(graph.get(root).unwrap())[0]
+    );
+}
+
+fn string_tuple(stamped: bool) {
+    let mut graph = Graph::default();
+    let contents = ["One", "Two", "Three"];
+    let ids = contents.map(|text| Value::Ref(graph.insert(string(text))));
+    let root = graph.insert(record("Tuple<string,string,string>", ids.to_vec()));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let Some(Object::Record { class, fields }) = reader.graph().get(copy) else {
+        panic!("expected a tuple");
+    };
+    assert_eq!(class, "Tuple<string,string,string>");
+    assert_eq!(fields.len(), contents.len());
+    for (field, content) in fields.iter().zip(contents) {
+        assert_eq!(reader.graph().get(reference(field)), Some(&string(content)));
+    }
+}
+
+stamp_modes!(
+    box_with_lazy_scan_plain,
+    box_with_lazy_scan_stamped,
+    box_with_lazy_scan
+);
+stamp_modes!(
+    field_actual_type_plain,
+    field_actual_type_stamped,
+    field_with_different_formal_and_actual_type
+);
+stamp_modes!(box_with_long_plain, box_with_long_stamped, box_with_long);
+stamp_modes!(string_tuple_plain, string_tuple_stamped, string_tuple);
