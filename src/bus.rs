@@ -447,6 +447,7 @@ pub struct Bus {
     default_uart_timeout: Option<u64>,
     default_uart_echo: Option<bool>,
     default_uart_next_line: bool,
+    pub(crate) default_uart_pause: bool,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,

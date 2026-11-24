@@ -796,8 +796,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if self.rust_monitor:
             allowed.update(("defaultWaitForEcho", "endLineOption", "defaultMatchNextLine", "binaryMode"))
         options = self.log_options(args, allowed, ("timeout",))
-        if "defaultPauseEmulation" in options:
-            self.log_bool(options["defaultPauseEmulation"])
+        pause = self.uart_bool_option(options, "defaultPauseEmulation") if self.rust_monitor else ""
         timeout = self.duration(options.get("timeout", self.timeout))
         deadline = f" timeout={timeout}" if self.rust_monitor and "timeout" in options else ""
         echo = ""
@@ -814,7 +813,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         binary = ""
         if "binaryMode" in options:
             binary = f" binaryMode={str(self.log_bool(options['binaryMode'])).lower()}"
-        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}{delimiter}{first}{binary}").strip())
+        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}{delimiter}{first}{binary}{pause}").strip())
         self.uart_testers.setdefault(result, (uart, timeout))
         return result
 
@@ -874,12 +873,21 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             self.ensure_running()
         self.started = True
 
+    @classmethod
+    def uart_bool_option(cls, options, name):
+        if name not in options:
+            return ""
+        return f" {name}={str(cls.log_bool(options[name])).lower()}"
+
     def wait_for(self, verb, expected, *args):
         positional = ("timeout", "testerId", "treatAsRegex", "includeUnfinishedLine")
         if verb == "WaitForTesterPrompt":
             positional = ("testerId", "timeout", "treatAsRegex")
+        if self.rust_monitor and verb != "ShouldNotBeOnUart":
+            positional += ("pauseEmulation",)
         allowed = set(positional)
         if self.rust_monitor and verb == "WaitForLineOnUart":
+            positional += ("matchNextLine",)
             allowed.add("matchNextLine")
         options = self.log_options(args, allowed, positional)
         if self.rust_monitor:
@@ -905,28 +913,26 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             command += " includeUnfinishedLine=true"
         if "matchNextLine" in options:
             command += f" matchNextLine={str(self.log_bool(options['matchNextLine'])).lower()}"
-        return self.operation(command, uart_captures=True)
+        return self.operation(command + self.uart_bool_option(options, "pauseEmulation"), uart_captures=True)
 
     def wait_for_next_uart_line(self, *args):
         if not self.rust_monitor:
             raise Unsupported("next UART line requires the Rust monitor")
         positional = ("timeout", "testerId", "pauseEmulation")
         options = self.log_options(args, set(positional), positional)
-        if "pauseEmulation" in options:
-            self.log_bool(options["pauseEmulation"])
+        pause = self.uart_bool_option(options, "pauseEmulation")
         tester = self.parse_tester_id(options.get("testerId"))
         selector = f" testerId={tester}" if tester is not None else ""
         deadline = f" timeout={self.duration(options['timeout'])}" if "timeout" in options else ""
         self.started = True
-        return self.operation(f"WaitForNextLineOnUart{selector}{deadline}", uart_captures=True)
+        return self.operation(f"WaitForNextLineOnUart{selector}{deadline}{pause}", uart_captures=True)
 
     def wait_for_uart_bytes(self, pattern, *args):
         if not self.rust_monitor:
             raise Unsupported("binary UART wait requires the Rust monitor")
         positional = ("timeout", "testerId", "treatAsRegex", "pauseEmulation", "matchStart")
         options = self.log_options(args, set(positional), positional)
-        if "pauseEmulation" in options:
-            self.log_bool(options["pauseEmulation"])
+        pause = self.uart_bool_option(options, "pauseEmulation")
         tester = self.parse_tester_id(options.get("testerId"))
         selector = f" testerId={tester}" if tester is not None else ""
         deadline = f" timeout={self.duration(options['timeout'])}" if "timeout" in options else ""
@@ -934,7 +940,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         start = self.log_bool(options.get("matchStart", "false"))
         self.started = True
         return self.operation(f"WaitForBytesOnUart {self.uart_text(pattern)}{selector}{deadline}"
-                              f" treatAsRegex={str(regex).lower()} matchStart={str(start).lower()}")
+                              f" treatAsRegex={str(regex).lower()} matchStart={str(start).lower()}{pause}")
 
     def wait(self, expected, *args):
         return self.wait_for("WaitForLineOnUart", expected, *args)

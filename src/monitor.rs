@@ -410,11 +410,11 @@ enum Action {
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
-    CreateUartTester(String, bool, Option<u64>, Option<bool>, bool, bool),
+    CreateUartTester(String, bool, Option<u64>, Option<bool>, bool, bool, bool),
     DefaultUartTester(Option<usize>),
     DefaultUartTimeout(u64),
-    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool, Option<bool>),
-    WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>),
+    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool, Option<bool>, Option<bool>),
+    WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>, Option<bool>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
     WriteTesterUart(Option<usize>, String, &'static [u8], Option<bool>),
@@ -1032,7 +1032,8 @@ fn run_commands<'a>(
             Action::Adc(name, channel, volts) => machine
                 .external_event(ExternalEvent::Adc(name.clone(), *channel, *volts))
                 .map(|()| None),
-            Action::CreateUartTester(target, binary, timeout, echo, carriage_return, next_line) => {
+            Action::CreateUartTester(target, binary, timeout, echo, carriage_return, next_line, pause) => {
+                machine.bus.default_uart_pause = *pause;
                 machine.bus.set_default_uart_echo(*echo);
                 machine.bus.set_default_uart_next_line(*next_line);
                 machine.bus.create_uart_tester(target, *binary, *timeout, *carriage_return)
@@ -1050,10 +1051,10 @@ fn run_commands<'a>(
                 .bus
                 .set_uart_failure(*id, pattern.clone(), *register)
                 .map(|()| None),
-            Action::WaitForBytes(id, pattern, match_start, timeout) => {
+            Action::WaitForBytes(id, pattern, match_start, timeout, pause) => {
                 let cycles = uart_wait_cycles(machine, *id, *timeout)?.min(budget);
                 let start = machine.elapsed_steps();
-                wait_for_uart_bytes(machine, *id, pattern, *match_start, cycles, &mut output)
+                wait_for_uart_bytes(machine, *id, pattern, *match_start, cycles, *pause, &mut output)
                     .and_then(|(stop, count, matched)| {
                         retired += count;
                         budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -1068,12 +1069,13 @@ fn run_commands<'a>(
                         Ok(None)
                     })
             }
-            Action::WaitForTester(id, pattern, regex, mode, timeout, absent, _, first_only) => {
+            Action::WaitForTester(id, pattern, regex, mode, timeout, absent, _, first_only, pause) => {
                 let cycles = uart_wait_cycles(machine, *id, *timeout)?;
                 let limit = cycles.min(budget);
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode, *first_only).and_then(|watch| {
-                    run_uart_watch(machine, watch, limit, &mut output)
+                    let pause = !*absent && pause.unwrap_or(machine.bus.default_uart_pause);
+                    run_uart_watch(machine, watch, limit, Some(pause), &mut output)
                 }).and_then(|(stop, count, line)| {
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -1147,7 +1149,8 @@ fn run_commands<'a>(
                     let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt, Some(false))?;
                     let start = machine.elapsed_steps();
                     let limit = cycles.min(budget);
-                    let (stop, count, _) = run_uart_watch(machine, watch, limit, &mut output)
+                    let pause = machine.bus.default_uart_pause;
+                    let (stop, count, _) = run_uart_watch(machine, watch, limit, Some(pause), &mut output)
                         .map_err(|error| format!("{}:{}: {error}", command.source.display(), command.line))?;
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -1295,9 +1298,9 @@ pub fn serve(
                 }
             }
 
-            (Ok(()), [RuntimeCommand { action: Action::WaitForBytes(id, pattern, match_start, timeout), .. }]) => {
+            (Ok(()), [RuntimeCommand { action: Action::WaitForBytes(id, pattern, match_start, timeout, pause), .. }]) => {
                 let result = uart_wait_cycles(machine, *id, *timeout)
-                    .and_then(|cycles| wait_for_uart_bytes(machine, *id, pattern, *match_start, cycles, &mut io::sink()));
+                    .and_then(|cycles| wait_for_uart_bytes(machine, *id, pattern, *match_start, cycles, *pause, &mut io::sink()));
                 match result {
                     Ok((_, _, Some(matched))) => frame(&mut output, "MATCHBYTES", uart_byte_payload(matched).as_bytes()),
                     Ok((Stop::Limit, _, None)) => frame(&mut output, "FAIL", b"Terminal tester failed! Byte pattern was not received (Limit)"),
@@ -1305,10 +1308,11 @@ pub fn serve(
                     Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
             }
-            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups, first_only), .. }]) => {
+            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups, first_only, pause), .. }]) => {
                 let result = uart_wait_cycles(machine, *id, *timeout).and_then(|cycles| {
                     let watch = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode, *first_only)?;
-                    let stop = drive_uart_watch(machine, watch, cycles, &mut bytes);
+                    let pause = !*absent && pause.unwrap_or(machine.bus.default_uart_pause);
+                    let stop = drive_tester_watch(machine, watch, cycles, pause, &mut bytes);
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
                     let captures = if machine.bus.uart_tester_suppresses_captures(watch) {
@@ -1565,10 +1569,12 @@ fn wait_for_uart_bytes(
     pattern: &BinaryUartPattern,
     match_start: bool,
     cycles: u64,
+    pause: Option<bool>,
     output: &mut impl Write,
 ) -> Result<(Stop, u64, Option<crate::uart::BinaryUartMatch>), String> {
     let watch = machine.bus.watch_uart_bytes(id, pattern, match_start)?;
-    let result = drive_uart_watch(machine, watch, cycles, output);
+    let pause = pause.unwrap_or(machine.bus.default_uart_pause);
+    let result = drive_tester_watch(machine, watch, cycles, pause, output);
     let matched = machine.bus.take_uart_byte_match(watch);
     machine.bus.finish_stm32_uart_watch(watch);
     result.map(|(stop, count)| (stop, count, matched))
@@ -1597,13 +1603,36 @@ fn drive_uart_watch(
     }
 }
 
+fn drive_tester_watch(
+    machine: &mut Machine,
+    watch: UartWatch,
+    budget: u64,
+    pause: bool,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    if budget != 0 && !machine.bus.stm32_uart_matched(watch) {
+        machine.primary.monitor_paused = false;
+    }
+    let result = drive_uart_watch(machine, watch, budget, output)?;
+    if pause && result.0 == Stop::OutputMatch {
+        machine.primary.monitor_paused = true;
+    }
+    Ok(result)
+}
+
 fn run_uart_watch(
     machine: &mut Machine,
     watch: UartWatch,
     budget: u64,
+    pause: Option<bool>,
     output: &mut impl Write,
 ) -> Result<(Stop, u64, Option<String>), String> {
-    let result = drive_uart_watch(machine, watch, budget, output).and_then(|(stop, count)| {
+    let result = if let Some(pause) = pause {
+        drive_tester_watch(machine, watch, budget, pause, output)
+    } else {
+        drive_uart_watch(machine, watch, budget, output)
+    };
+    let result = result.and_then(|(stop, count)| {
         if let Some(line) = machine.bus.uart_watch_failure(watch) {
             return Err(format!(
                 "Terminal tester failed! Test failing entry has been found on UART:\n{line}"
@@ -1625,7 +1654,7 @@ fn wait_for_uart(
 ) -> Result<(Stop, u64), String> {
     if let Some(target) = target {
         let watch = machine.bus.watch_stm32_uart(target, pattern, end)?;
-        run_uart_watch(machine, watch, budget, output).map(|(stop, count, _)| (stop, count))
+        run_uart_watch(machine, watch, budget, None, output).map(|(stop, count, _)| (stop, count))
     } else {
         let history = output
             .history
@@ -2755,6 +2784,7 @@ fn execute(
             let mut echo = None;
             let mut carriage_return = None;
             let mut next_line = None;
+            let mut pause = None;
             for option in options {
                 match option.split_once('=') {
                     Some(("timeout", value)) if timeout.is_none() => {
@@ -2776,7 +2806,9 @@ fn execute(
                     Some(("binaryMode", value)) if binary.is_none() => {
                         binary = Some(parse_tester_bool(resolve(value)?)?);
                     }
-                    Some(("defaultPauseEmulation", "true" | "True")) => {}
+                    Some(("defaultPauseEmulation", value)) if pause.is_none() => {
+                        pause = Some(parse_tester_bool(resolve(value)?)?);
+                    }
                     _ => {
                         return Err(format!(
                             "unsupported or duplicate UART tester option {option:?}"
@@ -2791,6 +2823,7 @@ fn execute(
                 echo,
                 carriage_return.unwrap_or(false),
                 next_line.unwrap_or(false),
+                pause.unwrap_or(false),
             ))
         }
         ["SetDefaultUartTimeout", value] => Some(Action::DefaultUartTimeout(duration_steps(resolve(value)?)?)),
@@ -2829,17 +2862,18 @@ fn execute(
                 pattern,
                 options.match_start,
                 options.timeout,
+                options.pause,
             ))
         }
         ["WaitForNextLineOnUart", ..] => {
             let args = text["WaitForNextLineOnUart".len()..].trim_start();
             let options = tester_wait_options(args, resolve, TesterOptionsKind::Line)?;
             if options.regex || options.capture_groups || options.unfinished || options.first_only.is_some() {
-                return Err("next UART line accepts only testerId and timeout".into());
+                return Err("next UART line accepts only testerId, timeout and pauseEmulation".into());
             }
             Some(Action::WaitForTester(
                 options.id, String::new(), None, UartWaitMode::Lf,
-                options.timeout, false, false, Some(true),
+                options.timeout, false, false, Some(true), options.pause,
             ))
         }
         [command @ ("WaitForLineOnUart" | "WaitForTesterPrompt" | "ShouldNotBeOnUart"), ..] => {
@@ -2858,6 +2892,7 @@ fn execute(
                 *command == "ShouldNotBeOnUart",
                 options.capture_groups,
                 if *command == "ShouldNotBeOnUart" { Some(false) } else { options.first_only },
+                options.pause,
             ))
         }
         [
@@ -3857,6 +3892,7 @@ struct TesterWaitOptions {
     capture_groups: bool,
     first_only: Option<bool>,
     unfinished: bool,
+    pause: Option<bool>,
 }
 
 fn tester_wait_options<'a>(
@@ -3871,6 +3907,7 @@ fn tester_wait_options<'a>(
     let mut capture_groups = None;
     let mut first_only = None;
     let mut unfinished = None;
+    let mut pause = None;
     for option in options.split_whitespace() {
         match option.split_once('=') {
             Some(("testerId", value)) if id.is_none() => {
@@ -3899,6 +3936,9 @@ fn tester_wait_options<'a>(
             {
                 capture_groups = Some(parse_tester_bool(resolve(value)?)?);
             }
+            Some(("pauseEmulation", value)) if kind != TesterOptionsKind::Failure && pause.is_none() => {
+                pause = Some(parse_tester_bool(resolve(value)?)?);
+            }
             Some(("treatAsRegex", value)) if regex.is_none() => {
                 regex = Some(parse_tester_bool(resolve(value)?)?);
             }
@@ -3917,6 +3957,7 @@ fn tester_wait_options<'a>(
         capture_groups: capture_groups.unwrap_or(false),
         first_only,
         unfinished: unfinished.unwrap_or(false),
+        pause,
     })
 }
 
@@ -4176,6 +4217,27 @@ mod tests {
         assert_eq!(status, "OK");
         assert!(value.ends_with("[INFO] Script: hello world\n"));
 
+    }
+
+    #[test]
+    fn uart_pause_on_buffered_match_and_resume_on_following_wait() {
+        let mut machine = Machine::without_default_ram();
+        machine.cpu_less = true;
+        machine.bus.map_trivial_uart(0x1000, "uart0").unwrap();
+        let id = machine.bus.create_uart_tester("uart0", false, None, false).unwrap();
+        let mut output = io::sink();
+        for byte in b"A\n" {
+            machine.bus.write(0x1000, 4, u32::from(*byte), &mut output).unwrap();
+        }
+        let watch = machine.bus.watch_uart_tester_text(Some(id), "A", None, UartWaitMode::Lf, None).unwrap();
+        assert_eq!(run_uart_watch(&mut machine, watch, 0, Some(true), &mut output).unwrap().0, Stop::OutputMatch);
+        assert!(machine.primary.monitor_paused);
+        assert_eq!(machine.elapsed_steps(), 0);
+
+        let watch = machine.bus.watch_uart_tester_text(Some(id), "B", None, UartWaitMode::Lf, None).unwrap();
+        assert_eq!(run_uart_watch(&mut machine, watch, 10, Some(false), &mut output).unwrap().0, Stop::Limit);
+        assert!(!machine.primary.monitor_paused);
+        assert_eq!(machine.elapsed_steps(), 10);
     }
 
     #[test]
