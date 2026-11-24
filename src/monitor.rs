@@ -505,6 +505,7 @@ enum Action {
     WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool, Option<bool>, Option<bool>),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>, Option<bool>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
+    ClearUartTesterReport(Option<usize>),
     WriteUartLine(String, String, &'static [u8]),
     WriteTesterUart(Option<usize>, String, &'static [u8], Option<bool>, Option<bool>),
 }
@@ -633,7 +634,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
-                    | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
+                    | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
                     | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
@@ -1196,6 +1197,7 @@ fn run_commands<'a>(
             Action::DefaultUartTester(id) => {
                 machine.bus.set_default_uart_tester(*id).map(|()| None)
             }
+            Action::ClearUartTesterReport(id) => machine.bus.clear_uart_tester_report(*id).map(|()| None),
             Action::SetUartFailure(id, pattern, register) => machine
                 .bus
                 .set_uart_failure(*id, pattern.clone(), *register)
@@ -3396,6 +3398,13 @@ fn execute(
                 options.pause,
             ))
         }
+        ["ClearTerminalTesterReport", id @ ..] if id.len() <= 1 => {
+            let id = id.first().map(|id| {
+                id.strip_prefix("testerId=").ok_or("expected testerId=N")?
+                    .parse::<usize>().map_err(|_| "invalid UART tester ID")
+            }).transpose()?;
+            Some(Action::ClearUartTesterReport(id))
+        }
         [
             command @ ("RegisterFailingUartString" | "UnregisterFailingUartString"),
             ..,
@@ -3910,6 +3919,7 @@ fn execute(
                         | Action::PeripheralWrite(..)
                         | Action::CreateUartTester(..)
                         | Action::DefaultUartTester(_)
+                        | Action::ClearUartTesterReport(_)
                         | Action::UartIdle(..)
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)

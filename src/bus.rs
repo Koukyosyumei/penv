@@ -5167,6 +5167,14 @@ impl Bus {
         }
     }
 
+    pub(crate) fn clear_uart_tester_report(&mut self, id: Option<usize>) -> Result<(), String> {
+        let (_, history) = self.uart_tester(id)?;
+        if let TesterHistory::Text(history) = history {
+            history.clear_completed_lines();
+        }
+        Ok(())
+    }
+
     fn uart_tester(&mut self, id: Option<usize>) -> Result<(usize, &mut TesterHistory), String> {
         let id = self.uart_tester_id(id)?;
         Ok((id, &mut self.uart_testers[id].history))

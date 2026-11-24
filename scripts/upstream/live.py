@@ -27,6 +27,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         "PC Should Be Equal": "assert_program_counter",
         "Register Should Be Equal": "assert_cpu_register",
         "Set Default Tester": "set_default_tester",
+        "Clear Terminal Tester Report": "clear_terminal_report",
         "Register Failing Uart String": "register_failing_uart",
         "Unregister Failing Uart String": "unregister_failing_uart",
         "Should Not Be On Uart": "uart_absence",
@@ -852,6 +853,14 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             return int(value)
         except ValueError as exc:
             raise AssertionFailed(f"Invalid tester ID: {value}") from exc
+
+    def clear_terminal_report(self, *args):
+        if not self.rust_monitor:
+            raise Unsupported("clearing terminal tester history requires the Rust monitor")
+        options = self.log_options(args, {"testerId"}, ("testerId",))
+        tester = self.parse_tester_id(options.get("testerId"))
+        selector = f" testerId={tester}" if tester is not None else ""
+        self.operation(f"ClearTerminalTesterReport{selector}")
 
     def select_uart(self, value=None):
         tester_id = self.parse_tester_id(value)

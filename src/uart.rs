@@ -415,6 +415,15 @@ impl UartHistory {
         if self.carriage_return { b'\r' } else { b'\n' }
     }
 
+    pub(crate) fn clear_completed_lines(&mut self) {
+        let terminator = self.terminator();
+        if let Some(index) = self.unread.iter().rposition(|&(byte, _)| byte == terminator) {
+            self.unread.drain(..=index);
+        }
+        self.matched_timestamp = None;
+        self.failure = None;
+    }
+
     pub fn set_failure(&mut self, pattern: FailingUartPattern, register: bool) {
         let index = self.failures.iter().position(|p| {
             p.pattern == pattern.pattern && p.regex.is_some() == pattern.regex.is_some()
@@ -746,6 +755,23 @@ mod tests {
             history.begin_text_wait_with_policy(pattern, None, UartWaitMode::Lf, true);
             assert_eq!(history.matched_line().as_deref(), Some(pattern));
             history.finish_wait();
+        }
+    }
+
+    #[test]
+    fn clear_report_keeps_unfinished_text() {
+        for (carriage_return, terminator) in [(false, b'\n'), (true, b'\r')] {
+            let mut history = UartHistory::with_carriage_return(carriage_return);
+            for byte in [b'A', terminator, b'B'] {
+                history.receive(byte);
+            }
+            history.clear_completed_lines();
+            history.receive(terminator);
+            history.begin_wait("A", UartWaitMode::Lf);
+            assert!(!history.matched());
+            history.finish_wait();
+            history.begin_wait("B", UartWaitMode::Lf);
+            assert_eq!(history.matched_line().as_deref(), Some("B"));
         }
     }
 
