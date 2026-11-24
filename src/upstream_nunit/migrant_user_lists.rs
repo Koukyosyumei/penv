@@ -91,10 +91,17 @@ const fn dictionary_stamp(
     }
 }
 
+const CONCURRENT: &str = "ConcurrentDictionary<int,int>";
+const TABLES: &str = "ConcurrentDictionary<int,int>.Tables";
+const NODE: &str = "ConcurrentDictionary<int,int>.Node";
+
 const HASHTABLE: &str = "Hashtable";
 const HASHTABLE_BUCKET: &str = "Hashtable.bucket";
 
 const CODECS: &[Codec] = &[
+    generated_record!(CONCURRENT; tables: reference, grow: boolean, budget: integer),
+    generated_record!(TABLES; buckets: reference, locks: reference, counts: reference, comparer: reference),
+    generated_record!(NODE; key: integer, value: integer, next: reference, hash: integer),
     generated_record!(HASHTABLE; buckets: reference, count: integer, occupancy: integer, load_size: integer, load_factor: float, version: integer, writer_busy: boolean, comparer: reference),
     generated_record!(HASHTABLE_BUCKET; key: reference, value: reference, hash_collision: integer),
     generated_record!("GenericEqualityComparer<string>";),
@@ -134,6 +141,38 @@ const CODECS: &[Codec] = &[
 ];
 
 const STAMPS: &[TypeStamp<'static>] = &[
+    TypeStamp {
+        class: CONCURRENT,
+        module: "mscorlib",
+        revision: 0,
+        fields: &[
+            ("m_tables", FieldKind::Reference),
+            ("m_growLockArray", FieldKind::Boolean),
+            ("m_budget", FieldKind::Integer),
+        ],
+    },
+    TypeStamp {
+        class: TABLES,
+        module: "mscorlib",
+        revision: 0,
+        fields: &[
+            ("m_buckets", FieldKind::Reference),
+            ("m_locks", FieldKind::Reference),
+            ("m_countPerLock", FieldKind::Reference),
+            ("m_comparer", FieldKind::Reference),
+        ],
+    },
+    TypeStamp {
+        class: NODE,
+        module: "mscorlib",
+        revision: 0,
+        fields: &[
+            ("m_key", FieldKind::Integer),
+            ("m_value", FieldKind::Integer),
+            ("m_next", FieldKind::Reference),
+            ("m_hashcode", FieldKind::Integer),
+        ],
+    },
     dictionary_stamp(
         HASHTABLE,
         &[
@@ -1005,6 +1044,100 @@ fn hashtable(options: Options) {
     assert_eq!(seen, (0..100).collect());
 }
 
+fn concurrent_dictionary(options: Options) {
+    let mut graph = Graph::default();
+    // A fixed four-stripe table keeps the fixture deterministic across hosts.
+    const STRIPES: usize = 4;
+    let mut buckets = vec![Value::Null; 31];
+    let mut counts = [0; STRIPES];
+    for key in 0..10 {
+        let bucket = key % buckets.len();
+        counts[bucket % STRIPES] += 1;
+        let node = graph.insert(record(
+            NODE,
+            vec![
+                Value::Integer(key as i64),
+                Value::Integer((2 * key) as i64),
+                buckets[bucket].clone(),
+                Value::Integer(key as i64),
+            ],
+        ));
+        buckets[bucket] = Value::Ref(node);
+    }
+    let budget = Value::Integer((buckets.len() / STRIPES) as i64);
+    let buckets = graph.insert(Object::Array(buckets));
+    let locks = (0..STRIPES)
+        .map(|_| Value::Ref(graph.insert(record("System.Object", vec![]))))
+        .collect();
+    let locks = graph.insert(Object::Array(locks));
+    let counts = graph.insert(Object::Array(counts.map(Value::Integer).to_vec()));
+    let comparer = graph.insert(record("GenericEqualityComparer<int>", vec![]));
+    let tables = graph.insert(record(
+        TABLES,
+        vec![
+            Value::Ref(buckets),
+            Value::Ref(locks),
+            Value::Ref(counts),
+            Value::Ref(comparer),
+        ],
+    ));
+    let root = graph.insert(record(
+        CONCURRENT,
+        vec![Value::Ref(tables), Value::Boolean(true), budget],
+    ));
+    let (graph, copy) = options.restore(&graph, root);
+
+    let fields = |id, expected_class| {
+        let Some(Object::Record { class, fields }) = graph.get(id) else {
+            panic!("expected {expected_class} record");
+        };
+        assert_eq!(class, expected_class);
+        fields.as_slice()
+    };
+    let array = |id| {
+        let Some(Object::Array(values)) = graph.get(id) else {
+            panic!("expected array");
+        };
+        values
+    };
+    let [Value::Ref(tables), Value::Boolean(true), Value::Integer(_)] = fields(copy, CONCURRENT)
+    else {
+        panic!("expected concurrent dictionary");
+    };
+    let [Value::Ref(buckets), Value::Ref(locks), Value::Ref(counts), Value::Ref(comparer)] =
+        fields(*tables, TABLES)
+    else {
+        panic!("expected tables");
+    };
+    assert!(fields(*comparer, "GenericEqualityComparer<int>").is_empty());
+    let locks = array(*locks);
+    let distinct: std::collections::HashSet<_> = locks.iter().map(reference).collect();
+    assert_eq!(distinct.len(), STRIPES);
+    for lock in distinct {
+        assert!(fields(lock, "System.Object").is_empty());
+    }
+
+    let buckets = array(*buckets);
+    let mut actual_counts = [0; STRIPES];
+    let mut pairs = std::collections::BTreeMap::new();
+    for (index, mut head) in buckets.iter().enumerate() {
+        while let Value::Ref(id) = head {
+            let [Value::Integer(key), Value::Integer(value), next, Value::Integer(hash)] =
+                fields(*id, NODE)
+            else {
+                panic!("expected node fields");
+            };
+            assert_eq!(usize::try_from(*hash).unwrap() % buckets.len(), index);
+            assert!(pairs.insert(*key, *value).is_none());
+            actual_counts[index % STRIPES] += 1;
+            head = next;
+        }
+        assert_eq!(*head, Value::Null);
+    }
+    assert_eq!(array(*counts), &actual_counts.map(Value::Integer));
+    assert_eq!(pairs, (0..10).map(|key| (key, 2 * key)).collect());
+}
+
 macro_rules! configurations {
     ($module:ident, $case:expr) => {
         mod $module {
@@ -1097,3 +1230,4 @@ configurations!(string_dictionary, string_dictionary);
 configurations!(dictionary_identity, dictionary_identity);
 configurations!(custom_dictionary, custom_dictionary);
 configurations!(hashtable, hashtable);
+configurations!(concurrent_dictionary, concurrent_dictionary);

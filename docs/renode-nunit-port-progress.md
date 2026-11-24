@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,785 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,793 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 611 |
+| 移植待ち | 603 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -393,3 +393,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 `Dictionary<TKey,TValue>` の4メソッドを、バケット・エントリ・比較器を保持する内部表現で移植した。文字列には決定的な UTF-16 ハッシュを使い、カスタムキーは衝突チェーンに格納する。対象グループ160件が合格し、うち32件が新規対応。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-dictionaries.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-dictionaries.log)
 
 `Hashtable` の100組を、ボックス化したキー・値、空バケット、負荷係数と更新状態を持つ内部表現で移植した。新規8件すべてが対象実行で合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-hashtable.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-hashtable.log)
+
+`ConcurrentDictionary<int,int>` の10組を、テーブル、バケット、ノード、ロック配列、ロック別カウンターを持つ内部表現で復元した。テスト環境に依存しないようロックは4個に固定した。対象実行で8件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-concurrent-dictionary.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-concurrent-dictionary.log)

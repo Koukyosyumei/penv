@@ -1,0 +1,11 @@
+$ cargo test --locked --bin penv upstream_nunit::migrant_user_lists::concurrent_dictionary
+running 8 tests
+test upstream_nunit::migrant_user_lists::concurrent_dictionary::reflection_reflection_stamped ... ok
+test upstream_nunit::migrant_user_lists::concurrent_dictionary::reflection_reflection_plain ... ok
+test upstream_nunit::migrant_user_lists::concurrent_dictionary::reflection_generated_stamped ... ok
+test upstream_nunit::migrant_user_lists::concurrent_dictionary::generated_reflection_plain ... ok
+test upstream_nunit::migrant_user_lists::concurrent_dictionary::reflection_generated_plain ... ok
+test upstream_nunit::migrant_user_lists::concurrent_dictionary::generated_generated_plain ... ok
+test upstream_nunit::migrant_user_lists::concurrent_dictionary::generated_reflection_stamped ... ok
+test upstream_nunit::migrant_user_lists::concurrent_dictionary::generated_generated_stamped ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 3283 filtered out; finished in 0.00s
