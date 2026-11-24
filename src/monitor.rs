@@ -339,7 +339,7 @@ enum Action {
     CpuPaused(String, Option<bool>),
     CpuHalted(String, Option<bool>),
     ReadCpuPc(String),
-    AssertCpuPc(String, u64),
+    AssertCpuValue(String, Option<String>, u64),
     CpuRegister(String, String, Option<u64>),
     ExecutionMode(String, Option<bool>),
     AddCpuHook(String, Option<u32>, CpuHook),
@@ -488,7 +488,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime
                     | Action::AssembleBlock(..) | Action::BusScalar(_)
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_)
-                    | Action::AssertCpuPc(..) | Action::CpuRegister(..)
+                    | Action::AssertCpuValue(..) | Action::CpuRegister(..)
             )
         })
 }
@@ -817,13 +817,19 @@ fn run_commands(
                         .map_err(|e| e.to_string())
                 })
                 .map(|()| None),
-            Action::AssertCpuPc(cpu, expected) => machine.monitor_named_pc(cpu).and_then(|actual| {
+            Action::AssertCpuValue(cpu, register, expected) => {
+                let actual = match register {
+                    Some(register) => machine.monitor_named_register(cpu, register, None)?
+                        .ok_or("register has no readable value")?,
+                    None => machine.monitor_named_pc(cpu)?,
+                };
                 if actual == *expected {
                     Ok(None)
                 } else {
-                    Err(format!("PC value assertion failed, actual: {actual:#x}, expected: {expected:#x}"))
+                    let target = register.as_ref().map_or_else(|| "PC".into(), |name| format!("Register {name}"));
+                    Err(format!("{target} value assertion failed, actual: {actual:#x}, expected: {expected:#x}"))
                 }
-            }),
+            }
             Action::ReadCpuPc(cpu) => machine.monitor_named_pc(cpu).and_then(|pc| {
                 writeln!(output.output, "0x{pc:08x}")
                     .map_err(|error| error.to_string()).map(|()| None)
@@ -1199,7 +1205,8 @@ pub fn serve(
                     Ok((stop, _)) => {
                         frame(&mut output, "STOP", format!("{stop:?}").as_bytes())
                     }
-                    Err(error) if error.starts_with("<monitor>:1: PC value assertion failed,") => {
+                    Err(error) if (error.starts_with("<monitor>:1: PC ")
+                        || error.starts_with("<monitor>:1: Register ")) && error.contains(" value assertion failed,") => {
                         frame(&mut output, "FAIL", error.as_bytes())
                     }
                     Err(error) if error.starts_with("<monitor>:1: unsupported ADXL372 target ") => {
@@ -2644,8 +2651,12 @@ fn execute(
             Some(Action::WriteBytes(address, bytes))
         }
 
-        ["AssertMonitorPC", cpu, value] => Some(Action::AssertCpuPc(
-            resolve(cpu)?.trim_start_matches("sysbus.").into(),
+        ["AssertMonitorPC", cpu, value] => Some(Action::AssertCpuValue(
+            resolve(cpu)?.trim_start_matches("sysbus.").into(), None,
+            crate::parse_address64(resolve(value)?)?,
+        )),
+        ["AssertMonitorRegister", cpu, register, value] => Some(Action::AssertCpuValue(
+            resolve(cpu)?.trim_start_matches("sysbus.").into(), Some(unquote(resolve(register)?).into()),
             crate::parse_address64(resolve(value)?)?,
         )),
         [target, "Step", count @ ..] if count.len() <= 1 => {
@@ -2877,7 +2888,7 @@ fn execute(
                     action,
                     Action::BusScalar(_)
                         | Action::AssembleBlock(..)
-                        | Action::AssertCpuPc(..)
+                        | Action::AssertCpuValue(..)
                         | Action::ReadCpuPc(_)
                         | Action::CpuPc(..)
                         | Action::CpuStep(..)

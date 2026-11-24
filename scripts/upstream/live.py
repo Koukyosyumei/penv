@@ -23,6 +23,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
         "PC Should Be Equal": "assert_program_counter",
+        "Register Should Be Equal": "assert_cpu_register",
         "Set Default Tester": "set_default_tester",
         "Register Failing Uart String": "register_failing_uart",
         "Unregister Failing Uart String": "unregister_failing_uart",
@@ -115,16 +116,30 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             self.replaying = False
 
     def assert_program_counter(self, value, *args):
-        options = self.log_options(args, {"machine", "cpuName"}, ("machine", "cpuName"))
+        self.assert_cpu_value(None, value, args)
+
+    def assert_cpu_register(self, register, value, *args):
+        self.assert_cpu_value(str(register), value, args)
+
+    def assert_cpu_value(self, register, value, args):
+        positional = ("machine", "cpuName") if register is None else ("machine", "cpuName", "message")
+        options = self.log_options(args, set(positional), positional)
         if not self.rust_monitor:
-            raise Unsupported("PC assertion requires the Rust monitor")
+            raise Unsupported("CPU assertion requires the Rust monitor")
         cpu = options.get("cpuName") or "cpu"
         if not re.fullmatch(r"[\w.]+", cpu):
             raise Unsupported("invalid CPU name")
         if machine := options.get("machine"):
             self.operation(f"mach set {self.literal(machine)}")
-        address = int(str(value), 16 if str(value).lower().startswith("0x") else 10)
-        self.operation(f"AssertMonitorPC {cpu} {address}", assertion=True)
+        expected = int(str(value), 16 if str(value).lower().startswith("0x") else 10)
+        command = (f"AssertMonitorPC {cpu} {expected}" if register is None else
+                   f"AssertMonitorRegister {cpu} {self.literal(register)} {expected}")
+        try:
+            self.operation(command, assertion=True)
+        except AssertionFailed as exc:
+            if "message" in options:
+                raise AssertionFailed(f"{options['message']}: {exc}") from exc
+            raise
 
     def temporary_file(self):
         with tempfile.NamedTemporaryFile(dir=self.out, delete=False) as file:
