@@ -1,5 +1,6 @@
 use crate::migrant::object_stream::{
-    FieldKind, Graph, Object, ObjectId, ObjectReader, ObjectWriter, References, TypeStamp, Value,
+    FieldKind, Graph, NativeResource, NonSerializableResource, Object, ObjectId, ObjectReader,
+    ObjectWriter, References, Transients, TypeStamp, Value,
 };
 use std::io::{Cursor, Seek, SeekFrom};
 
@@ -90,6 +91,26 @@ const STAMPS: &[TypeStamp<'static>] = &[
     stamp(
         "System.Numerics.BigInteger",
         &[("value", FieldKind::BigInteger)],
+    ),
+    stamp(
+        "ClassWithTransientField",
+        &[("A", FieldKind::Integer), ("C", FieldKind::Integer)],
+    ),
+    stamp(
+        "ClassWithIntPtr",
+        &[("<Ptr>k__BackingField", FieldKind::NativeResource)],
+    ),
+    stamp(
+        "ClassWithPointer",
+        &[("Pointer", FieldKind::NativeResource)],
+    ),
+    stamp(
+        "ClassWithSpinLock",
+        &[("<SLock>k__BackingField", FieldKind::NativeResource)],
+    ),
+    stamp(
+        "ClassWithThreadLocal",
+        &[("<ThreadLocal>k__BackingField", FieldKind::NativeResource)],
     ),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
@@ -207,10 +228,22 @@ fn deep_clone(
     root: ObjectId,
     stamped: bool,
 ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
+    deep_clone_transient(graph, root, stamped, None)
+}
+
+fn deep_clone_transient(
+    graph: &Graph,
+    root: ObjectId,
+    stamped: bool,
+    transients: Option<&'static Transients<'static>>,
+) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
     let mut stream = Cursor::new(Vec::new());
     let mut writer = ObjectWriter::new(&mut stream, graph, References::Preserve, true);
     if stamped {
         writer = writer.with_type_stamps(STAMPS);
+    }
+    if let Some(transients) = transients {
+        writer = writer.with_transients(transients);
     }
     writer.write_object(root).unwrap();
     writer.finish().unwrap();
@@ -218,6 +251,9 @@ fn deep_clone(
     let mut reader = ObjectReader::new(stream, References::Preserve, true);
     if stamped {
         reader = reader.with_type_stamps(STAMPS);
+    }
+    if let Some(transients) = transients {
+        reader = reader.with_transients(transients);
     }
     let root = reader.read_object().unwrap();
     (reader, root)
@@ -1804,4 +1840,103 @@ stamp_modes!(
     big_integer_plain,
     big_integer_stamped,
     big_integer_round_trip
+);
+
+const TRANSIENTS: Transients<'static> = Transients {
+    classes: &["TransientClass"],
+    fields: &[("ClassWithTransientField", &[(1, Value::Integer(0))])],
+};
+
+fn omit_transient_class(stamped: bool) {
+    let mut graph = Graph::default();
+    let omitted = graph.insert(record("TransientClass", vec![Value::Null]));
+    let root = graph.insert(record("Box", vec![Value::Ref(omitted)]));
+    let (reader, copy) = deep_clone_transient(&graph, root, stamped, Some(&TRANSIENTS));
+    // The C# assertion is successful completion; inspect the omitted value as well.
+    assert_eq!(fields(reader.graph().get(copy).unwrap()), [Value::Null]);
+}
+
+fn omit_transient_field(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record(
+        "ClassWithTransientField",
+        [147, 256, 850].map(Value::Integer).to_vec(),
+    ));
+    let (reader, copy) = deep_clone_transient(&graph, root, stamped, Some(&TRANSIENTS));
+    let actual = fields(reader.graph().get(copy).unwrap());
+    assert_eq!(
+        actual,
+        [Value::Integer(147), Value::Integer(0), Value::Integer(850)]
+    );
+}
+
+fn reject_unserializable_root(stamped: bool, transient: bool) {
+    let mut graph = Graph::default();
+    let root = transient.then(|| graph.insert(record("TransientClass", vec![Value::Null])));
+    let mut stream = Cursor::new(Vec::new());
+    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true)
+        .with_transients(&TRANSIENTS);
+    if stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    assert_eq!(
+        writer.write_root(root).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    drop(writer);
+    assert_eq!(stream.position(), 0);
+}
+
+stamp_modes!(
+    omit_transient_class_plain,
+    omit_transient_class_stamped,
+    omit_transient_class
+);
+stamp_modes!(
+    omit_transient_field_plain,
+    omit_transient_field_stamped,
+    omit_transient_field
+);
+stamp_modes!(reject_null_root_plain, reject_null_root_stamped, |s| {
+    reject_unserializable_root(s, false)
+});
+stamp_modes!(
+    reject_transient_root_plain,
+    reject_transient_root_stamped,
+    |s| reject_unserializable_root(s, true)
+);
+
+fn reject_resource(stamped: bool, class: &str, resource: NativeResource) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record(class, vec![Value::NativeResource(resource)]));
+    let mut stream = Cursor::new(Vec::new());
+    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true);
+    if stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    let error = writer.write_object(root).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert_eq!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<NonSerializableResource>()),
+        Some(&NonSerializableResource(resource))
+    );
+    drop(writer);
+    assert_eq!(stream.position(), 0);
+}
+
+stamp_modes!(reject_intptr_plain, reject_intptr_stamped, |s| {
+    reject_resource(s, "ClassWithIntPtr", NativeResource::IntPtr(0x666))
+});
+stamp_modes!(reject_pointer_plain, reject_pointer_stamped, |s| {
+    reject_resource(s, "ClassWithPointer", NativeResource::Pointer(0))
+});
+stamp_modes!(reject_spinlock_plain, reject_spinlock_stamped, |s| {
+    reject_resource(s, "ClassWithSpinLock", NativeResource::SpinLock)
+});
+stamp_modes!(
+    reject_thread_local_plain,
+    reject_thread_local_stamped,
+    |s| reject_resource(s, "ClassWithThreadLocal", NativeResource::ThreadLocal)
 );

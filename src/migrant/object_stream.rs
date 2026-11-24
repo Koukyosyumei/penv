@@ -20,6 +20,7 @@ pub enum FieldKind {
     NullableInteger = 4,
     Guid = 5,
     BigInteger = 6,
+    NativeResource = 7,
 }
 
 #[derive(Clone, Copy)]
@@ -49,6 +50,7 @@ impl TypeStamp<'_> {
                         | (FieldKind::Float, Value::Float(_))
                         | (FieldKind::Guid, Value::Guid(_))
                         | (FieldKind::BigInteger, Value::BigInteger(_))
+                        | (FieldKind::NativeResource, Value::NativeResource(_))
                         | (FieldKind::Reference, Value::Null | Value::Ref(_))
                 )
             })
@@ -88,6 +90,36 @@ impl TypeStamp<'_> {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ObjectId(usize);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeResource {
+    IntPtr(usize),
+    Pointer(usize),
+    SpinLock,
+    ThreadLocal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NonSerializableResource(pub NativeResource);
+
+impl std::fmt::Display for NonSerializableResource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "native resource {:?} cannot be serialized",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for NonSerializableResource {}
+
+fn unsupported(resource: NativeResource) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        NonSerializableResource(resource),
+    )
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Null,
@@ -96,6 +128,7 @@ pub enum Value {
     Guid(Guid),
     /// Little-endian signed two's-complement bytes.
     BigInteger(Vec<u8>),
+    NativeResource(NativeResource),
     Ref(ObjectId),
 }
 
@@ -126,6 +159,81 @@ fn check_rectangular(dimensions: &[usize], elements: &[Value]) -> io::Result<()>
         return Err(invalid("invalid rectangular array shape"));
     }
     Ok(())
+}
+
+/// Runtime field layout for transient values excluded from an object stream.
+pub struct Transients<'a> {
+    pub classes: &'a [&'a str],
+    /// Field defaults indexed in the complete, in-memory record layout.
+    pub fields: &'a [(&'a str, &'a [(usize, Value)])],
+}
+
+impl Transients<'_> {
+    fn contains(&self, graph: &Graph, id: ObjectId) -> bool {
+        matches!(graph.get(id), Some(Object::Record { class, .. }) if self.classes.contains(&class.as_str()))
+    }
+
+    fn defaults(&self, class: &str) -> &[(usize, Value)] {
+        self.fields
+            .iter()
+            .find(|(name, _)| *name == class)
+            .map_or(&[], |(_, fields)| fields)
+    }
+
+    fn project(&self, graph: &Graph, object: &Object) -> Option<Object> {
+        let values = match object {
+            Object::Record { fields, .. }
+            | Object::Array(fields)
+            | Object::Rectangular {
+                elements: fields, ..
+            } => fields,
+            _ => return None,
+        };
+        let defaults = match object {
+            Object::Record { class, .. } => self.defaults(class),
+            _ => &[],
+        };
+        if defaults.is_empty()
+            && !values
+                .iter()
+                .any(|value| matches!(value, Value::Ref(id) if self.contains(graph, *id)))
+        {
+            return None;
+        }
+        let projected = values
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !defaults.iter().any(|(omitted, _)| omitted == index))
+            .map(|(_, value)| match value {
+                Value::Ref(id) if self.contains(graph, *id) => Value::Null,
+                _ => value.clone(),
+            })
+            .collect();
+        Some(match object {
+            Object::Record { class, .. } => Object::Record {
+                class: class.clone(),
+                fields: projected,
+            },
+            Object::Array(_) => Object::Array(projected),
+            Object::Rectangular { dimensions, .. } => Object::Rectangular {
+                dimensions: dimensions.clone(),
+                elements: projected,
+            },
+            _ => unreachable!(),
+        })
+    }
+
+    fn restore_fields(&self, class: &str, fields: &mut Vec<Value>) -> io::Result<()> {
+        let mut previous = None;
+        for (index, value) in self.defaults(class) {
+            if *index > fields.len() || previous.is_some_and(|previous| previous >= *index) {
+                return Err(invalid("invalid transient field layout"));
+            }
+            fields.insert(*index, value.clone());
+            previous = Some(*index);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -195,6 +303,7 @@ pub struct ObjectWriter<'a, 's, W: Write> {
     frame_base: usize,
     replacements: HashMap<ObjectId, Object>,
     stamps: Option<&'a [TypeStamp<'a>]>,
+    transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
 }
 
@@ -222,6 +331,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             frame_base: 0,
             replacements: HashMap::new(),
             stamps: None,
+            transients: None,
             surrogates: None,
         }
     }
@@ -253,6 +363,11 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
 
     pub fn with_surrogates(mut self, surrogates: &'a mut Surrogates<'s>) -> Self {
         self.surrogates = Some(surrogates);
+        self
+    }
+
+    pub fn with_transients(mut self, transients: &'a Transients<'a>) -> Self {
+        self.transients = Some(transients);
         self
     }
 
@@ -295,7 +410,22 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
         self.write_from(self.graph.unwrap(), root)
     }
 
+    pub fn write_root(&mut self, root: Option<ObjectId>) -> io::Result<()> {
+        self.write_object(
+            root.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "null object root"))?,
+        )
+    }
+
     fn write_from(&mut self, graph: &Graph, root: ObjectId) -> io::Result<()> {
+        if self
+            .transients
+            .is_some_and(|transients| transients.contains(graph, root))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "transient object root",
+            ));
+        }
         if self.references != References::Preserve {
             self.ids.clear();
         }
@@ -326,6 +456,10 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                 .map(|surrogates| surrogates.convert(id, original))
                 .transpose()?
                 .flatten();
+            let projected = self.transients.and_then(|transients| {
+                transients.project(graph, replacement.as_ref().unwrap_or(original))
+            });
+            let replacement = projected.or(replacement);
             let object = replacement.as_ref().unwrap_or(original);
             let values = match object {
                 Object::String(_) => &[],
@@ -355,6 +489,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             }
             for value in values {
                 match value {
+                    Value::NativeResource(resource) => return Err(unsupported(*resource)),
                     Value::Ref(id) => {
                         self.intern(graph, *id)?;
                     }
@@ -446,6 +581,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     data.bytes(&[4])?;
                     data.guid(*value)?;
                 }
+                Value::NativeResource(resource) => return Err(unsupported(*resource)),
                 Value::BigInteger(bytes) => {
                     data.bytes(&[5])?;
                     data.unsigned(bytes.len() as u64)?;
@@ -471,6 +607,7 @@ pub struct ObjectReader<'a, 's, R: Read> {
     weak_history: Vec<Weak<Object>>,
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
+    transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
 }
 
@@ -482,12 +619,18 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             weak_history: Vec::new(),
             references,
             stamps: None,
+            transients: None,
             surrogates: None,
         }
     }
 
     pub fn with_surrogates(mut self, surrogates: &'a mut Surrogates<'s>) -> Self {
         self.surrogates = Some(surrogates);
+        self
+    }
+
+    pub fn with_transients(mut self, transients: &'a Transients<'a>) -> Self {
+        self.transients = Some(transients);
         self
     }
 
@@ -619,9 +762,12 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     if let Some(stamp) = stamp {
                         stamp.verify(&mut self.data)?;
                     }
-                    let fields = self.read_values(base, limit)?;
+                    let mut fields = self.read_values(base, limit)?;
                     if let Some(stamp) = stamp {
                         stamp.validate(&fields)?;
+                    }
+                    if let Some(transients) = self.transients {
+                        transients.restore_fields(&class, &mut fields)?;
                     }
                     Object::Record { class, fields }
                 }
