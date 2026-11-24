@@ -1,4 +1,64 @@
 fixture	missing_api
-Antmicro.Renode.UnitTests.MemoryTests	MappedMemory has no exposed lazy segment Touch operation, stable segment pointer, or one-shot SegmentTouched notification.
+Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	Migrant serialization of BlockingCollection and its synchronization state is unavailable.
+Antmicro.Migrant.Tests.BuiltinSurrogatesTests	The snapshot reader/writer does not have Migrant built-in CLR surrogate mappings.
+Antmicro.Migrant.Tests.HooksTests	Migrant object graph serialization hooks and attribute-based callbacks are unavailable.
+Antmicro.Migrant.Tests.IdGeneratorTests	There is no object-reference identity table implementing Migrant ObjectIdentifier.GetId.
+Antmicro.Migrant.Tests.ObjectReaderWriterTests	There is no Migrant ObjectReader/ObjectWriter pair for arbitrary managed object graphs.
+Antmicro.Migrant.Tests.OpenStreamSerializationTests	There is no Migrant open-stream graph serializer/deserializer with shared object identity across writes.
+Antmicro.Migrant.Tests.PrimitiveReaderWriterTests	The snapshot codec lacks Migrant PrimitiveReader/PrimitiveWriter's binary contract and CLR primitive types.
+Antmicro.Migrant.Tests.SerializationTests	The Rust machine snapshot is memory-specific. It lacks the Migrant arbitrary object graph serializer, references and CLR type handling exercised by this fixture.
+Antmicro.Migrant.Tests.StampingTests	There is no Migrant serialized type/resource stamping implementation.
+Antmicro.Migrant.Tests.SurrogateTests	There is no registration of custom Migrant serialization/deserialization surrogates.
+Antmicro.Migrant.Tests.TwoDomainTests	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
+Antmicro.Migrant.Tests.TypeDescriptorComparisonTests	There are no Migrant type descriptors with the fixture's assembly, base-type and field comparisons.
+Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
+Antmicro.OptionsParser.Tests.ParserTests	The penv CLI parses flags directly. It lacks the attribute-driven OptionsParser binder for short and long aliases, typed positional values and option groups.
+Antmicro.OptionsParser.Tests.ValidationTests	The CLI has no OptionsParser validation metadata and validation pipeline for option object fields.
+Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests	There is no RegistersEnumParser for C enum extraction with preprocessor conditions, aliases and indexed registers.
+Antmicro.Renode.PeripheralsTests.BMA180Test	BMA180 register/reset model is absent.
+Antmicro.Renode.PeripheralsTests.BMC050Test	BMC050 accelerometer/magnetometer register model is absent.
+Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.
+Antmicro.Renode.PeripheralsTests.CortexA9GICTests	The Cortex-A9 host platform and its ARM Generic Interrupt Controller are absent.
+Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest	EFM32 Giant Gecko I2C controller registers and its slave callback contract are absent.
+Antmicro.Renode.PeripheralsTests.EFR32_I2CControllerTests	EFR32 I2C controller registers, FIFO and interrupt state machine are absent.
+Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test	LPC43xx GPIO register/interrupt model is absent.
+Antmicro.Renode.PeripheralsTests.OpenTitan_AES_Tests	OpenTitan AES interaction and register model are absent; existing STM32 AES models expose a different register map.
+Antmicro.Renode.PeripheralsTests.OpenTitan_I2C_Test	OpenTitan I2C register/FIFO model and interrupt state machine are absent.
+Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	OpenTitan KeyManager command and state-machine model is absent.
+Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest	OpenTitan SPI Device flash passthrough and FIFO model are absent.
 Antmicro.Renode.PeripheralsTests.SDCardEmmcTest	SD controllers lack an eMMC card model with CMD6 partition switching, EXT_CSD transfer, and separate user and boot areas.
+Antmicro.Renode.PeripheralsTests.SHT21Test	SHT21 I2C command/measurement model is absent.
+Antmicro.Renode.UnitTests.AccessConditionParserTests	There is no access-condition lexer, DNF expansion or named CPU state-bit evaluation for conditional bus registrations.
+Antmicro.Renode.UnitTests.ByteArrayWithAccessTrackingTests	There is no per-byte read/write tracking API with the fixture's conflict and initialization observations.
+Antmicro.Renode.UnitTests.Cadence_TTCTests	Cadence Triple Timer Counter peripheral model is absent.
+Antmicro.Renode.UnitTests.Cadence_UARTTests	Cadence UART register, FIFO and IRQ model is absent.
+Antmicro.Renode.UnitTests.Collections.MultiTreeTests	There is no multi-parent tree collection with add/remove and ancestor or child traversal.
+Antmicro.Renode.UnitTests.Collections.MultiValueDictionaryTests	There is no corresponding multi-value dictionary API with key and individual-value removal.
+Antmicro.Renode.UnitTests.Collections.WeakMultiTableTest	There is no weak-key/value multi-table with the fixture's object collection and enumeration semantics.
 Antmicro.Renode.UnitTests.ComparingTimerTests	STM32 CCR permits values beyond ARR. There is no generic ComparingTimer setter that rejects a compare value above its limit.
+Antmicro.Renode.UnitTests.DataStorageTests	There is no DataStorage.CreateFromFile constructor covering null path, empty path and missing-file construction errors.
+Antmicro.Renode.UnitTests.DmaEngineTests	Device-specific DMA models do not expose generic DmaEngine.IssueCopy with independently configured source and destination widths, increment and stepping.
+Antmicro.Renode.UnitTests.GPIODetachingTests	The remaining cases require registering arbitrary mock GPIO connector and receiver objects on SystemBus, with a generic connection enumeration and unregister boundary.
+Antmicro.Renode.UnitTests.MachineTests	There is no generic IMachine registry and lifecycle for the fixture's managed mock peripheral graph.
+Antmicro.Renode.UnitTests.MemoryTests	MappedMemory has no exposed lazy segment Touch operation, stable segment pointer, or one-shot SegmentTouched notification.
+Antmicro.Renode.UnitTests.MultiCPUTests	There is no generic registration and debugger/context naming API for the fixture's mock CPUs and CPU-local peripherals.
+Antmicro.Renode.UnitTests.NullRegistrationPointPeripheralContainerTests	There is no generic single-peripheral container with NullRegistrationPoint, registration-point enumeration and typed registration failures.
+Antmicro.Renode.UnitTests.PeripheralsGroupTests	There is no named generic peripheral grouping API with membership and unregister behavior for arbitrary mock peripherals.
+Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests	There is no emulation-wide seeded generator with deterministic per-thread sequences and persisted state.
+Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
+Antmicro.Renode.UnitTests.ReadExtensionsTest	Bus implementations use device-specific/inline translations. There is no generic byte, word, double-word and quad-word peripheral adapter covering both byte orders and unaligned reads.
+Antmicro.Renode.UnitTests.RegistersTests	There is no generic declarative register-field API implementing read/write callbacks, field modes and register collections for the fixture.
+Antmicro.Renode.UnitTests.SVDParserTests	There is no SVD XML parser implementing peripheral/register inheritance, dimensions and bus registration.
+Antmicro.Renode.UnitTests.SerializableMappedSegmentTests	There is no serializable MappedSegment object with lazy segment access and the corresponding persisted buffer representation.
+Antmicro.Renode.UnitTests.SerializationTests	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
+Antmicro.Renode.UnitTests.StorageTests	There is no reusable LBABackend API for the fixture's direct block-store reads and writes; storage is behind controller-specific models.
+Antmicro.Renode.UnitTests.SymbolLookupTests.DeduplicationTests	There is no SymbolLookup insertion and deduplication API for in-memory symbol sets.
+Antmicro.Renode.UnitTests.SymbolLookupTests.ElfMergeTests	ELF loaders lack the fixture's symbol-table merging and overlap-resolution API.
+Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests	There is no generic SymbolLookup range index implementing the fixture's aliases, precedence and address/name queries.
+Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	There is no Symbol object exposing Renode symbol precedence, range and metadata comparison.
+Antmicro.Renode.UnitTests.SystemBusTests	The remaining runnable cases need the generic object registration/index, suspend-and-resume lifecycle, connection-region dispatch, translated access matrix or null CPU registration APIs.
+Antmicro.Renode.UnitTests.TimeTests	There is no BaseClockSource API with independently registered mutable ClockEntry callbacks and observation at each deadline.
+Antmicro.Renode.UnitTests.WriteExtensionsTest	There is no generic read/modify/write width-translation adapter for byte, word, double-word and quad-word peripheral traits, including their endian and unaligned behaviors.
+Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.
+Antmicro.Renode.Utilities.TypeExtensionsCacheTests	There is no CLR reflection type-extension cache, including assembly/type invalidation behavior.
+UnitTests.TimeSourceTests	Remaining runnable cases need wall-clock pacing controls, a disposable master/slave grant registration, or recording/replay of arbitrary external peripheral method calls.
