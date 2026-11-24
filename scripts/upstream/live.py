@@ -325,6 +325,33 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             finally:
                 proc.stdout.close()
 
+    def inspect_startup(self, command):
+        startup = ("\n".join(self.commands) + "\n").encode()
+        query = command.encode()
+        request = (f"PENV-INSPECT {len(startup)}\n".encode() + startup
+                   + f"PENV-COMMAND {len(query)}\n".encode() + query)
+        argv = [str(self.binary), "run", "--platform-root", str(self.root),
+                "--monitor-stdio", "--script", "-"]
+        begin = time.monotonic()
+        process = subprocess.run(argv, input=request, capture_output=True, cwd=self.out, timeout=10)
+        if process.returncode:
+            raise PenvExecutionError(process.stderr.decode(errors="replace").strip())
+        header, _, payload = process.stdout.partition(b"\n")
+        reply, length = header.decode().split()
+        if len(payload) != int(length):
+            raise PenvExecutionError("invalid Rust monitor inspection frame")
+        value = payload.decode()
+        measurement = dict(command=argv, operation=command, reply=reply, value=value,
+                           elapsed_s=time.monotonic() - begin, stage="monitor_inspection")
+        self.calls[-1]["monitor"] = measurement
+        with (self.out / "monitor.jsonl").open("a") as log:
+            print(json.dumps(measurement), file=log)
+        if reply == "OK":
+            self.measurements.append(dict(measurement, result="pass"))
+        elif reply != "DEFER":
+            raise PenvExecutionError(value)
+        return reply, value
+
     def execute(self, command, *args, machine=None):
         if isinstance(command, list):
             if not all(isinstance(item, str) for item in command):
@@ -342,6 +369,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if self.proc is None:
                 if select:
                     self.commands.append(select)
+                # Only route read-only queries here. Rust parses and evaluates the original command.
+                if re.match(r"echo(?:\s|$)", command):
+                    reply, value = self.inspect_startup(command)
+                    if reply == "OK":
+                        return value
+                    return self.operation(command, assertion=True)
                 self.commands.append(command)
                 self.calls[-1]["stage"] = "queued_monitor_command"
                 return ""

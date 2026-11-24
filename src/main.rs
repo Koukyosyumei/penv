@@ -1431,7 +1431,14 @@ fn run() -> Result<ExitCode, String> {
             if !monitor_stdio {
                 return Err("--script - requires --monitor-stdio".into());
             }
-            monitor::load_session_stream(io::stdin().lock(), root)
+            match monitor::load_session_stream(io::stdin().lock(), root)? {
+                monitor::StartupInput::Boot(boot) => Ok(*boot),
+                monitor::StartupInput::Reply(status, reply) => {
+                    monitor::frame(&mut io::stdout().lock(), status, reply.as_bytes())
+                        .map_err(|error| error.to_string())?;
+                    return Ok(ExitCode::SUCCESS);
+                }
+            }
         } else if monitor_stdio {
             monitor::load_for_session(script, root)
         } else {

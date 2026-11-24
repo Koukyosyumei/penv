@@ -1138,6 +1138,12 @@ fn run_commands(
     Ok((Stop::ScriptComplete, retired))
 }
 
+pub fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<()> {
+    writeln!(output, "{status} {}", bytes.len())?;
+    output.write_all(bytes)?;
+    output.flush()
+}
+
 /// Execute one runtime command at a time on the same machine. Separate command
 /// status from UART/monitor bytes so firmware output cannot create a reply frame.
 pub fn serve(
@@ -1148,12 +1154,6 @@ pub fn serve(
     mut session: Session,
     root: &Path,
 ) -> Result<(), String> {
-    fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<()> {
-        writeln!(output, "{status} {}", bytes.len())?;
-        output.write_all(bytes)?;
-        output.flush()
-    }
-
     let initial: Vec<_> = (0..machine.hart_count()).map(|id| machine.hart_mut(id).clone()).collect();
     let path = Path::new("<monitor>");
     let mut line = String::new();
@@ -1756,14 +1756,43 @@ pub fn load_for_session(path: &Path, root: &Path) -> Result<Boot, String> {
     load_script(path, root, true, None)
 }
 
-pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Boot, String> {
+pub enum StartupInput {
+    Boot(Box<Boot>),
+    Reply(&'static str, String),
+}
+
+pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<StartupInput, String> {
     let mut header = String::new();
     input.by_ref().take(64).read_line(&mut header).map_err(|e| e.to_string())?;
-    let length = header.strip_prefix("PENV-STARTUP ")
-        .ok_or("expected PENV-STARTUP followed by the startup byte count")?;
-    let body = read_monitor_text(&mut input, length)?;
     let source = std::env::current_dir().map_err(|e| e.to_string())?.join("<monitor-startup>");
-    load_script(&source, root, true, Some(&body))
+    if let Some(length) = header.strip_prefix("PENV-STARTUP ") {
+        let body = read_monitor_text(&mut input, length)?;
+        return load_script(&source, root, true, Some(&body)).map(|boot| StartupInput::Boot(Box::new(boot)));
+    }
+    let length = header.strip_prefix("PENV-INSPECT ")
+        .ok_or("expected PENV-STARTUP or PENV-INSPECT followed by the byte count")?;
+    let body = read_monitor_text(&mut input, length)?;
+    header.clear();
+    input.by_ref().take(64).read_line(&mut header).map_err(|e| e.to_string())?;
+    let length = header.strip_prefix("PENV-COMMAND ").ok_or("expected PENV-COMMAND")?;
+    let command = read_monitor_text(&mut input, length)?;
+    let mut state = script_state()?;
+    // Inspect only read-only commands that resolve in startup state.
+    // A queued runtime operation may change that state, so use the live monitor then.
+    if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _]))
+        || load_text(&source, source.clone(), root, &mut state, &body).is_err()
+        || state.machine
+        || state.boot.has_platform()
+        || state.boot.started
+        || !state.boot.runtime.is_empty()
+    {
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
+    state.boot.monitor_output.clear();
+    Ok(match load_text(&source, source.clone(), root, &mut state, &command) {
+        Ok(()) => StartupInput::Reply("OK", state.boot.monitor_output.join("\n")),
+        Err(error) => StartupInput::Reply("ERROR", error),
+    })
 }
 
 fn read_monitor_text(input: &mut impl Read, length: &str) -> Result<String, String> {
@@ -1775,11 +1804,16 @@ fn read_monitor_text(input: &mut impl Read, length: &str) -> Result<String, Stri
     String::from_utf8(body).map_err(|e| e.to_string())
 }
 
-fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) -> Result<Boot, String> {
+fn script_state() -> Result<ScriptState, String> {
     let mut state = ScriptState::default();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     state.variables.insert("global.CWD".into(), format!("@\"{}\"", cwd.display()));
     state.variables.insert("global.ORIGIN".into(), format!("@\"{}\"", cwd.display()));
+    Ok(state)
+}
+
+fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) -> Result<Boot, String> {
+    let mut state = script_state()?;
     if let Some(source) = source {
         load_text(path, path.to_owned(), root, &mut state, source)?;
     } else {
@@ -3976,12 +4010,34 @@ mod tests {
         let runtime = "PENV-COMMAND 5\npause";
         let input = format!("PENV-STARTUP {}\n{startup}{runtime}", startup.len());
         let mut stream = io::Cursor::new(input.into_bytes());
-        let boot = load_session_stream(&mut stream, Path::new(".")).unwrap();
+        let StartupInput::Boot(boot) = load_session_stream(&mut stream, Path::new(".")).unwrap() else {
+            panic!("expected a startup script");
+        };
         assert_eq!(boot.session.machine.as_deref(), Some("example board"));
         assert_eq!(resolve(&boot.session.variables, "$board").unwrap(), "@boards/test.repl");
         let mut remaining = String::new();
         stream.read_to_string(&mut remaining).unwrap();
         assert_eq!(remaining, runtime);
+    }
+
+    #[test]
+    fn preboot_inspection_uses_monitor_state_without_a_machine() {
+        let inspect = |startup: &str, command: &str| {
+            let input = format!(
+                "PENV-INSPECT {}\n{startup}PENV-COMMAND {}\n{command}",
+                startup.len(), command.len()
+            );
+            let StartupInput::Reply(status, value) =
+                load_session_stream(io::Cursor::new(input), Path::new(".")).unwrap()
+            else {
+                panic!("expected an inspection reply");
+            };
+            (status, value)
+        };
+        assert_eq!(inspect("$var=1234\n$var?=5678\n", "echo $var"), ("OK", "1234".into()));
+        assert_eq!(inspect("mach create\nstart\n", "echo $var").0, "DEFER");
+        assert_eq!(inspect("", "set var 1234").0, "DEFER");
+        assert_eq!(inspect("", "echo $var").0, "ERROR");
     }
 
     #[test]

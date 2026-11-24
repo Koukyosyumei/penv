@@ -141,6 +141,13 @@ def run_robot(case, provider, options, renode, binary, out, assets, negative):
             worker.join()
     executed, = result.suite.tests
     last = endpoint.measurements[-1]["result"] if endpoint.measurements else None
+    if endpoint.measurements and endpoint.measurements[-1].get("stage") == "monitor_inspection":
+        # An inspection evaluates the prefix it receives. Require any later
+        # queued command to reach another inspection or a booted machine.
+        latest_monitor = next((call for call in reversed(endpoint.calls)
+                               if call.get("stage") == "queued_monitor_command" or "monitor" in call), None)
+        if latest_monitor and latest_monitor.get("stage") == "queued_monitor_command":
+            last = None
     xml = out / "robot.xml"
     failures = ET.parse(xml).getroot().iter("msg")
     missing_keyword = any(msg.get("level") == "FAIL" and re.search(
