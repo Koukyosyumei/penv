@@ -90,6 +90,37 @@ const STAMPS: &[TypeStamp<'static>] = &[
         "ReferencedPostDeserializationMock",
         &[("TestObject", FieldKind::Reference)],
     ),
+    stamp(
+        "ForOrderTestA",
+        &[
+            ("HookInvokedOn", FieldKind::Integer),
+            ("B", FieldKind::Reference),
+        ],
+    ),
+    stamp("ForOrderTestB", &[("HookInvokedOn", FieldKind::Integer)]),
+    stamp(
+        "ForLateOrderTestA",
+        &[
+            ("HookInvokedOn", FieldKind::Integer),
+            ("B", FieldKind::Reference),
+        ],
+    ),
+    stamp(
+        "ForLateOrderTestB",
+        &[("HookInvokedOn", FieldKind::Integer)],
+    ),
+    stamp(
+        "MockWithVirtualDerived",
+        &[
+            ("counterValue", FieldKind::Integer),
+            ("BasePreSerializationCounter", FieldKind::Integer),
+            ("DerivedPreSerializationCounter", FieldKind::Integer),
+            ("BasePostSerializationCounter", FieldKind::Integer),
+            ("DerivedPostSerializationCounter", FieldKind::Integer),
+            ("BasePostDeserializationCounter", FieldKind::Integer),
+            ("DerivedPostDeserializationCounter", FieldKind::Integer),
+        ],
+    ),
     stamp("System.Object", &[]),
     stamp(
         "CyclicReferenceMockA",
@@ -518,10 +549,21 @@ fn write_and_restore(
     stamped: bool,
     hooks: &[WriteHook<'_>],
 ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
+    write_and_restore_with_read_hooks(graph, root, stamped, hooks, &[])
+}
+
+fn write_and_restore_with_read_hooks<'a>(
+    graph: &mut Graph,
+    root: ObjectId,
+    stamped: bool,
+    hooks: &[WriteHook<'_>],
+    read_hooks: &'a [ReadHook<'a>],
+) -> (ObjectReader<'a, 'static, Cursor<Vec<u8>>>, ObjectId) {
     let mut stream = Cursor::new(Vec::new());
     write_hooked(&mut stream, graph, root, stamped.then_some(STAMPS), hooks).unwrap();
     stream.rewind().unwrap();
-    let mut reader = ObjectReader::new(stream, References::Preserve, true);
+    let mut reader =
+        ObjectReader::new(stream, References::Preserve, true).with_read_hooks(read_hooks);
     if stamped {
         reader = reader.with_type_stamps(STAMPS);
     }
@@ -709,4 +751,144 @@ modes!(
     error_late_plain,
     error_late_stamped,
     |s| post_even_on_error(s, true)
+);
+
+fn mark_time(fields: &mut [Value]) -> io::Result<()> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_nanos();
+    fields[0] = Value::Integer(i64::try_from(nanos).map_err(io::Error::other)?);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    Ok(())
+}
+
+fn child_before_parent(stamped: bool, late: bool) {
+    let (parent, child, write_phase, read_phase) = if late {
+        (
+            "ForLateOrderTestA",
+            "ForLateOrderTestB",
+            WriteHookPhase::Late,
+            ReadHookPhase::Late,
+        )
+    } else {
+        (
+            "ForOrderTestA",
+            "ForOrderTestB",
+            WriteHookPhase::After,
+            ReadHookPhase::Immediate,
+        )
+    };
+    let mut graph = Graph::default();
+    let b = record(&mut graph, child, vec![Value::Integer(0)]);
+    let root = record(&mut graph, parent, vec![Value::Integer(0), Value::Ref(b)]);
+    let write_hooks = [parent, child].map(|class| WriteHook {
+        class,
+        phase: write_phase,
+        apply: |graph, id| {
+            let Some(Object::Record { fields, .. }) = graph.get_mut(id) else {
+                panic!("expected record")
+            };
+            mark_time(fields)
+        },
+    });
+    let read_hooks = [parent, child].map(|class| ReadHook {
+        class,
+        phase: read_phase,
+        apply: |frame, id| mark_time(frame.fields_mut(id).unwrap()),
+    });
+    let (reader, copy) =
+        write_and_restore_with_read_hooks(&mut graph, root, stamped, &write_hooks, &read_hooks);
+    for (graph, root) in [(&graph, root), (reader.graph(), copy)] {
+        let root = fields(graph.get(root));
+        let child = fields(graph.get(id(&root[1])));
+        let (Value::Integer(parent_time), Value::Integer(child_time)) = (&root[0], &child[0])
+        else {
+            panic!("expected hook timestamps");
+        };
+        assert!(child_time < parent_time);
+    }
+}
+
+trait VirtualHook {
+    fn invoke(&self, fields: &mut [Value], destination: usize);
+}
+
+struct VirtualBase;
+
+impl VirtualHook for VirtualBase {
+    fn invoke(&self, fields: &mut [Value], destination: usize) {
+        let Value::Integer(counter) = &mut fields[0] else {
+            panic!("expected counter")
+        };
+        *counter += 1;
+        fields[destination] = Value::Integer(*counter);
+    }
+}
+
+struct VirtualDerived;
+
+impl VirtualHook for VirtualDerived {
+    fn invoke(&self, fields: &mut [Value], destination: usize) {
+        VirtualBase.invoke(fields, destination);
+        VirtualBase.invoke(fields, destination + 1);
+    }
+}
+
+fn invoke_virtual(fields: &mut [Value], destination: usize) -> io::Result<()> {
+    let hook: &dyn VirtualHook = &VirtualDerived;
+    hook.invoke(fields, destination);
+    Ok(())
+}
+
+fn write_virtual(graph: &mut Graph, id: ObjectId, destination: usize) -> io::Result<()> {
+    let Some(Object::Record { fields, .. }) = graph.get_mut(id) else {
+        panic!("expected record")
+    };
+    invoke_virtual(fields, destination)
+}
+
+fn virtual_hook_dispatch(stamped: bool) {
+    let mut graph = Graph::default();
+    let class = "MockWithVirtualDerived";
+    let root = record(&mut graph, class, vec![Value::Integer(0); 7]);
+    let write = [
+        WriteHook {
+            class,
+            phase: WriteHookPhase::Before,
+            apply: |graph, id| write_virtual(graph, id, 1),
+        },
+        WriteHook {
+            class,
+            phase: WriteHookPhase::After,
+            apply: |graph, id| write_virtual(graph, id, 3),
+        },
+    ];
+    let read = [ReadHook {
+        class,
+        phase: ReadHookPhase::Immediate,
+        apply: |frame, id| invoke_virtual(frame.fields_mut(id).unwrap(), 5),
+    }];
+    let (reader, copy) =
+        write_and_restore_with_read_hooks(&mut graph, root, stamped, &write, &read);
+    assert_eq!(
+        fields(graph.get(root))[1..5],
+        [1, 2, 3, 4].map(Value::Integer)
+    );
+    assert_eq!(
+        fields(reader.graph().get(copy))[5..7],
+        [3, 4].map(Value::Integer)
+    );
+}
+
+modes!(immediate_order_plain, immediate_order_stamped, |s| {
+    child_before_parent(s, false)
+});
+modes!(late_order_plain, late_order_stamped, |s| {
+    child_before_parent(s, true)
+});
+modes!(
+    virtual_dispatch_plain,
+    virtual_dispatch_stamped,
+    virtual_hook_dispatch
 );

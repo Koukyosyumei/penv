@@ -1012,3 +1012,9 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,Tru
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokePostSerializationEvenIfExceptionWasThrownDuringSerializationLate	upstream_nunit::migrant_hooks::error_late_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokePreSerialization	upstream_nunit::migrant_hooks::pre_write_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokeStaticPostSerialization	upstream_nunit::migrant_hooks::static_post_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldInvokeImmediateHooksInCorrectOrder	upstream_nunit::migrant_hooks::immediate_order_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldInvokeLateHooksInCorrectOrder	upstream_nunit::migrant_hooks::late_order_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldProperlyExecuteHooksOnVirtualMethod	upstream_nunit::migrant_hooks::virtual_dispatch_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokeImmediateHooksInCorrectOrder	upstream_nunit::migrant_hooks::immediate_order_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokeLateHooksInCorrectOrder	upstream_nunit::migrant_hooks::late_order_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldProperlyExecuteHooksOnVirtualMethod	upstream_nunit::migrant_hooks::virtual_dispatch_stamped	new
