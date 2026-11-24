@@ -2154,6 +2154,10 @@ fn is_console_action(action: &Action) -> bool {
     matches!(action, Action::ScriptLog(..) | Action::LogLevel(_) | Action::LastLog(_) | Action::Echo(_))
 }
 
+fn is_monitor_snapshot_action(action: &Action) -> bool {
+    matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment)
+}
+
 fn is_empty_machine_action(action: &Action) -> bool {
     is_console_action(action) || matches!(action,
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
@@ -2217,9 +2221,11 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
         boot.console_only = true;
         return Ok(boot);
     }
-    // A framed session can hold monitor state before it has a guest.
-    if session && !state.machine && !boot.has_platform() && !boot.started
-        && boot.runtime.iter().all(|command| is_console_action(&command.action))
+    // Keep monitor-only state in the same CPU-less backing store in both entry points.
+    if !state.machine && !boot.has_platform() && !boot.started
+        && (session || boot.runtime.iter().any(|command| is_monitor_snapshot_action(&command.action)))
+        && boot.runtime.iter().all(|command|
+            is_console_action(&command.action) || is_monitor_snapshot_action(&command.action))
     {
         boot.empty_machine = true;
         return Ok(boot);
@@ -3760,7 +3766,7 @@ fn execute(
     };
     if let Some(action) = action {
         let empty_machine_command = *machine && !boot.has_platform() && is_empty_machine_action(&action);
-        if !empty_machine_command && !is_console_action(&action)
+        if !empty_machine_command && !is_console_action(&action) && !is_monitor_snapshot_action(&action)
             && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
