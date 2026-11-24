@@ -11,6 +11,7 @@ mod compressed;
 mod constant_mmio;
 mod crc;
 mod csr;
+mod data_storage;
 mod designware_usb;
 pub mod dma_engine;
 mod dwt;
