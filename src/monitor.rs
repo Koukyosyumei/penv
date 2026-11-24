@@ -608,7 +608,8 @@ pub fn run(
             Action::WaitForBytes(id, pattern, match_start, timeout) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_bytes(*id, pattern, *match_start).and_then(|watch| {
-                    let result = drive_uart_watch(machine, watch, (*timeout).min(budget), &mut output);
+                    let result = uart_timeout_steps(&machine.bus, *timeout)
+                        .and_then(|cycles| drive_uart_watch(machine, watch, cycles.min(budget), &mut output));
                     let matched = machine.bus.take_uart_byte_match(watch);
                     machine.bus.finish_stm32_uart_watch(watch);
                     result.and_then(|(stop, count)| {
@@ -629,7 +630,8 @@ pub fn run(
             Action::WaitForTester(id, pattern, regex, mode, timeout, absent) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode).and_then(|watch| {
-                    run_uart_watch(machine, watch, (*timeout).min(budget), &mut output)
+                    uart_timeout_steps(&machine.bus, *timeout)
+                        .and_then(|cycles| run_uart_watch(machine, watch, cycles.min(budget), &mut output))
                 }).and_then(|(stop, count)| {
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);

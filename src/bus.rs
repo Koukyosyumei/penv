@@ -3428,6 +3428,7 @@ impl Bus {
             let samples = ports.map(|base| self.nrf_gpio_sample(base));
             self.nrf_peripherals[index].gpiote_sample(samples);
         }
+        let nrf_ticks = self.nrf_clock_ticks();
         let (timer_irqs, timer_dma) = self.tick_stm32_timers();
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.set_uart_level(
@@ -3437,7 +3438,7 @@ impl Bus {
                 active,
             );
             for device in &mut self.nrf_peripherals {
-                device.tick(sleeping);
+                device.tick(sleeping, nrf_ticks);
                 nvic.set_line(device.irq, device.pending(), active);
             }
             if let Some(line) = self.h7_flash.as_ref().and_then(FlashController::interrupt) {

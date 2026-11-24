@@ -34,15 +34,23 @@ impl Rng {
         self.ready && self.interrupt
     }
 
-    pub(super) fn tick(&mut self) {
-        let Some(steps) = &mut self.steps_left else {
-            return;
-        };
-        *steps -= 1;
-        if *steps != 0 {
-            return;
-        }
+    #[cfg(test)]
+    fn tick(&mut self) {
+        self.advance(1);
+    }
 
+    pub(super) fn advance(&mut self, mut ticks: u64) {
+        while let Some(remaining) = self.steps_left {
+            if ticks < remaining {
+                self.steps_left = Some(remaining - ticks);
+                break;
+            }
+            ticks -= remaining;
+            self.generate();
+        }
+    }
+
+    fn generate(&mut self) {
         // A fixed seed gives deterministic simulated input, including after system reset.
         self.state ^= self.state << 13;
         self.state ^= self.state >> 17;
