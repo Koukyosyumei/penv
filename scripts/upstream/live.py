@@ -379,7 +379,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 if (re.fullmatch(r"emulation\s+(?:GetTimeSourceInfo|IsStarted)", command)
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)):
                     return self.operation(command, assertion=True)
-                if re.match(r"(?:include|i|ExecuteScript)\s", command):
+                if re.match(r"(?:include|i|ExecuteScript|log|Save|Load)(?:\s|$)", command):
                     reply, value = self.inspect_startup(command)
                     if reply == "OK":
                         self.commands.append(command)

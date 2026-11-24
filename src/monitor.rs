@@ -1384,7 +1384,7 @@ pub fn serve(
                     }
                 }
             }
-            (Err(error), _) if missing_include(&error) => {
+            (Err(error), _) if missing_include(&error) || invalid_command_parameters(&error) => {
                 frame(&mut output, "REJECTED", error.as_bytes())
             }
             (Err(error), _) if error.starts_with("Wrong machine number.")
@@ -1899,6 +1899,21 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         }
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }
+    if let Ok(words) = command_words(command.trim())
+        && matches!(words.first(), Some(&("log" | "Save" | "Load")))
+    {
+        let uses_variables = words[1..].iter().any(|word| word.starts_with('$') || word.starts_with("@$"));
+        if (!uses_variables || load_text(&source, source.clone(), root, &mut state, &body).is_ok())
+            && let Err(error) = execute(
+                command.trim(), &words, &state.variables, &mut state.machine,
+                &mut state.boot, &source, root, 1,
+            )
+            && invalid_command_parameters(&error)
+        {
+            return Ok(StartupInput::Reply("REJECTED", error));
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
     // Inspect only read-only commands that resolve in startup state.
     // A queued runtime operation may change that state, so use the live monitor then.
     if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _] | ["lastLog"] | ["lastLog", _]))
@@ -2276,6 +2291,13 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
     Ok(())
 }
 
+const LOG_PARAMETERS: &str = "Bad parameters for command log";
+const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expected @snapshot-path";
+
+fn invalid_command_parameters(error: &str) -> bool {
+    matches!(error, LOG_PARAMETERS | SNAPSHOT_PARAMETERS)
+}
+
 fn missing_include(message: &str) -> bool {
     message.starts_with("File does not exist: ") || message.starts_with("Could not find file: ")
 }
@@ -2312,7 +2334,7 @@ fn snapshot_path(
     if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
         return Ok(path);
     }
-    let path = resolve(variables, value)?.strip_prefix('@').ok_or("expected @snapshot-path")?;
+    let path = resolve(variables, value)?.strip_prefix('@').ok_or(SNAPSHOT_PARAMETERS)?;
     Ok(script_dir.join(path_value(unquote(path))))
 }
 
@@ -2628,14 +2650,15 @@ fn execute(
         ["log", value, level @ ..] if level.len() <= 1 => {
             let value = resolve(value)?;
             let message = value.strip_prefix('"').and_then(|value| value.strip_suffix('"'))
-                .ok_or("log expects a quoted message")?;
+                .ok_or(LOG_PARAMETERS)?;
             let level = match level {
                 [] => 1,
-                [level] => crate::monitor_log::parse_level(unquote(resolve(level)?))?,
+                [level] => crate::monitor_log::parse_level(unquote(resolve(level)?)).map_err(|_| LOG_PARAMETERS)?,
                 _ => unreachable!(),
             };
             Some(Action::ScriptLog(level, format!("Script: {message}")))
         }
+        ["log", ..] => return Err(LOG_PARAMETERS.into()),
         ["lastLog", count @ ..] if count.len() <= 1 => {
             let count = count.first().map(|count| resolve(count)?.parse::<i32>()
                 .map_err(|_| "invalid log entry count".to_string())).transpose()?
@@ -2710,6 +2733,7 @@ fn execute(
                 Action::SaveMemory(path, *verb == "SaveRestorableMonitorSnapshot")
             })
         }
+        ["Save" | "Load", ..] => return Err(SNAPSHOT_PARAMETERS.into()),
         ["machine", "UserState", value @ ..] if value.len() <= 1 => {
             let value = value.first().map(|value| {
                 let value = resolve(value)?;
