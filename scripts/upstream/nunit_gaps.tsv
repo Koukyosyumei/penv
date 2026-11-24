@@ -18,7 +18,6 @@ Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	CAST_CANCTRL peripheral, acce
 Antmicro.Renode.PeripheralsTests.CortexA9GICTests	The Cortex-A9 host platform and its ARM Generic Interrupt Controller are absent.
 Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest	Remaining DualI2CAddressBMC050Test needs addressed slave registration and I2C START/STOP packet exchange with the BMC050 model.
 Antmicro.Renode.PeripheralsTests.EFR32_I2CControllerTests	EFR32 I2C controller registers, FIFO and interrupt state machine are absent.
-Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test	LPC43xx GPIO register/interrupt model is absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_AES_Tests	OpenTitan AES interaction and register model are absent; existing STM32 AES models expose a different register map.
 Antmicro.Renode.PeripheralsTests.OpenTitan_I2C_Test	OpenTitan I2C register/FIFO model and interrupt state machine are absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	OpenTitan KeyManager command and state-machine model is absent.

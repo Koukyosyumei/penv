@@ -1046,3 +1046,8 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest.CtrlTest	upstream_nunit::efm32_i2c::ctrl_test	new
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest.InitTest	upstream_nunit::efm32_i2c::init_test	new
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest.InterruptTest	upstream_nunit::efm32_i2c::interrupt_test	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.ChangeDirectionToOutput	upstream_nunit::lpc43xx_gpio::change_direction_to_output	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.ChangeMask	upstream_nunit::lpc43xx_gpio::change_mask	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.ChangeMaskedOuputState	upstream_nunit::lpc43xx_gpio::change_masked_ouput_state	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.ChangeOutputsState	upstream_nunit::lpc43xx_gpio::change_outputs_state	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.InitTest	upstream_nunit::lpc43xx_gpio::init_test	new
