@@ -1295,3 +1295,26 @@ Rust モニターテスト22件が合格。
 未変更 Robot はログバッファの上限、未処理のバス読み出し・書き込みの
 ログ、および STM32F072b Console Echo の4件が合格した。
 残り2,193件は未実行（`target/monitor-log-level-validation-robot/results.json`）。
+
+### Save / Load をまたぐ RESC include
+
+`fe7326b` は、スナップショット操作の後にあるリテラルの RESC
+`include` も実行順に評価する。子スクリプトの変数変更を外側の
+`Save` より先に反映する問題を解消し、子スクリプト内での
+`Save` / `Load` を同じ Rust セッションで扱う。
+`2caee58` はライブモニターの `include` にも同じ経路を使う。
+
+固定 Renode と通常 CLI の比較では、空白をエスケープしたパスを使い、
+外側と子スクリプトのスナップショットで `changed`、`saved`、
+`changed` の順に値を得た。ライブ Robot RPC でも同じ結果。
+通常 CLI では相対パスでも同じ順を確認した。相互 include が保存境界を
+またぐ負例は、再帰上限のエラーで停止した
+（`target/monitor-literal-include-restore-proof/`、
+`target/monitor-literal-include-nested-proof/`）。
+Rust モニターテスト22件と CLI スナップショット回帰テストが合格。
+
+子スクリプト内で上書きしてから子のスナップショットを読み込む場合も
+同じ結果になった（`nested-load-*.jsonl` と `nested-load-cli.log`）。
+未変更 Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
+残り2,193件は未実行（`target/monitor-literal-include-nested-robot/results.json`）。
+検証対象は RESC と対応済みの単一マシンのスナップショット。
