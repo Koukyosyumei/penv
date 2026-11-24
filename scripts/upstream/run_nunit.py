@@ -220,7 +220,7 @@ def main():
         writer.writerow(("project", "fixture", "discovered", *states, "missing_api"))
         for (project, fixture), counts in sorted(fixtures.items()):
             writer.writerow((project, fixture, sum(counts.values()), *(counts[state] for state in states),
-                             notes.get(fixture, "") if counts["api_missing"] else ""))
+                             notes.get(fixture, "-") if counts["api_missing"] else "-"))
 
     print(json.dumps(summary), out)
     return int(status != 0 or totals["pass"] != len(tests))
