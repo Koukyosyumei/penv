@@ -170,6 +170,7 @@ Options:
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
+  --monitor-stdio    Run a framed monitor session on stdin/stdout
   --raw              Load a flat binary (default: ELF)
   --rv64             Run a raw image on an RV64IM CPU
   --hex              Load an Intel HEX image on a Cortex-M platform
@@ -598,6 +599,7 @@ fn run() -> Result<ExitCode, String> {
     let mut platform_path = None;
     let mut script = None;
     let mut asset_dir = None;
+    let mut monitor_stdio = false;
     let mut platform_root = None;
     let mut stm32f0_console = false;
     let mut adc_inputs = Vec::new();
@@ -684,6 +686,7 @@ fn run() -> Result<ExitCode, String> {
             }
             Some("--stats") => stats = true,
             Some("--stop-when-halted") => stop_when_halted = true,
+            Some("--monitor-stdio") => monitor_stdio = true,
             Some("--uart-stdin") => uart_stdin = true,
             Some("--uart-stdin-reset") => uart_stdin_reset = true,
             Some("--ethernet-loopback") => {
@@ -1364,6 +1367,9 @@ fn run() -> Result<ExitCode, String> {
     let mut zephyr = zephyr_boot::BootOptions::default();
     let mut cpu_registers = Vec::new();
     let mut log_function_names = false;
+    if monitor_stdio && (uart_stdin || (platform_path.is_none() && script.is_none())) {
+        return Err("--monitor-stdio requires a platform or script and exclusive stdin".into());
+    }
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -1517,7 +1523,7 @@ fn run() -> Result<ExitCode, String> {
     }
     let memory_only = !has_firmware
         && platform_path.is_some()
-        && (max_steps == Some(0) || static_memory_script || sd_setup_only);
+        && (max_steps == Some(0) || static_memory_script || sd_setup_only || monitor_stdio);
     let inspect_only = path.is_none()
         && binaries.is_empty()
         && (!cpu_control.is_empty() || !cpu_registers.is_empty());
@@ -2089,6 +2095,10 @@ fn run() -> Result<ExitCode, String> {
         {
             return Err(format!("unknown LiteX I2S transmitter {name:?}"));
         }
+    }
+    if monitor_stdio {
+        monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock())?;
+        return Ok(ExitCode::SUCCESS);
     }
     if max_steps == Some(0) && !static_memory_script {
         if let Some((_, trace)) = &pc_trace {

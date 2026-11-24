@@ -4842,16 +4842,34 @@ impl Bus {
         Ok((id, history))
     }
 
+    #[cfg(test)]
     pub fn watch_uart_tester(
         &mut self,
         id: Option<usize>,
         pattern: &str,
     ) -> Result<UartWatch, String> {
+        self.watch_uart_tester_mode(id, pattern, UartWaitMode::Lf)
+    }
+
+    pub fn watch_uart_tester_mode(
+        &mut self,
+        id: Option<usize>,
+        pattern: &str,
+        mode: UartWaitMode,
+    ) -> Result<UartWatch, String> {
         let (id, TesterHistory::Text(history)) = self.uart_tester(id)? else {
             return Err("Attempt to wait for text on a tester configured in binary mode.".into());
         };
-        history.begin_wait(pattern, UartWaitMode::Lf);
+        history.begin_wait(pattern, mode);
         Ok(UartWatch::Tester(id))
+    }
+
+    pub fn uart_tester_matched_line(&self, watch: UartWatch) -> Option<String> {
+        let UartWatch::Tester(id) = watch else { return None };
+        match &self.uart_testers.get(id)?.1 {
+            TesterHistory::Text(history) => history.matched_line(),
+            TesterHistory::Binary(_) => None,
+        }
     }
 
     pub fn watch_uart_bytes(

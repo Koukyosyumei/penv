@@ -1,5 +1,6 @@
 """One Robot invocation per suite variant, isolated in a suite worker."""
 from collections import Counter
+import json
 from functools import partial
 import os
 from pathlib import Path
@@ -7,7 +8,7 @@ import re
 from threading import Thread
 import xml.etree.ElementTree as ET
 
-from penv_robot import Endpoint
+from live import LiveEndpoint
 
 # These suites launch host services or invoke the upstream runner recursively.
 HOST_SUITES = {"tests/peripherals/VirtIO.robot", "tests/tools/renode-test.robot",
@@ -112,7 +113,7 @@ def run_suite(task, *, options, renode, binary, assets):
         suite.tests = [test for test in suite.tests if test.name in active]
         if active:
             xml = out / "robot.xml"
-            endpoint = Endpoint(renode, binary, out, assets, False)
+            endpoint = LiveEndpoint(renode, binary, out, assets, False)
             listener = SuiteListener(endpoint, active, out, xml)
             with endpoint.server() as server:
                 worker = Thread(target=server.serve_forever, daemon=True)
@@ -128,6 +129,7 @@ def run_suite(task, *, options, renode, binary, assets):
                                         f"RESULTS_DIRECTORY:{out}", f"RENODETOOLS:{renode / 'tools'}",
                                         f"RENODEKEYWORDS:{renode / 'tests/renode-keywords.robot'}"])
                 finally:
+                    endpoint.close()
                     server.shutdown()
                     worker.join()
             records.update(listener.results)
@@ -137,6 +139,10 @@ def run_suite(task, *, options, renode, binary, assets):
                                 and re.search(r"No keyword with name .* found", msg.text or "")), None)
                 if missing:
                     records[name].update(status="unsupported", reason=missing)
+                if records[name]["status"] in {"pass", "fail"} and any(
+                        keyword.get("name") == "Sleep" and keyword.get("library") == "BuiltIn"
+                        for keyword in node.iter("kw")):
+                    records[name].update(status="unsupported", reason="requires asynchronous emulation during host Sleep")
                 if node.find("status").get("status") == "FAIL" and records[name]["status"] == "pass":
                     records[name].update(status="fail", reason="Robot XML reports failure")
                 case, directory = active[name]
@@ -172,7 +178,6 @@ def run_batch(selected, options, renode, binary, out, assets, jobs):
                 records = [status_record(case, "not_run", f"suite worker error: {exc!r}")
                            for case in cases]
                 # A late exception can leave valid per-case results.
-                import json
                 saved = {(r["id"], r["parameters"]["hotspot_action"]): r
                          for p in directory.glob("case-*/case.json")
                          for r in [json.loads(p.read_text())]}
@@ -181,7 +186,6 @@ def run_batch(selected, options, renode, binary, out, assets, jobs):
             counts.update(record["status"] for record in records)
             snapshot = dict(completed=index, total=len(tasks), path=path, hotspot=hotspot,
                             counts=dict(counts))
-            import json
             print(json.dumps(snapshot), file=progress, flush=True)
             print(f"Robot {index}/{len(tasks)} {path} {hotspot} {dict(counts)}", flush=True)
             write_json(directory.with_suffix(".json"), records)

@@ -299,8 +299,8 @@ def main():
                 exclude=["excluded", f"exclude_{system}", f"exclude_host_{arch}"],
                 skip=["skipped", f"skip_{system}"])
     rows, projects, providers, options = inventory(renode, host)
-    if args.all and args.suite:
-        parser.error("--all and --suite are mutually exclusive")
+    if args.all and (args.suite or args.case):
+        parser.error("--all cannot be combined with --suite or --case")
     if args.all and not args.nunit_root:
         parser.error("--all requires --nunit-root so all official NUnit IDs are included")
     selected = [row for row in rows if (args.all or row["path"] in (args.suite or DEFAULT_ROBOT))

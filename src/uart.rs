@@ -292,6 +292,7 @@ struct UartLineMatch {
     prompt: bool,
     pattern: Vec<u8>,
     tail: VecDeque<u8>,
+    line: VecDeque<u8>,
     contains: bool,
     matched: bool,
 }
@@ -306,6 +307,7 @@ impl UartLineMatch {
             prompt: matches!(end, UartWaitMode::Prompt),
             pattern: pattern.as_bytes().to_vec(),
             tail: VecDeque::new(),
+            line: VecDeque::new(),
             contains: false,
             matched: false,
         }
@@ -320,13 +322,22 @@ impl UartLineMatch {
         if byte == self.end {
             self.matched = self.contains;
             self.tail.clear();
-            self.contains = false;
-        } else if !self.contains {
-            if self.tail.len() == self.pattern.len() {
-                self.tail.pop_front();
+            if !self.matched {
+                self.line.clear();
             }
-            self.tail.push_back(byte);
-            self.contains = self.tail.iter().eq(self.pattern.iter());
+            self.contains = false;
+        } else {
+            if self.line.len() == UART_HISTORY_BYTES {
+                self.line.pop_front();
+            }
+            self.line.push_back(byte);
+            if !self.contains {
+                if self.tail.len() == self.pattern.len() {
+                    self.tail.pop_front();
+                }
+                self.tail.push_back(byte);
+                self.contains = self.tail.iter().eq(self.pattern.iter());
+            }
         }
     }
 }
@@ -464,6 +475,11 @@ impl UartHistory {
 
     pub fn matched(&self) -> bool {
         self.failure.is_some() || self.active.as_ref().is_some_and(|matcher| matcher.matched)
+    }
+
+    pub fn matched_line(&self) -> Option<String> {
+        let matched = self.active.as_ref().filter(|active| active.matched)?;
+        Some(String::from_utf8_lossy(&matched.line.iter().copied().collect::<Vec<_>>()).into_owned())
     }
 
     pub fn finish_wait(&mut self) {

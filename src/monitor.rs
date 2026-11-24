@@ -3,7 +3,7 @@ use crate::csr::TrapVector;
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{self, Write},
+    io::{self, BufRead, Write},
     net::Ipv4Addr,
     path::{Path, PathBuf},
     time::Duration,
@@ -105,7 +105,7 @@ enum Action {
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
     CreateUartTester(String, bool),
     DefaultUartTester(Option<usize>),
-    WaitForTester(Option<usize>, String, u64),
+    WaitForTester(Option<usize>, String, UartWaitMode, u64),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, u64),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
@@ -510,9 +510,9 @@ pub fn run(
                     })
                 })
             }
-            Action::WaitForTester(id, pattern, timeout) => {
+            Action::WaitForTester(id, pattern, mode, timeout) => {
                 let start = machine.elapsed_steps();
-                machine.bus.watch_uart_tester(*id, pattern).and_then(|watch| {
+                machine.bus.watch_uart_tester_mode(*id, pattern, *mode).and_then(|watch| {
                     run_uart_watch(machine, watch, (*timeout).min(budget), &mut output)
                 }).and_then(|(stop, count)| {
                     retired += count;
@@ -582,6 +582,77 @@ pub fn run(
         }
     }
     Ok((Stop::ScriptComplete, retired))
+}
+
+/// Execute one runtime command at a time on the same machine. Separate command
+/// status from UART/monitor bytes so firmware output cannot create a reply frame.
+pub fn serve(
+    machine: &mut Machine,
+    mut input: impl BufRead,
+    mut output: impl Write,
+) -> Result<(), String> {
+    fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<()> {
+        writeln!(output, "{status} {}", bytes.len())?;
+        output.write_all(bytes)?;
+        output.flush()
+    }
+
+    let path = Path::new("<monitor>");
+    let mut line = String::new();
+    frame(&mut output, "READY", &[]).map_err(|error| error.to_string())?;
+    loop {
+        line.clear();
+        if input.read_line(&mut line).map_err(|error| error.to_string())? == 0 {
+            return Ok(());
+        }
+        let text = line.trim();
+        let mut boot = Boot {
+            platform: Some(path.into()),
+            image: Some(Asset::new("", path)),
+            ..Boot::default()
+        };
+        let mut existing_machine = true;
+        let parsed = command_words(text).and_then(|words| {
+            execute(text, &words, &HashMap::new(), &mut existing_machine, &mut boot, path, Path::new("."), 1)
+        });
+        let mut bytes = Vec::new();
+        let reply = match (parsed, boot.runtime.as_slice()) {
+            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, mode, timeout), .. }]) => {
+                let result = machine.bus.watch_uart_tester_mode(*id, expected, *mode).and_then(|watch| {
+                    let stop = drive_uart_watch(machine, watch, *timeout, &mut bytes);
+                    let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
+                    let matched = machine.bus.uart_tester_matched_line(watch);
+                    machine.bus.finish_stm32_uart_watch(watch);
+                    if let Some(line) = failure {
+                        return Ok(("FAIL", format!("Terminal tester failing entry: {line}")));
+                    }
+                    match (stop?, matched) {
+                        ((Stop::OutputMatch, _), Some(line)) => Ok(("MATCH", line)),
+                        ((Stop::Limit, _), _) => Ok(("FAIL", format!("UART line containing {expected:?} was not received (Limit)"))),
+                        ((stop, _), _) => Ok(("STOP", format!("{stop:?}"))),
+                    }
+                });
+                match result {
+                    Ok((status, value)) => frame(&mut output, status, value.as_bytes()),
+                    Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+                }
+            }
+            (Ok(()), [command]) => {
+                match run(machine, path, std::slice::from_ref(command), u64::MAX, &mut bytes) {
+                    Ok((Stop::ScriptComplete, _)) => frame(&mut output, "OK", &bytes),
+                    Ok((stop, _)) => {
+                        frame(&mut output, "STOP", format!("{stop:?}").as_bytes())
+                    }
+                    Err(error) => {
+                        frame(&mut output, "ERROR", error.as_bytes())
+                    }
+                }
+            }
+            (result, _) => frame(&mut output, "UNSUPPORTED",
+                                result.err().as_deref().unwrap_or("not a runtime command").as_bytes()),
+        };
+        reply.map_err(|error| error.to_string())?;
+    }
 }
 
 fn read_bus_bytes(
@@ -1350,9 +1421,9 @@ fn execute(
                 options.timeout,
             ))
         }
-        ["WaitForLineOnUart", ..] => {
+        [command @ ("WaitForLineOnUart" | "WaitForTesterPrompt"), ..] => {
             let (pattern, arguments) = quoted_argument(
-                text["WaitForLineOnUart".len()..].trim_start(),
+                text[command.len()..].trim_start(),
             )
             .filter(|(pattern, _)| !pattern.is_empty())
             .ok_or(
@@ -1362,6 +1433,7 @@ fn execute(
             Some(Action::WaitForTester(
                 options.id,
                 pattern.to_owned(),
+                if *command == "WaitForTesterPrompt" { UartWaitMode::Prompt } else { UartWaitMode::Lf },
                 options.timeout,
             ))
         }
