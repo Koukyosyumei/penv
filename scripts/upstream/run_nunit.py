@@ -196,10 +196,13 @@ def main():
         fixtures[(case["project"], case["fixture"])][case["status"]] += 1
 
     totals = Counter(case["status"] for case in cases)
+    inactive = ("excluded", "ignored", "skipped", "explicit", "not_runnable")
     summary = dict(ported=len(mapped), newly_ported=sum(case["origin"] == "new" for case in mapped),
                    passed=totals["pass"], failed=totals["fail"], not_run=totals["not_run"],
-                   discovered=len(cases), api_missing=totals["api_missing"],
-                   unmapped=totals["unmapped"], selected=len(tests))
+                   discovered=len(cases), runnable=len(cases) - sum(totals[state] for state in inactive),
+                   api_missing=totals["api_missing"], unmapped=totals["unmapped"], selected=len(tests),
+                   mapped_excluded=sum(case["status"] in inactive for case in mapped),
+                   **{state: totals[state] for state in inactive})
     report = dict(renode_sha=PIN, submodule_shas=revisions,
                   penv_sha=git(ROOT, "rev-parse", "HEAD"), discovery=discovery_runs, summary=summary,
                   rust=dict(command=command, exit_code=status, log=log.name, binary_sha256=binary_sha),
