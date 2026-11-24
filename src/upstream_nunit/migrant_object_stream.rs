@@ -143,6 +143,18 @@ const STAMPS: &[TypeStamp<'static>] = &[
         "StructGenericBox<SpeciallySerializable>",
         &[("Element", FieldKind::Reference)],
     ),
+    stamp(
+        "GenericClassWithNestedGenericArgument<string>",
+        &[("Field", FieldKind::Reference)],
+    ),
+    stamp("GenericClass<string>", &[("Field", FieldKind::Reference)]),
+    stamp(
+        "ClassWithTheListOfInterfaces",
+        &[("List", FieldKind::Reference)],
+    ),
+    stamp("List<IInterface>", &[("items", FieldKind::Reference)]),
+    stamp("ImplementingInterfaceOne", &[]),
+    stamp("ImplementingInterfaceTwo", &[]),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -2195,4 +2207,58 @@ stamp_modes!(
     detect_stream_shift_plain,
     detect_stream_shift_stamped,
     detect_stream_shift
+);
+
+fn nested_generic_array(stamped: bool) {
+    let mut graph = Graph::default();
+    let text = graph.insert(string("test"));
+    let generic = graph.insert(record("GenericClass<string>", vec![Value::Ref(text)]));
+    let array = graph.insert(Object::Array(vec![Value::Ref(generic)]));
+    let root = graph.insert(record(
+        "GenericClassWithNestedGenericArgument<string>",
+        vec![Value::Ref(array)],
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let restored = graph.get(copy).expect("expected restored object");
+    let array = reference(&fields(restored)[0]);
+    let item = graph
+        .get(reference(&array_values(graph, array)[0]))
+        .unwrap();
+    assert_eq!(string_value(graph, &fields(item)[0]), "test");
+}
+
+fn list_of_interfaces(stamped: bool) {
+    let mut graph = Graph::default();
+    let variants = ["ImplementingInterfaceOne", "ImplementingInterfaceTwo"];
+    let items = (0..100)
+        .map(|i| Value::Ref(graph.insert(record(variants[i % 2], vec![]))))
+        .collect();
+    let entries = list(&mut graph, "List<IInterface>", items);
+    let root = graph.insert(record(
+        "ClassWithTheListOfInterfaces",
+        vec![Value::Ref(entries)],
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let restored = graph.get(copy).expect("expected restored object");
+    let items = list_values(graph, reference(&fields(restored)[0]), "List<IInterface>");
+    assert_eq!(items.len(), 100);
+    for (i, item) in items.iter().enumerate() {
+        assert_eq!(
+            graph.get(reference(item)),
+            Some(&record(variants[i % 2], vec![]))
+        );
+    }
+}
+
+stamp_modes!(
+    nested_generic_array_plain,
+    nested_generic_array_stamped,
+    nested_generic_array
+);
+stamp_modes!(
+    list_of_interfaces_plain,
+    list_of_interfaces_stamped,
+    list_of_interfaces
 );
