@@ -868,3 +868,19 @@ Rust モニター 21 件と UART 関連 34 件は合格した。
 仮想時計を共有した後もスナップショットの Rust テスト 3 件が合格した。
 未変更の HEX、STM32F072b Console Echo、全バイト値の正規表現は
 `7b00750` で合格した（`target/monitor-uart-completed-7b00750-*/results.json`）。
+
+`56d8c4d` は単一マシンの Rust モニターで `machine GetTimeSourceInfo` と
+`machine SetQuantum` を処理する。固定 Renode と同じ空マシンの
+コマンド列で、`machine` と `emulation` の両方が、同期量 2 ms、
+4 ms、1 ms の順で変更を反映した。
+`c253a34` は `mm:ss` と `hh:mm:ss` を共通の時間引数として扱う。
+`SetGlobalQuantum "00:00:00.000000050"` に続けて
+`RunFor "00:00:00.02"` と `RunUntil "00:00.03"` を実行し、
+通常 CLI と Robot RPC で固定 Renode と同じ 30 ms と同期量 50 ns を確認した。
+証跡は `target/monitor-quantum-proof/`。Rust モニターテスト 21 件が合格した。
+空マシンの保存・復帰でも両方の時刻照会が 10 ms と同期量 2 ms を返した
+（同ディレクトリの `{native,penv}/clock.log`）。
+未変更の HEX と STM32F072b Console Echo は合格した。
+`Should Step Over Time Quantum With Multiple CPUs Active` は起動時の
+ブート引数付き `sysbus LoadFdt` が未対応で時刻アサーションに到達しなかった
+（`target/monitor-interval-c253a34-*/results.json`）。
