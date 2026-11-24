@@ -2689,6 +2689,7 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
         if (matches!(words.as_slice(),
                 ["mach" | "machine", "set", _]
                 | ["numbersMode", _]
+                | ["emulation", "SetGlobalQuantum" | "SetQuantum" | "RunFor" | "RunUntil", _]
                 | ["machine", "UserState" | "GetTimeSourceInfo" | "SetQuantum" | "Reset", ..])
             || words.first().is_some_and(|word| requires_selected_machine(word) && *word != "machine"))
             && has_snapshot_boundary(&state.boot)
