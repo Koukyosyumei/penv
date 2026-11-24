@@ -1393,7 +1393,12 @@ fn run() -> Result<ExitCode, String> {
                 return Ok(ExitCode::SUCCESS);
             }
         }
-        let boot = match monitor::load(script, root) {
+        let parsed = if monitor_stdio {
+            monitor::load_for_session(script, root)
+        } else {
+            monitor::load(script, root)
+        };
+        let boot = match parsed {
             Ok(boot) if uart_log_dir.is_none() => boot,
             result => {
                 let plan =
@@ -1401,6 +1406,9 @@ fn run() -> Result<ExitCode, String> {
                         Ok(_) => error,
                         Err(original) => format!("{original}; network RESC: {error}"),
                     })?;
+                if monitor_stdio && !plan.is_single_boot() {
+                    return Err("monitor session cannot operate multiple machines".into());
+                }
                 if !plan.is_single_boot() || uart_log_dir.is_some() {
                     if path.is_some()
                         || ram_mib.is_some()
@@ -2097,6 +2105,15 @@ fn run() -> Result<ExitCode, String> {
         }
     }
     if monitor_stdio {
+        if !post_run.is_empty() {
+            return Err("unsupported command: post-run actions in a monitor session".into());
+        }
+        if let Some(steps) = run_steps {
+            let (stop, _) = machine.run(steps, &mut io::stderr().lock())?;
+            if stop != Stop::Limit {
+                return Err(format!("monitor script stopped before completion: {stop:?}"));
+            }
+        }
         if !runtime.is_empty() {
             let (stop, _) = monitor::run(
                 &mut machine,

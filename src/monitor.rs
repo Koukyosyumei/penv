@@ -947,6 +947,14 @@ struct ScriptState {
 }
 
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
+    load_script(path, root, false)
+}
+
+pub fn load_for_session(path: &Path, root: &Path) -> Result<Boot, String> {
+    load_script(path, root, true)
+}
+
+fn load_script(path: &Path, root: &Path, session: bool) -> Result<Boot, String> {
     let mut state = ScriptState::default();
     load_file(path, root, &mut state)?;
     let mut boot = state.boot;
@@ -964,6 +972,7 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
     }
     if (boot.image.is_some() || !boot.binaries.is_empty())
         && !boot.runtime.is_empty()
+        && !session
         && boot.runtime.iter().all(|command| {
             matches!(
                 command.action,
@@ -979,7 +988,7 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
     }
     if !state.machine
         || boot.platform.is_none()
-        || (boot.image.is_none()
+        || (!session && boot.image.is_none()
             && boot.binaries.is_empty()
             && !is_static_memory_script(&boot.runtime)
             && !is_configuration_only(&boot.runtime)
@@ -1099,10 +1108,9 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
                 .ok_or_else(|| error("expected variable assignment"))?;
             let name = name.trim();
             if let Some(name) = name.strip_suffix('?') {
-                state
-                    .variables
-                    .entry(name.trim().into())
-                    .or_insert_with(|| value.trim().into());
+                if resolve(&state.variables, &format!("${}", name.trim())).is_err() {
+                    state.variables.entry(name.trim().into()).or_insert_with(|| value.trim().into());
+                }
             } else {
                 state.variables.insert(name.into(), value.trim().into());
             }
@@ -1120,12 +1128,32 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
                         "commands after start are unsupported in a boot script",
                     ));
                 }
-                let file = resolve(&state.variables, value)
-                    .map_err(|e| error(&e))?
-                    .strip_prefix('@')
-                    .ok_or_else(|| error("expected @script-path"))?;
-                let included = local_path(&path_value(file), path, root);
-                load_file(&included, root, state).map_err(|e| error(&e))?;
+                let included = if let Some(relative) = value
+                    .strip_prefix("$ORIGIN/")
+                    .or_else(|| value.strip_prefix("$global.ORIGIN/"))
+                {
+                    path.parent().unwrap_or(Path::new(".")).join(path_value(relative))
+                } else {
+                    let value = resolve(&state.variables, value).map_err(|e| error(&e))?;
+                    let file = value.strip_prefix('@').unwrap_or_else(|| unquote(value));
+                    let file = path_value(file);
+                    // Renode searches the current monitor path before the script fallback.
+                    let candidate = root.join(&file);
+                    if candidate.is_file() {
+                        candidate
+                    } else {
+                        local_path(&file, path, root)
+                    }
+                };
+                match included.extension().and_then(|suffix| suffix.to_str()) {
+                    Some("repl") if state.machine && state.boot.platform.is_none() => {
+                        state.boot.platform = Some(included);
+                    }
+                    Some("repl" | "cs" | "py") => {
+                        return Err(error("unsupported command: include needs an available loader"));
+                    }
+                    _ => load_file(&included, root, state).map_err(|e| error(&e))?,
+                }
             }
             ["runMacro", name] if name.starts_with('$') => {
                 let body = state
@@ -1178,15 +1206,26 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
     Ok(())
 }
 
-fn resolve<'a>(variables: &'a HashMap<String, String>, value: &'a str) -> Result<&'a str, String> {
-    match value.strip_prefix('$') {
-        Some("") => Err("missing variable name".into()),
-        Some(name) => variables
+fn resolve<'a>(variables: &'a HashMap<String, String>, mut value: &'a str) -> Result<&'a str, String> {
+    let mut remaining = variables.len();
+    while let Some(name) = value.strip_prefix('$') {
+        if name.is_empty() {
+            return Err("missing variable name".into());
+        }
+        if remaining == 0 {
+            return Err(format!("unknown or recursive variable {name}"));
+        }
+        value = variables
             .get(name)
-            .map(String::as_str)
-            .ok_or_else(|| format!("unknown variable {name}")),
-        None => Ok(value),
+            .or_else(|| {
+                name.strip_prefix("global.")
+                    .and_then(|short| variables.get(short))
+                    .or_else(|| variables.get(&format!("global.{name}")))
+            })
+            .ok_or_else(|| format!("unknown variable {name}"))?;
+        remaining -= 1;
     }
+    Ok(value)
 }
 
 fn parse_reset_hooks(mut commands: &str, hooks: &mut Vec<ResetHook>) -> Result<(), String> {

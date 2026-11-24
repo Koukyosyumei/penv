@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 
+from monitor_input import MonitorInput, PUBLIC_ASSET, at_path, script_asset_urls, words
 from penv_robot import (AssertionFailed, Endpoint, PenvExecutionError, PenvStartupError,
                         PenvUnsupported, Unsupported)
 
@@ -35,6 +36,8 @@ class LiveEndpoint(Endpoint):
         super().reset()
         self.platform = None
         self.script = None
+        self.script_urls = {}
+        self.monitor_input = MonitorInput(self.root, self.out)
         self.replaying = False
         self.inline = []
         self.using_bus = False
@@ -105,17 +108,41 @@ class LiveEndpoint(Endpoint):
             raise Unsupported(f"HotSpot action {action} requires additional lifecycle support")
 
     def execute_script(self, script):
-        if self.commands or self.proc or self.script:
-            raise Unsupported("Execute Script requires a fresh monitor")
-        candidate = (self.root / script.removeprefix("@")).resolve()
-        if not candidate.is_relative_to(self.root):
-            raise Unsupported("Execute Script requires a pinned upstream script")
-        if not candidate.is_file():
-            raise FileNotFoundError(candidate)
-        self.script = candidate
+        self.load_script(self.monitor_input.path(script))
+        return ""
+
+    def include(self, tokens):
+        if not tokens:
+            raise Unsupported("include requires a file")
+        files = [self.monitor_input.path(token) for token in tokens]
+        extensions = {file.suffix for file in files}
+        if len(extensions) != 1 or len(files) > 1 and extensions != {".cs"}:
+            raise Unsupported("include accepts multiple files only for a C# plugin")
+        file = files[0]
+        self.calls[-1]["include"] = {"files": [str(item) for item in files], "format": file.suffix}
+        if file.suffix in {".cs", ".py"}:
+            raise PenvUnsupported(f"penv has no monitor loader for {file.suffix} includes")
+        if file.suffix == ".repl":
+            if not self.commands or self.proc or self.platform or self.inline or self.script:
+                raise Unsupported("REPL inclusion needs one machine before its platform is loaded")
+            self.platform = file
+            self.calls[-1]["include"]["stage"] = "platform selected for penv load"
+        else:
+            self.load_script(file)
+            self.calls[-1]["include"]["stage"] = "penv monitor ready"
+        return ""
+
+    def load_script(self, candidate):
+        if self.proc or self.script or self.platform or self.inline or len(self.commands) > 1:
+            raise Unsupported("RESC inclusion requires a fresh machine or monitor")
+        self.script = self.out / "include.resc"
+        self.script.write_text("\n".join([*self.monitor_input.script_prefix(), *self.commands,
+                                          f"include {at_path(candidate)}"]) + "\n")
+        urls = script_asset_urls(candidate, self.root)
+        urls.update(PUBLIC_ASSET.findall("\n".join(self.monitor_input.script_prefix())))
+        self.script_urls = {url.rsplit("/", 1)[-1]: url for url in urls}
         self.image = True
         self.ensure_running()
-        return ""
 
     def close(self):
         proc = getattr(self, "proc", None)
@@ -137,6 +164,18 @@ class LiveEndpoint(Endpoint):
             command = " ".join(command)
         elif fragments:
             raise Unsupported(f"Execute Command machine context or arguments: {fragments}")
+        assigned = self.monitor_input.assign(command)
+        if assigned is not None:
+            name, value = assigned
+            self.calls[-1]["variable"] = {"name": name, "token": value}
+            return ""
+        tokens = words(command)
+        if tokens and tokens[0] in {"include", "i"}:
+            return self.include(tokens[1:])
+        expanded = self.monitor_input.substitute(command)
+        if expanded != command:
+            self.calls[-1]["expanded_command"] = expanded
+            command = expanded
         if command == "using sysbus":
             self.using_bus = True
             return ""
@@ -145,14 +184,13 @@ class LiveEndpoint(Endpoint):
             return ""
         if not self.commands and re.fullmatch(r'mach create(?: "[^"\r\n]+")?', command):
             self.commands.append(command)
+            self.monitor_input.name_machine(command.removeprefix("mach create").strip().strip('"') or "machine")
             return ""
         if self.commands and not self.started and not self.proc:
-            match = re.fullmatch(r"machine LoadPlatformDescription (@[\w./-]+)", command)
-            if match and self.platform is None:
-                candidate = (self.root / match[1][1:]).resolve()
-                if candidate.is_relative_to(self.root) and candidate.is_file():
-                    self.platform = candidate
-                    return ""
+            tokens = words(command)
+            if tokens[:2] == ["machine", "LoadPlatformDescription"] and len(tokens) == 3 and self.platform is None:
+                self.platform = self.monitor_input.path(tokens[2])
+                return ""
             prefix = "machine LoadPlatformDescriptionFromString "
             if command.startswith(prefix) and self.platform is None and not self.image:
                 arg = command[len(prefix):]
@@ -164,11 +202,15 @@ class LiveEndpoint(Endpoint):
                     raise Unsupported("invalid inline platform quoting")
                 self.inline.append(repl)
                 return ""
-            if not self.image and re.fullmatch(
-                r"sysbus Load(?:HEX|ELF) @https://dl\.antmicro\.com/projects/renode/[\w.-]+", command
-            ) and (self.platform or self.inline):
-                self.fetch(command.split("@", 1)[1])
-                self.commands.append(command)
+            if (not self.image and tokens[:1] == ["sysbus"] and len(tokens) == 3
+                    and tokens[1] in {"LoadELF", "LoadHEX"} and (self.platform or self.inline)):
+                value = tokens[2].removeprefix("@")
+                if PUBLIC_ASSET.fullmatch(value):
+                    self.fetch(value)
+                    source = tokens[2]
+                else:
+                    source = at_path(self.monitor_input.path(tokens[2]))
+                self.commands.append(f"sysbus {tokens[1]} {source}")
                 self.image = True
                 return ""
             if self.image and re.fullmatch(r"sysbus\.cpu VectorTableOffset 0x[0-9a-fA-F]+", command):
@@ -245,24 +287,38 @@ class LiveEndpoint(Endpoint):
         elif self.image:
             script = self.out / "boot.resc"
             script.write_text("\n".join([self.commands[0],
-                              f"machine LoadPlatformDescription @{platform}",
+                              f"machine LoadPlatformDescription {at_path(platform)}",
                               *self.commands[1:]]) + "\n")
             cmd.extend(["--script", str(script), "--asset-dir", str(self.assets)])
         else:
             cmd.extend(["--platform", str(platform)])
         self.calls[-1].update(command=cmd, stage="launch")
-        with (self.out / "penv.stderr").open("wb") as stderr:
-            self.proc = subprocess.Popen(cmd, cwd=self.out, stdin=subprocess.PIPE,
-                                         stdout=subprocess.PIPE, stderr=stderr, bufsize=0)
-        try:
-            status, _ = self.receive()
-        except RuntimeError as exc:
-            if re.search(r"unsupported (?:platform model|peripheral|CPU|monitor command|command)|"
-                         r"unknown (?:model|CPU)", str(exc), re.I):
-                raise PenvUnsupported(str(exc)) from exc
-            if re.search(r"No such file|Permission denied|missing firmware image", str(exc), re.I):
-                raise
-            raise PenvStartupError(str(exc)) from exc
+        downloads = set()
+        while True:
+            with (self.out / "penv.stderr").open("ab") as stderr:
+                self.proc = subprocess.Popen(cmd, cwd=self.out, stdin=subprocess.PIPE,
+                                             stdout=subprocess.PIPE, stderr=stderr, bufsize=0)
+            try:
+                status, _ = self.receive()
+                break
+            except RuntimeError as exc:
+                lines = str(exc).splitlines()
+                error = lines[-1] if lines else str(exc)
+                missing = re.search(re.escape(str(self.assets)) + r"/([^:\n]+): No such file", error)
+                if missing and missing[1] in self.script_urls and missing[1] not in downloads:
+                    self.close()
+                    self.buffer = b""
+                    downloads.add(missing[1])
+                    self.fetch(self.script_urls[missing[1]])
+                    continue
+                if "monitor session cannot operate multiple machines" in error:
+                    raise Unsupported(error) from exc
+                if re.search(r"unsupported (?:platform model|peripheral|CPU|monitor command|command)|"
+                             r"unknown (?:model|CPU)|commands after start are unsupported", error, re.I):
+                    raise PenvUnsupported(str(exc)) from exc
+                if re.search(r"No such file|Permission denied|missing firmware image", error, re.I):
+                    raise
+                raise PenvStartupError(str(exc)) from exc
         if status != "READY":
             raise RuntimeError(f"expected penv READY, got {status}")
         self.process_command = cmd
