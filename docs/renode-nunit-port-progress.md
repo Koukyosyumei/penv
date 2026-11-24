@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,777 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,785 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 619 |
+| 移植待ち | 611 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -391,3 +391,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 `TransientDerivedShouldAlsoBeTransient` の全16構成を移植した。基底型情報を使って配列の派生インスタンスを除外し、復元結果がボックス化された整数 `0` と `null` になることを検証した。対象実行で16件すべてが合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-transient-derived.tsv)・[実行ログ](nunit-evidence/targeted-migrant-transient-derived.log)
 
 `Dictionary<TKey,TValue>` の4メソッドを、バケット・エントリ・比較器を保持する内部表現で移植した。文字列には決定的な UTF-16 ハッシュを使い、カスタムキーは衝突チェーンに格納する。対象グループ160件が合格し、うち32件が新規対応。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-dictionaries.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-dictionaries.log)
+
+`Hashtable` の100組を、ボックス化したキー・値、空バケット、負荷係数と更新状態を持つ内部表現で移植した。新規8件すべてが対象実行で合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-hashtable.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-hashtable.log)

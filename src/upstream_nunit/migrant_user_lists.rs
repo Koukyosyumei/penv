@@ -91,7 +91,12 @@ const fn dictionary_stamp(
     }
 }
 
+const HASHTABLE: &str = "Hashtable";
+const HASHTABLE_BUCKET: &str = "Hashtable.bucket";
+
 const CODECS: &[Codec] = &[
+    generated_record!(HASHTABLE; buckets: reference, count: integer, occupancy: integer, load_size: integer, load_factor: float, version: integer, writer_busy: boolean, comparer: reference),
+    generated_record!(HASHTABLE_BUCKET; key: reference, value: reference, hash_collision: integer),
     generated_record!("GenericEqualityComparer<string>";),
     generated_record!(INT_DICT.class; buckets: reference, entries: reference, count: integer, version: integer, free_list: integer, free_count: integer, comparer: reference),
     generated_record!(INT_DICT.entry; hash: integer, next: integer, key: integer, value: integer),
@@ -129,6 +134,27 @@ const CODECS: &[Codec] = &[
 ];
 
 const STAMPS: &[TypeStamp<'static>] = &[
+    dictionary_stamp(
+        HASHTABLE,
+        &[
+            ("buckets", FieldKind::Reference),
+            ("count", FieldKind::Integer),
+            ("occupancy", FieldKind::Integer),
+            ("loadsize", FieldKind::Integer),
+            ("loadFactor", FieldKind::Float),
+            ("version", FieldKind::Integer),
+            ("isWriterInProgress", FieldKind::Boolean),
+            ("_keycomparer", FieldKind::Reference),
+        ],
+    ),
+    dictionary_stamp(
+        HASHTABLE_BUCKET,
+        &[
+            ("key", FieldKind::Reference),
+            ("val", FieldKind::Reference),
+            ("hash_coll", FieldKind::Integer),
+        ],
+    ),
     dictionary_stamp("GenericEqualityComparer<string>", &[]),
     dictionary_stamp(INT_DICT.class, DICTIONARY_FIELDS),
     dictionary_stamp(
@@ -916,6 +942,69 @@ fn custom_dictionary(options: Options) {
     assert_eq!(CUSTOM_DICT.restore(&restored, copy).len(), 3);
 }
 
+fn hashtable(options: Options) {
+    let mut graph = Graph::default();
+    let capacity = 197;
+    let load_factor = 0.72_f32;
+    // The fixture's integer hashes are all distinct and fit in the final table.
+    let buckets = (0..capacity)
+        .map(|bucket| {
+            let fields = if bucket < 100 {
+                vec![
+                    integer_ref(&mut graph, bucket as i64),
+                    integer_ref(&mut graph, bucket as i64 + 1),
+                    Value::Integer(bucket as i64),
+                ]
+            } else {
+                vec![Value::Null, Value::Null, Value::Integer(0)]
+            };
+            Value::Ref(graph.insert(record(HASHTABLE_BUCKET, fields)))
+        })
+        .collect();
+    let buckets = graph.insert(Object::Array(buckets));
+    let root = graph.insert(record(
+        HASHTABLE,
+        vec![
+            Value::Ref(buckets),
+            Value::Integer(100),
+            Value::Integer(0),
+            Value::Integer((load_factor * capacity as f32) as i64),
+            Value::Float(f64::from(load_factor)),
+            Value::Integer(105),
+            Value::Boolean(false),
+            Value::Null,
+        ],
+    ));
+
+    let (restored, copy) = options.restore(&graph, root);
+    let Some(Object::Record { class, fields }) = restored.get(copy) else {
+        panic!("expected hashtable");
+    };
+    assert_eq!(class, HASHTABLE);
+    assert_eq!(fields[1], Value::Integer(100));
+    let Some(Object::Array(buckets)) = restored.get(reference(&fields[0])) else {
+        panic!("expected hashtable buckets");
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for (index, bucket) in buckets.iter().enumerate() {
+        let Some(Object::Record { class, fields }) = restored.get(reference(bucket)) else {
+            panic!("expected hashtable bucket");
+        };
+        assert_eq!(class, HASHTABLE_BUCKET);
+        match fields.as_slice() {
+            [Value::Null, Value::Null, Value::Integer(0)] => {}
+            [key, value, Value::Integer(hash)] => {
+                assert_eq!(usize::try_from(*hash).unwrap() % buckets.len(), index);
+                assert_integer(&restored, key, *hash);
+                assert_integer(&restored, value, *hash + 1);
+                assert!(seen.insert(*hash));
+            }
+            _ => panic!("invalid bucket fields"),
+        }
+    }
+    assert_eq!(seen, (0..100).collect());
+}
+
 macro_rules! configurations {
     ($module:ident, $case:expr) => {
         mod $module {
@@ -1007,3 +1096,4 @@ configurations!(integer_dictionary, integer_dictionary);
 configurations!(string_dictionary, string_dictionary);
 configurations!(dictionary_identity, dictionary_identity);
 configurations!(custom_dictionary, custom_dictionary);
+configurations!(hashtable, hashtable);
