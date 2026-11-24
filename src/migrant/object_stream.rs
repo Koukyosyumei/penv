@@ -695,7 +695,12 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                 }
                 Object::Array(values) => {
                     self.data.bytes(&[2])?;
-                    Self::write_values(&mut self.data, &self.ids, values)?;
+                    Self::write_sequence(
+                        &mut self.data,
+                        &self.ids,
+                        values,
+                        self.generated.is_some(),
+                    )?;
                 }
                 Object::Rectangular {
                     dimensions,
@@ -706,11 +711,37 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     for &size in dimensions {
                         self.data.unsigned(size as u64)?;
                     }
-                    Self::write_values(&mut self.data, &self.ids, elements)?;
+                    Self::write_sequence(
+                        &mut self.data,
+                        &self.ids,
+                        elements,
+                        self.generated.is_some(),
+                    )?;
                 }
             }
             if let Some(observer) = &mut self.after_write {
                 observer(graph.get(*id).unwrap());
+            }
+        }
+        Ok(())
+    }
+
+    fn write_sequence(
+        data: &mut Writer<W>,
+        ids: &HashMap<ObjectId, usize>,
+        values: &[Value],
+        generated: bool,
+    ) -> io::Result<()> {
+        if !generated {
+            return Self::write_values(data, ids, values);
+        }
+        let mut output = GeneratedOutput { data, ids };
+        output.count(values.len())?;
+        for value in values {
+            match value {
+                Value::Integer(_) => output.integer(value)?,
+                Value::Null | Value::Ref(_) => output.reference(value)?,
+                _ => Self::write_value(output.data, output.ids, value)?,
             }
         }
         Ok(())
@@ -723,35 +754,44 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
     ) -> io::Result<()> {
         data.unsigned(values.len() as u64)?;
         for value in values {
-            match value {
-                Value::Null => data.bytes(&[0])?,
-                Value::Integer(value) => {
-                    data.bytes(&[1])?;
-                    data.signed(*value)?;
-                }
-                Value::Float(value) => {
-                    data.bytes(&[2])?;
-                    data.bytes(&value.to_le_bytes())?;
-                }
-                Value::Guid(value) => {
-                    data.bytes(&[4])?;
-                    data.guid(*value)?;
-                }
-                Value::NativeResource(resource) => return Err(unsupported(*resource, Vec::new())),
-                Value::Boolean(value) => data.bytes(&[7, u8::from(*value)])?,
-                Value::Decimal(value) => {
-                    data.bytes(&[6])?;
-                    data.decimal(*value)?;
-                }
-                Value::BigInteger(bytes) => {
-                    data.bytes(&[5])?;
-                    data.unsigned(bytes.len() as u64)?;
-                    data.bytes(bytes)?;
-                }
-                Value::Ref(id) => {
-                    data.bytes(&[3])?;
-                    data.unsigned(ids[id] as u64)?;
-                }
+            Self::write_value(data, ids, value)?;
+        }
+        Ok(())
+    }
+
+    fn write_value(
+        data: &mut Writer<W>,
+        ids: &HashMap<ObjectId, usize>,
+        value: &Value,
+    ) -> io::Result<()> {
+        match value {
+            Value::Null => data.bytes(&[0])?,
+            Value::Integer(value) => {
+                data.bytes(&[1])?;
+                data.signed(*value)?;
+            }
+            Value::Float(value) => {
+                data.bytes(&[2])?;
+                data.bytes(&value.to_le_bytes())?;
+            }
+            Value::Guid(value) => {
+                data.bytes(&[4])?;
+                data.guid(*value)?;
+            }
+            Value::NativeResource(resource) => return Err(unsupported(*resource, Vec::new())),
+            Value::Boolean(value) => data.bytes(&[7, u8::from(*value)])?,
+            Value::Decimal(value) => {
+                data.bytes(&[6])?;
+                data.decimal(*value)?;
+            }
+            Value::BigInteger(bytes) => {
+                data.bytes(&[5])?;
+                data.unsigned(bytes.len() as u64)?;
+                data.bytes(bytes)?;
+            }
+            Value::Ref(id) => {
+                data.bytes(&[3])?;
+                data.unsigned(ids[id] as u64)?;
             }
         }
         Ok(())
@@ -1043,7 +1083,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     }
                     Object::Record { class, fields }
                 }
-                2 => Object::Array(self.read_values(base, limit)?),
+                2 => Object::Array(self.read_sequence(base, limit)?),
                 3 => {
                     let rank = self.count()?;
                     if !(2..=32).contains(&rank) {
@@ -1052,7 +1092,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     let dimensions = (0..rank)
                         .map(|_| self.count())
                         .collect::<io::Result<Vec<_>>>()?;
-                    let elements = self.read_values(base, limit)?;
+                    let elements = self.read_sequence(base, limit)?;
                     check_rectangular(&dimensions, &elements)?;
                     Object::Rectangular {
                         dimensions,
@@ -1155,45 +1195,62 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             .ok_or_else(|| invalid("object stream item limit exceeded"))
     }
 
+    fn read_sequence(&mut self, base: usize, limit: usize) -> io::Result<Vec<Value>> {
+        if self.generated.is_none() {
+            return self.read_values(base, limit);
+        }
+        let count = self.count()?;
+        let mut values = Vec::with_capacity(count);
+        for _ in 0..count {
+            let tag = self.data.byte()?;
+            values.push(match tag {
+                0 => Value::Null,
+                1 => Value::Integer(self.data.signed()?),
+                3 => read_reference(&mut self.data, base, limit)?,
+                _ => self.read_value(tag, base, limit)?,
+            });
+        }
+        Ok(values)
+    }
+
     fn read_values(&mut self, base: usize, limit: usize) -> io::Result<Vec<Value>> {
         let count = self.count()?;
         let mut values = Vec::new();
         for _ in 0..count {
-            values.push(match self.data.byte()? {
-                0 => Value::Null,
-                1 => Value::Integer(self.data.signed()?),
-                2 => {
-                    let mut bytes = [0; 8];
-                    self.data.bytes(&mut bytes)?;
-                    Value::Float(f64::from_le_bytes(bytes))
-                }
-                3 => {
-                    let id = self.count()?;
-                    if id >= limit {
-                        return Err(invalid("object reference outside stream table"));
-                    }
-                    Value::Ref(ObjectId(base + id))
-                }
-                4 => Value::Guid(self.data.guid()?),
-                5 => {
-                    let length = self.count()?;
-                    if length == 0 {
-                        return Err(invalid("invalid big integer length"));
-                    }
-                    let mut bytes = vec![0; length];
-                    self.data.bytes(&mut bytes)?;
-                    Value::BigInteger(bytes)
-                }
-                6 => Value::Decimal(self.data.decimal()?),
-                7 => match self.data.byte()? {
-                    0 => Value::Boolean(false),
-                    1 => Value::Boolean(true),
-                    _ => return Err(invalid("invalid boolean value")),
-                },
-                _ => return Err(invalid("unknown value kind")),
-            });
+            let tag = self.data.byte()?;
+            values.push(self.read_value(tag, base, limit)?);
         }
         Ok(values)
+    }
+
+    fn read_value(&mut self, tag: u8, base: usize, limit: usize) -> io::Result<Value> {
+        Ok(match tag {
+            0 => Value::Null,
+            1 => Value::Integer(self.data.signed()?),
+            2 => {
+                let mut bytes = [0; 8];
+                self.data.bytes(&mut bytes)?;
+                Value::Float(f64::from_le_bytes(bytes))
+            }
+            3 => read_reference(&mut self.data, base, limit)?,
+            4 => Value::Guid(self.data.guid()?),
+            5 => {
+                let length = self.count()?;
+                if length == 0 {
+                    return Err(invalid("invalid big integer length"));
+                }
+                let mut bytes = vec![0; length];
+                self.data.bytes(&mut bytes)?;
+                Value::BigInteger(bytes)
+            }
+            6 => Value::Decimal(self.data.decimal()?),
+            7 => match self.data.byte()? {
+                0 => Value::Boolean(false),
+                1 => Value::Boolean(true),
+                _ => return Err(invalid("invalid boolean value")),
+            },
+            _ => return Err(invalid("unknown value kind")),
+        })
     }
 
     pub(super) fn finish_into_graph(self) -> io::Result<Graph> {
@@ -1444,14 +1501,16 @@ impl<R: Read> RecordInput for GeneratedInput<'_, R> {
     fn reference(&mut self) -> io::Result<Value> {
         match self.data.byte()? {
             0 => Ok(Value::Null),
-            3 => {
-                let id = self.data.unsigned()?;
-                if id >= self.limit as u64 {
-                    return Err(invalid("generated reference outside stream table"));
-                }
-                Ok(Value::Ref(ObjectId(self.base + id as usize)))
-            }
+            3 => read_reference(self.data, self.base, self.limit),
             _ => Err(invalid("expected generated reference field")),
         }
     }
+}
+
+fn read_reference(data: &mut Reader<impl Read>, base: usize, limit: usize) -> io::Result<Value> {
+    let id = data.unsigned()?;
+    if id >= limit as u64 {
+        return Err(invalid("object reference outside stream table"));
+    }
+    Ok(Value::Ref(ObjectId(base + id as usize)))
 }

@@ -595,11 +595,11 @@ fn should_serialize_array_reference_to_self_stamped() {
     should_serialize_array_reference_to_self_with_stamping(true);
 }
 
-fn should_serialize_array_reference_to_self_with_stamping(stamped: bool) {
+fn should_serialize_array_reference_to_self_with_stamping(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let array = graph.insert(Object::Array(vec![Value::Null; 2]));
     *graph.get_mut(array).unwrap() = Object::Array(vec![Value::Ref(array); 2]);
-    let (reader, copy) = deep_clone(&graph, array, stamped);
+    let (reader, copy) = methods.into().clone(&graph, array);
     let Object::Array(elements) = reader.graph().get(copy).unwrap() else {
         panic!("expected array")
     };
@@ -871,11 +871,11 @@ fn array_values(graph: &Graph, root: ObjectId) -> &[Value] {
     values
 }
 
-fn primitives_array(stamped: bool) {
+fn primitives_array(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let expected = [1, 2, 3, 4, 5, 6].map(Value::Integer);
     let root = graph.insert(Object::Array(expected.to_vec()));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(array_values(reader.graph(), copy), expected);
 }
 
@@ -892,24 +892,24 @@ fn strings_in_array(graph: &Graph, root: ObjectId) -> Vec<&str> {
         .collect()
 }
 
-fn strings_array(stamped: bool) {
+fn strings_array(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let expected = ["One", "Two", "Three"];
     let refs = expected.map(|text| Value::Ref(graph.insert(string(text))));
     let root = graph.insert(Object::Array(refs.to_vec()));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(strings_in_array(reader.graph(), copy), expected);
     assert_eq!(array_values(reader.graph(), copy).len(), expected.len());
 }
 
-fn mixed_array(stamped: bool) {
+fn mixed_array(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let object = Value::Ref(graph.insert(record("System.Object", vec![])));
     let one = Value::Ref(graph.insert(string("One")));
     let two = Value::Ref(graph.insert(string("Two")));
     let other = Value::Ref(graph.insert(record("System.Object", vec![])));
     let root = graph.insert(Object::Array(vec![one, object.clone(), two, object, other]));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(
         strings_in_array(&graph, root),
         strings_in_array(reader.graph(), copy)
@@ -1029,18 +1029,18 @@ fn weak_writer_keeps_separate_slots_for_independent_graphs() {
     assert_eq!(two.get(two.id()), Some(&Object::String("second".into())));
 }
 
-fn rectangular_primitives(stamped: bool) {
+fn rectangular_primitives(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let array = Object::Rectangular {
         dimensions: vec![3, 2],
         elements: [1, 2, 3, 4, 5, 6].map(Value::Integer).to_vec(),
     };
     let root = graph.insert(array.clone());
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(reader.graph().get(copy), Some(&array));
 }
 
-fn rectangular_strings(stamped: bool) {
+fn rectangular_strings(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let values = ["One", "Two", "Three", "Four"];
     let dimensions = vec![2, 2];
@@ -1049,7 +1049,7 @@ fn rectangular_strings(stamped: bool) {
         dimensions: dimensions.clone(),
         elements: elements.to_vec(),
     });
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let Some(Object::Rectangular {
         dimensions: restored,
         elements,
@@ -1064,7 +1064,7 @@ fn rectangular_strings(stamped: bool) {
     }
 }
 
-fn four_dimensional_array(stamped: bool) {
+fn four_dimensional_array(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let mut values = [[[[0; 4]; 3]; 2]; 2];
     values[0][0][0][0] = 1;
@@ -1083,7 +1083,7 @@ fn four_dimensional_array(stamped: bool) {
             .collect(),
     };
     let root = graph.insert(array.clone());
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(reader.graph().get(copy), Some(&array));
 }
 
@@ -1678,28 +1678,28 @@ stamp_modes!(
     read_only_collection
 );
 
-fn byte_array(stamped: bool) {
+fn byte_array(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let expected = Object::Bytes(vec![2, 4, 6, 8, 10]);
     let root = graph.insert(expected.clone());
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(reader.graph().get(copy), Some(&expected));
 }
 
-fn empty_array(stamped: bool) {
+fn empty_array(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let root = graph.insert(Object::Array(Vec::new()));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert!(array_values(reader.graph(), copy).is_empty());
 }
 
-fn empty_rectangular(stamped: bool, dimensions: &[usize]) {
+fn empty_rectangular(methods: impl Into<GraphMethods>, dimensions: &[usize]) {
     let mut graph = Graph::default();
     let root = graph.insert(Object::Rectangular {
         dimensions: dimensions.to_vec(),
         elements: Vec::new(),
     });
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let Some(Object::Rectangular {
         dimensions: actual,
         elements,
@@ -2958,4 +2958,22 @@ mod serial_generated_write_boundaries {
     configurations!(pointer_path, native_resource_path);
     configurations!(two_serializations, two_serializations);
     configurations!(different_serializations, two_different_serializations);
+}
+
+mod serial_generated_arrays {
+    use super::*;
+    configurations!(
+        self_reference,
+        should_serialize_array_reference_to_self_with_stamping
+    );
+    configurations!(primitives, primitives_array);
+    configurations!(strings, strings_array);
+    configurations!(mixed, mixed_array);
+    configurations!(rectangular_primitives, rectangular_primitives);
+    configurations!(rectangular_strings, rectangular_strings);
+    configurations!(four_dimensional, four_dimensional_array);
+    configurations!(bytes, byte_array);
+    configurations!(empty, empty_array);
+    configurations!(empty_2d, |m| empty_rectangular(m, &[0, 0]));
+    configurations!(empty_3d, |m| empty_rectangular(m, &[2, 0, 2]));
 }
