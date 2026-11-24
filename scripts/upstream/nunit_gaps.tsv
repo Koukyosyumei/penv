@@ -13,10 +13,10 @@ Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	The monitor has no ref
 Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	There is no general IronPython monitor command context with the fixture's stateful next-value command and Python execution, sleep, or arbitrary dump helpers.
 Antmicro.Renode.MonitorTests.FeaturesTests	There is no dynamic CLR command auto-registration or runtime loading of C# extension methods.
 Antmicro.Renode.MonitorTests.TokenizerTests	The active monitor parser does not expose the typed token stream and recoverable tokenization positions used by the fixture.
-Antmicro.Renode.PeripheralsTests.BMC050Test	BMC050 accelerometer/magnetometer register model is absent.
+Antmicro.Renode.PeripheralsTests.BMC050Test	InitTest is ported. ReadDataTest still needs the upstream temperature, accelerometer, magnetometer and Hall sample generation, sensor orientation cycling and multi-axis packet encoding.
 Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.
 Antmicro.Renode.PeripheralsTests.CortexA9GICTests	The Cortex-A9 host platform and its ARM Generic Interrupt Controller are absent.
-Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest	Remaining DualI2CAddressBMC050Test needs addressed slave registration and I2C START/STOP packet exchange with the BMC050 model.
+Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest	Remaining DualI2CAddressBMC050Test needs addressed slave registration and I2C START/STOP packet exchange using the ported BMC050 register model.
 Antmicro.Renode.PeripheralsTests.EFR32_I2CControllerTests	EFR32 I2C controller registers, FIFO and interrupt state machine are absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_AES_Tests	OpenTitan AES interaction and register model are absent; existing STM32 AES models expose a different register map.
 Antmicro.Renode.PeripheralsTests.OpenTitan_I2C_Test	OpenTitan I2C register/FIFO model and interrupt state machine are absent.

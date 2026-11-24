@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,061 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,062 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,335 |
+| 移植待ち | 2,334 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 37 fixture の
@@ -166,3 +166,9 @@ LPC43xx GPIO の5件は上流と同じバス登録後に周辺機器のレジス
 割り込みの読み出しクリア・書き込みクリア、TX 無効時の FIFO 閾値とオーバーフロー、RX オーバーフロー設定の6件が対象実行で合格した。実装の送信は上流の既定値と同じ即時送信。遅延送信やボーレート設定はこの実装の対象外。
 
 - [公式 ID ごとの結果](nunit-evidence/targeted-cadence_uart.tsv)と[実行ログ](nunit-evidence/targeted-cadence_uart.log)
+
+## BMC050
+
+公式 InitTest の97アサーションを、上流と同じパケット順で検証した。帯域幅レジスタの初期値は公式アサーションの 0x1f を採用した。固定 C# 本体の初期化式は 0x08 | 0x10 で 0x18 になるため、この点は公式テストと C# 本体に差がある。ReadDataTest は計測値生成と複数軸の応答フレームが必要。
+
+- [公式 ID ごとの結果](nunit-evidence/targeted-bmc050.tsv)と[実行ログ](nunit-evidence/targeted-bmc050.log)
