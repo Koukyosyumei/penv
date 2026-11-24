@@ -14,6 +14,7 @@ const ROOT: u8 = 1;
 const STAMPED_ROOT: u8 = 2;
 const HIERARCHY_STAMPED_ROOT: u8 = 3;
 const DECLARED_TYPES_ROOT: u8 = 4;
+const ASSEMBLY_STAMPED_ROOT: u8 = 5;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -92,6 +93,7 @@ fn stamp_for<'a>(stamps: &'a [TypeStamp<'a>], class: &str) -> io::Result<TypeSta
 #[derive(Clone, Copy, Default)]
 pub struct VersionPolicy {
     pub allow_module_revision_change: bool,
+    pub allow_assembly_version_change: bool,
     pub allow_field_addition: bool,
     pub allow_field_removal: bool,
     pub allow_inheritance_chain_change: bool,
@@ -541,6 +543,7 @@ pub struct ObjectWriter<'a, 's, W: Write> {
     stamps: Option<&'a [TypeStamp<'a>]>,
     hierarchies: Option<&'a [TypeHierarchy<'a>]>,
     declared_types: Option<&'a [DeclaredFieldTypes<'a>]>,
+    assembly_version: Option<[u32; 4]>,
     allow_xml_surrogates: bool,
     user_object_collections: Option<bool>,
     generated: Option<&'a [Codec]>,
@@ -578,6 +581,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             stamps: None,
             hierarchies: None,
             declared_types: None,
+            assembly_version: None,
             allow_xml_surrogates: true,
             user_object_collections: None,
             generated: None,
@@ -669,6 +673,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
     ) -> Self {
         self.stamps = Some(stamps);
         self.hierarchies = Some(hierarchies);
+        self.assembly_version = None;
         self.declared_types = None;
         self
     }
@@ -681,6 +686,16 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
         self.stamps = Some(stamps);
         self.hierarchies = None;
         self.declared_types = Some(declared);
+        self.assembly_version = None;
+        self
+    }
+
+    /// Include the assembly version shared by this frame's stamped records.
+    pub fn with_assembly_version(mut self, stamps: &'a [TypeStamp<'a>], version: [u32; 4]) -> Self {
+        self.stamps = Some(stamps);
+        self.hierarchies = None;
+        self.declared_types = None;
+        self.assembly_version = Some(version);
         self
     }
 
@@ -880,7 +895,9 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
 
     fn write_frame(&mut self, graph: &Graph, root: usize) -> io::Result<()> {
         let mut type_names = TypeWriter::default();
-        self.data.bytes(&[if self.declared_types.is_some() {
+        self.data.bytes(&[if self.assembly_version.is_some() {
+            ASSEMBLY_STAMPED_ROOT
+        } else if self.declared_types.is_some() {
             DECLARED_TYPES_ROOT
         } else if self.hierarchies.is_some() {
             HIERARCHY_STAMPED_ROOT
@@ -889,6 +906,11 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
         } else {
             ROOT
         }])?;
+        if let Some(version) = self.assembly_version {
+            for part in version {
+                self.data.unsigned(u64::from(part))?;
+            }
+        }
         self.data.unsigned(root as u64)?;
         self.data.unsigned(self.pending.len() as u64)?;
         for id in &self.pending {
@@ -1119,6 +1141,7 @@ pub struct ObjectReader<'a, 's, R: Read> {
     stamps: Option<&'a [TypeStamp<'a>]>,
     hierarchies: Option<&'a [TypeHierarchy<'a>]>,
     declared_types: Option<&'a [DeclaredFieldTypes<'a>]>,
+    assembly_version: Option<[u32; 4]>,
     version_policy: VersionPolicy,
     allow_xml_surrogates: bool,
     user_object_collections: Option<bool>,
@@ -1140,6 +1163,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             stamps: None,
             hierarchies: None,
             declared_types: None,
+            assembly_version: None,
             version_policy: VersionPolicy::default(),
             allow_xml_surrogates: true,
             user_object_collections: None,
@@ -1202,6 +1226,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
     ) -> Self {
         self.stamps = Some(stamps);
         self.hierarchies = Some(hierarchies);
+        self.assembly_version = None;
         self.declared_types = None;
         self
     }
@@ -1214,6 +1239,16 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
         self.stamps = Some(stamps);
         self.hierarchies = None;
         self.declared_types = Some(declared);
+        self.assembly_version = None;
+        self
+    }
+
+    /// Include the assembly version shared by this frame's stamped records.
+    pub fn with_assembly_version(mut self, stamps: &'a [TypeStamp<'a>], version: [u32; 4]) -> Self {
+        self.stamps = Some(stamps);
+        self.hierarchies = None;
+        self.declared_types = None;
+        self.assembly_version = Some(version);
         self
     }
 
@@ -1312,10 +1347,31 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             Ok(STAMPED_ROOT)
                 if self.stamps.is_some()
                     && self.hierarchies.is_none()
-                    && self.declared_types.is_none() => {}
+                    && self.declared_types.is_none()
+                    && self.assembly_version.is_none() => {}
             Ok(HIERARCHY_STAMPED_ROOT) if self.hierarchies.is_some() => {}
             Ok(DECLARED_TYPES_ROOT) if self.declared_types.is_some() => {}
-            Ok(ROOT | STAMPED_ROOT | HIERARCHY_STAMPED_ROOT | DECLARED_TYPES_ROOT) => {
+            Ok(ASSEMBLY_STAMPED_ROOT) if self.assembly_version.is_some() => {
+                let mut incoming = [0; 4];
+                for part in &mut incoming {
+                    *part = u32::try_from(self.data.unsigned()?)
+                        .map_err(|_| invalid("invalid assembly version component"))?;
+                }
+                if Some(incoming) != self.assembly_version
+                    && !self.version_policy.allow_assembly_version_change
+                {
+                    return Err(version_mismatch(
+                        "object assembly version differs from local schema",
+                    ));
+                }
+            }
+            Ok(
+                ROOT
+                | STAMPED_ROOT
+                | HIERARCHY_STAMPED_ROOT
+                | DECLARED_TYPES_ROOT
+                | ASSEMBLY_STAMPED_ROOT,
+            ) => {
                 return Err(invalid("inconsistent object stream stamp configuration"));
             }
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),

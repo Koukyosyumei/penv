@@ -3346,3 +3346,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,False
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,True).ShouldDeserializeConstructorFields	upstream_nunit::migrant_two_domains::constructor_field::write_false_read_true	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,False).ShouldDeserializeConstructorFields	upstream_nunit::migrant_two_domains::constructor_field::write_true_read_false	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,True).ShouldDeserializeConstructorFields	upstream_nunit::migrant_two_domains::constructor_field::write_true_read_true	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,False).ShouldHandleAssemblyVersionChange	upstream_nunit::migrant_two_domains::assembly_version::write_false_read_false	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,True).ShouldHandleAssemblyVersionChange	upstream_nunit::migrant_two_domains::assembly_version::write_false_read_true	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,False).ShouldHandleAssemblyVersionChange	upstream_nunit::migrant_two_domains::assembly_version::write_true_read_false	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,True).ShouldHandleAssemblyVersionChange	upstream_nunit::migrant_two_domains::assembly_version::write_true_read_true	new

@@ -343,3 +343,42 @@ fn constructor_field(write: bool, read: bool) {
 }
 
 configurations!(constructor_field, constructor_field);
+
+fn assembly_version(write: bool, read: bool) {
+    const OUTER: &[(&str, FieldKind)] = &[("a", FieldKind::Reference)];
+    const INNER: &[(&str, FieldKind)] = &[("c", FieldKind::Integer)];
+    const CODECS: &[Codec] = &[
+        generated_record!("A"; a: reference),
+        generated_record!("C"; c: integer),
+    ];
+    let mut graph = Graph::default();
+    let inner = record(&mut graph, "C", vec![Value::Integer(1)]);
+    let root = record(&mut graph, "A", vec![Value::Ref(inner)]);
+    let source = [stamp("A", 1, OUTER), stamp("C", 1, INNER)];
+    let target = [stamp("A", 2, OUTER), stamp("C", 2, INNER)];
+    let mut bytes = Vec::new();
+    let mut writer = ObjectWriter::new(&mut bytes, &graph, References::PerRoot, true)
+        .with_assembly_version(&source, [1, 0, 0, 0]);
+    if write {
+        writer = writer.with_generated_records(CODECS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+
+    let mut reader = ObjectReader::new(bytes.as_slice(), References::PerRoot, true)
+        .with_assembly_version(&target, [1, 1, 0, 0])
+        .with_version_policy(VersionPolicy {
+            allow_module_revision_change: true,
+            allow_assembly_version_change: true,
+            ..VersionPolicy::default()
+        });
+    if read {
+        reader = reader.with_generated_records(CODECS);
+    }
+    let root = reader.read_object().unwrap();
+    let restored = reader.finish_into_graph().unwrap();
+    let inner = reference(&fields(&restored, root)[0]);
+    assert_eq!(fields(&restored, inner)[0], Value::Integer(1));
+}
+
+configurations!(assembly_version, assembly_version);

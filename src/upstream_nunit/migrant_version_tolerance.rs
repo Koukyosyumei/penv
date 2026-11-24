@@ -446,6 +446,7 @@ fn hierarchy_change(
     };
     let policy = VersionPolicy {
         allow_module_revision_change: true,
+        allow_assembly_version_change: false,
         allow_inheritance_chain_change: matches!(level, Level::Inheritance),
         allow_field_addition: matches!(level, Level::Add),
         allow_field_removal: matches!(level, Level::Remove),
@@ -748,6 +749,7 @@ fn moved_field(write: bool, read: bool, level: Level) {
     };
     let policy = VersionPolicy {
         allow_module_revision_change: true,
+        allow_assembly_version_change: false,
         allow_inheritance_chain_change: matches!(level, Level::Inheritance),
         allow_field_addition: matches!(level, Level::Add | Level::AddAndRemove),
         allow_field_removal: matches!(level, Level::Remove | Level::AddAndRemove),

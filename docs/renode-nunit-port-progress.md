@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,344 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,348 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 51 |
+| 移植待ち | 47 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 10 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 9 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -510,3 +510,5 @@ Migrant の `TestGuidVerification` 20件を移植した。Rust の型スタン�
 インターフェースをジェネリック型引数に持つ `TwoDomainTests` の4件を移植した。Rust のスキーマで閉じた型を明示し、個別の読み書きスキーマ間で整数フィールド `f = 1` を復元した。[公式IDとの対応](nunit-evidence/targeted-migrant-domain-interface.tsv)・[実行ログ](nunit-evidence/targeted-migrant-domain-interface.log)
 
 復元時のコンストラクタがオブジェクトを生成する4件を移植した。Rust の読み込みは生成オブジェクトをフレーム内に追加し、復元されたフィールド参照から取得できることを検証した。この初期化方式はルート単位の参照管理で利用できる。[公式IDとの対応](nunit-evidence/targeted-migrant-domain-constructor.tsv)・[実行ログ](nunit-evidence/targeted-migrant-domain-constructor.log)
+
+アセンブリバージョン変更の4件を移植した。Rust のフレームに1つのアセンブリバージョンを記録し、モジュールリビジョンとは独立に変更可否を判断する。上流の `1.0` から `1.1` へ移行した際に、入れ子の整数フィールド `a.c == 1` を照合した。`TwoDomainTests` の全36件が対象実行で合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-domain-assembly.tsv)・[実行ログ](nunit-evidence/targeted-migrant-domain-assembly.log)
