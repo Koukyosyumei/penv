@@ -715,7 +715,7 @@ pub fn run(
     budget: u64,
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
-    run_commands(machine, commands, budget, output, session, None)
+    run_commands(machine, commands, budget, output, session, None, 0)
 }
 
 pub fn run_startup(
@@ -726,7 +726,7 @@ pub fn run_startup(
     guest_output: &mut impl Write,
     replies: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
-    run_commands(machine, commands, budget, guest_output, session, Some(replies))
+    run_commands(machine, commands, budget, guest_output, session, Some(replies), 0)
 }
 
 fn run_commands<'a>(
@@ -736,6 +736,7 @@ fn run_commands<'a>(
     mut output: &'a mut dyn Write,
     session: &mut Session,
     replies: Option<&'a mut dyn Write>,
+    depth: usize,
 ) -> Result<(Stop, u64), String> {
     if commands.is_empty() {
         return machine.run(budget, &mut output);
@@ -780,7 +781,8 @@ fn run_commands<'a>(
                 let mut existing_machine = true;
                 expand_macro(body, &session.variables, &mut existing_machine, &mut boot, root)?;
                 let start = machine.elapsed_steps();
-                let (stop, count) = run_deferred_commands(machine, boot, budget, &mut output, session)?;
+                validate_deferred_commands(&boot, depth, false)?;
+                let (stop, count) = run_deferred_commands(machine, boot, budget, &mut output, session, depth)?;
                 retired += count;
                 budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
                 Ok((stop != Stop::ScriptComplete).then_some(stop))
@@ -796,12 +798,15 @@ fn run_commands<'a>(
                 };
                 load_text(&command.source, canonical.clone(), root, &mut state, text)?;
                 let start = machine.elapsed_steps();
-                let machine_cleared = state.boot.session.machine_cleared;
-                let (stop, count) = run_deferred_commands(machine, state.boot, budget, &mut output, session)?;
-                session.machine_cleared = machine_cleared;
+                let allow_snapshots = matches!(command_words(text)?.first(), Some(&("include" | "i" | "ExecuteScript")));
+                validate_deferred_commands(&state.boot, depth, allow_snapshots)?;
+                session.machine_cleared = state.boot.session.machine_cleared;
                 session.variables = state.variables;
                 session.macros = state.macros;
                 session.aliases = state.aliases;
+                let (stop, count) = run_deferred_commands(
+                    machine, state.boot, budget, &mut output, session, depth,
+                )?;
                 retired += count;
                 budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
                 Ok((stop != Stop::ScriptComplete).then_some(stop))
@@ -1419,20 +1424,28 @@ fn live_command_boot(path: &Path, session: &Session) -> Boot {
     boot
 }
 
+fn validate_deferred_commands(boot: &Boot, depth: usize, allow_snapshots: bool) -> Result<(), String> {
+    if depth >= 32 {
+        return Err("recursive or excessively deep deferred monitor script".into());
+    }
+    if !boot.post_run.is_empty() || (!allow_snapshots && boot.runtime.iter().any(|entry| matches!(
+        entry.action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory
+    ))) {
+        return Err("snapshot and post-run commands are unavailable in this deferred invocation".into());
+    }
+    Ok(())
+}
+
 fn run_deferred_commands(
     machine: &mut Machine, boot: Boot, budget: u64, output: &mut ScriptOutput<'_>, session: &mut Session,
+    depth: usize,
 ) -> Result<(Stop, u64), String> {
-    if !boot.post_run.is_empty() || boot.runtime.iter().any(|entry| matches!(
-        entry.action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory
-    )) {
-        return Err("snapshot and post-run commands are unavailable in a deferred invocation".into());
-    }
     session.number_mode = boot.session.number_mode;
     if boot.runtime.is_empty() {
         return Ok((Stop::ScriptComplete, 0));
     }
     let replies = output.replies.as_mut().map(|reply| &mut **reply as &mut dyn Write);
-    run_commands(machine, &boot.runtime, budget, &mut *output.output, session, replies)
+    run_commands(machine, &boot.runtime, budget, &mut *output.output, session, replies, depth + 1)
 }
 
 fn write_last_log(count: usize, output: &mut impl Write) -> Result<(), String> {
@@ -1634,7 +1647,7 @@ pub fn serve(
                 let echo_assertion = matches!(commands,
                     [RuntimeCommand { action: Action::WriteTesterUart(_, text, _, echo, _), .. }]
                         if !text.is_empty() && echo.unwrap_or_else(|| machine.bus.default_uart_echo()));
-                match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, None) {
+                match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, None, 0) {
                     Ok((Stop::ScriptComplete, _)) => {
                         if let Some((variables, macros, aliases)) = included_state.take() {
                             session.number_mode = boot.session.number_mode;
@@ -2660,7 +2673,9 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                 });
             }
             ["include" | "i" | "ExecuteScript", value]
-                if (value.starts_with('$') || value.starts_with("@$")) && has_snapshot_boundary(&state.boot) =>
+                if has_snapshot_boundary(&state.boot)
+                    && (value.starts_with('$') || value.starts_with("@$")
+                        || unquote(value.trim_start_matches('@')).ends_with(".resc")) =>
             {
                 state.boot.runtime.push(RuntimeCommand {
                     line: line + 1, source: path.to_owned(),
