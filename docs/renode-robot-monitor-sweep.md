@@ -1531,3 +1531,20 @@ Rust モニターテスト26件と作業ディレクトリを切り替える
 CLI スナップショット回帰テストが合格。
 未変更の最終 Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
 残り2,193件は未実行（`target/monitor-directory-save-robot/results.json`）。
+
+### 通常ファイル以外を指す Load の拒否
+
+`399e448` は、通常ファイル以外のロード先を起動前に Rust が拒否する。
+ライブのロードと `RestoreMonitorSnapshot` の起動経路も通常ファイルを
+確認する。固定 Renode と penv の RPC で、ディレクトリを指定した
+`Load` が拒否され、続く `echo` は `ready` を返した。
+通常 CLI ではディレクトリと FIFO を終了コード 1 で拒否した。
+FIFO については penv の挙動をタイムアウト付きで確認した
+（`target/monitor-directory-load-proof/`）。
+
+Rust モニターテスト26件と CLI スナップショット回帰テスト2件が合格。
+通常ファイルへのシンボリックリンクを使う正常例では、固定 Renode と
+penv の RPC の両方で `saved` に復元できた
+（`target/monitor-symlink-load-proof/`）。
+未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
+残り2,193件は未実行（`target/monitor-directory-load-robot/results.json`）。
