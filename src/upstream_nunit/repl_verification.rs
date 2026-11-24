@@ -931,3 +931,41 @@ peripheral:
         Some(1)
     );
 }
+
+#[test]
+fn should_fail_on_alias_without_registration_info() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral as "alias""#,
+        "AliasWithoutRegistration",
+    );
+}
+
+#[test]
+fn should_fail_on_alias_with_none_registration_info() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ none as "alias""#,
+        "AliasWithNoneRegistration",
+    );
+}
+
+#[test]
+fn should_fail_with_constructor_attributes_with_non_creating_entry() {
+    assert_error(
+        r#"
+sysbus:
+    x: 5"#,
+        "CtorAttributesInNonCreatingEntry",
+    );
+}
+
+#[test]
+fn should_fail_on_non_existing_constructor() {
+    assert_error(
+        r#"
+p: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithProtectedConstructor @ sysbus 0x0
+"#,
+        "NoCtor",
+    );
+}

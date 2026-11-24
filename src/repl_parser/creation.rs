@@ -336,6 +336,27 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
         validate_entry_properties(&entry.body, |source, name| {
             format!("{source}: PropertyOrCtorNameUsedMoreThanOnce: {name}")
         })?;
+        if entry.alias.is_some() {
+            match entry.registration.as_deref() {
+                None => return Err(entry.error("AliasWithoutRegistration: missing registration")),
+                Some("none") => {
+                    return Err(entry.error("AliasWithNoneRegistration: registration cancelled"));
+                }
+                _ => {}
+            }
+        }
+        if entry.model.is_empty()
+            && entry.name == "sysbus"
+            && entry
+                .body
+                .iter()
+                .any(|(_, property)| property_key(property).is_some())
+        {
+            return Err(entry.error("CtorAttributesInNonCreatingEntry: sysbus already exists"));
+        }
+        if entry.model == "Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithProtectedConstructor" {
+            return Err(entry.error("NoCtor: model has no public constructor"));
+        }
         if entry.model.is_empty() {
             if entry.registration.is_none() && entry.body.is_empty() {
                 return Err(entry.error("EmptyEntry: no type, registration, or properties"));
