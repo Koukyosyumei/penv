@@ -2164,7 +2164,7 @@ fn run() -> Result<ExitCode, String> {
             duration, bus::CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
         ))
         .transpose()?;
-    if inspect_only {
+    if inspect_only && runtime.is_empty() && !monitor_stdio {
         return Ok(ExitCode::SUCCESS);
     }
     let mut uart_triggers = Vec::new();

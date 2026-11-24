@@ -288,9 +288,14 @@ pub struct RuntimeCommand {
     action: Action,
 }
 
+enum AssemblyAddress {
+    Literal(u64),
+    ProgramCounter(String),
+}
+
 enum Action {
     MonitorLog(String),
-    AssembleBlock(String, u64, String, String, NumberMode),
+    AssembleBlock(String, AssemblyAddress, String, String, NumberMode),
     RunFor(u64),
     RunUntil(u64),
     RunToSyncPoint,
@@ -622,7 +627,11 @@ fn run_commands(
                     .map(|()| None).map_err(|error| error.to_string())
             }
             Action::AssembleBlock(cpu, address, triple, source, mode) => {
-                crate::monitor_asm::assemble_source(machine, cpu, *address, triple, source)
+                let address = match address {
+                    AssemblyAddress::Literal(address) => *address,
+                    AssemblyAddress::ProgramCounter(cpu) => machine.monitor_named_pc(cpu)?,
+                };
+                crate::monitor_asm::assemble_source(machine, cpu, address, triple, source)
                     .and_then(|size| mode.print(size as u64, 4, output.output))
                     .map(|()| None)
             }
@@ -2092,12 +2101,22 @@ fn execute(
                 .or_else(|| source.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
                 .ok_or("expected quoted AssembleBlock source")?;
             let triple = match options {
-                [] | ["null"] | ["null", "false"] => "default",
+                [] | ["false"] | ["null"] | ["null", "false"] => "default",
                 [triple] | [triple, "false"] if triple.starts_with('"') && triple.ends_with('"') => unquote(triple),
                 _ => return Err("unsupported AssembleBlock triple or alternate dialect".into()),
             };
+            let token = resolve(address)?;
+            let address = if let Some(expression) = token.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
+                let words = command_words(expression)?;
+                let [cpu, "PC"] = words.as_slice() else {
+                    return Err("unsupported AssembleBlock address expression".into());
+                };
+                AssemblyAddress::ProgramCounter(cpu.trim_start_matches("sysbus.").to_owned())
+            } else {
+                AssemblyAddress::Literal(crate::parse_address64(token)?)
+            };
             Some(Action::AssembleBlock(
-                cpu.trim_start_matches("sysbus.").to_owned(), crate::parse_address64(resolve(address)?)?,
+                cpu.trim_start_matches("sysbus.").to_owned(), address,
                 triple.to_owned(), source.to_owned(), boot.session.number_mode,
             ))
         }
@@ -3029,17 +3048,16 @@ fn execute(
                 words[1] == "Pressed",
             ));
         }
-        [
-            cpu,
-            "AddHook",
-            "`sysbus",
-            "GetSymbolAddress",
-            symbol,
-            callback,
-        ] if boot.has_platform() => {
-            let symbol = symbol
-                .strip_prefix('"')
-                .and_then(|s| s.strip_suffix("\"`"))
+        [cpu, "AddHook", address, callback]
+            if boot.has_platform() && address.starts_with("`sysbus GetSymbolAddress ") =>
+        {
+            let expression = address.strip_prefix('`').and_then(|s| s.strip_suffix('`'))
+                .ok_or("expected quoted hook address")?;
+            let words = command_words(expression)?;
+            let ["sysbus", "GetSymbolAddress", symbol] = words.as_slice() else {
+                return Err("expected a hook symbol address".into());
+            };
+            let symbol = symbol.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
                 .ok_or("expected quoted hook symbol")?;
             let name = callback.strip_prefix('$').ok_or("expected a named CPU hook")?;
             let hook = match boot.hooks.get(name) {
@@ -3506,7 +3524,7 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
             quote = None;
             triple = false;
         } else if (new_word || start.is_some_and(|start| &text[start..index] == "@"))
-            && matches!(character, '"' | '\'')
+            && matches!(character, '"' | '\'' | '`')
         {
             quote = Some(character);
             triple = text[index..].starts_with("\"\"\"");
