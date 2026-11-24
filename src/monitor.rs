@@ -1330,6 +1330,7 @@ pub fn serve(
                 let result = uart_wait_cycles(machine, *id, *timeout).and_then(|cycles| {
                     let watch = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode, *first_only)?;
                     let pause = !*absent && pause.unwrap_or(machine.bus.default_uart_pause);
+                    let started_at = machine.monitor_elapsed_ns();
                     let stop = drive_tester_watch(machine, watch, cycles, pause, &mut bytes);
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
@@ -1361,7 +1362,13 @@ pub fn serve(
                                 Ok(("MATCH", line))
                             }
                         }
-                        ((Stop::Limit, _), _) => Ok(("FAIL", format!("Terminal tester failed! UART line containing {expected:?} was not received (Limit)"))),
+                        ((Stop::Limit, _), _) => {
+                            let buffered = machine.bus.uart_tester_buffered_tail(watch).unwrap_or_default();
+                            Ok(("FAIL", format!(
+                                "Terminal tester failed! UART line containing {expected:?} was not received (Limit)\nVirtual time: {} to {}\nBuffered UART tail: {buffered:?}",
+                                monitor_timestamp(started_at), monitor_timestamp(machine.monitor_elapsed_ns()),
+                            )))
+                        }
                         ((stop, _), _) => Ok(("STOP", format!("{stop:?}"))),
                     }
                 });

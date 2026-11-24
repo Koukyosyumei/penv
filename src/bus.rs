@@ -5225,6 +5225,14 @@ impl Bus {
         ))
     }
 
+    pub(crate) fn uart_tester_buffered_tail(&self, watch: UartWatch) -> Option<String> {
+        let UartWatch::Tester(id) = watch else { return None };
+        match &self.uart_testers.get(id)?.history {
+            TesterHistory::Text(history) => Some(history.buffered_tail()),
+            TesterHistory::Binary(_) => None,
+        }
+    }
+
     pub fn uart_tester_matched_line(&self, watch: UartWatch) -> Option<String> {
         let UartWatch::Tester(id) = watch else { return None };
         match &self.uart_testers.get(id)?.history {

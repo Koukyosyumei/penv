@@ -576,6 +576,13 @@ impl UartHistory {
         self.active.as_ref().is_some_and(|active| active.matched && !active.matched_completed_line)
     }
 
+    pub(crate) fn buffered_tail(&self) -> String {
+        const REPORT_BYTES: usize = 512;
+        let bytes: Vec<_> = self.unread.iter().skip(self.unread.len().saturating_sub(REPORT_BYTES))
+            .map(|&(byte, _)| byte).collect();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
     pub(crate) fn matched_timestamp(&self) -> Option<u128> {
         self.matched_timestamp
     }
