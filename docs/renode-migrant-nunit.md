@@ -138,6 +138,12 @@ null または一時クラスのルート、ポインター・SpinLock・ThreadL
 メタデータで表す。
 [公式 ID 別の結果](nunit-evidence/targeted-transients-native-compare.tsv)
 
-残りは9 fixture・1,943ケース。生成読み書き、コレクションと CLR 型の
+反射読み書き・型スタンプ有無の2設定に8件を追加した。decimal は既存の
+プリミティブと同じ表現を使い、入れ子にある nullable フィールドを復元した。
+非直列化資源の診断には、最初に発見したルートからの型の経路を含める。
+サロゲート登録は読み込み・書き込みのレジストリごとに、成功した最初の処理後に閉じる。
+[公式 ID 別の結果](nunit-evidence/targeted-decimal-path-surrogates.tsv)
+
+残りは9 fixture・1,935ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。
