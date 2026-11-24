@@ -1,7 +1,7 @@
 //! Reference-preserving object streams for Rust graph descriptors.
 //!
 //! This uses Migrant's primitive encoding with a Rust object-record format.
-use super::primitive::{Reader, Writer};
+use super::primitive::{Guid, Reader, Writer};
 use super::surrogate::Surrogates;
 use std::collections::{HashMap, hash_map::Entry};
 use std::io::{self, Read, Write};
@@ -18,6 +18,7 @@ pub enum FieldKind {
     Float = 2,
     Reference = 3,
     NullableInteger = 4,
+    Guid = 5,
 }
 
 #[derive(Clone, Copy)]
@@ -45,6 +46,7 @@ impl TypeStamp<'_> {
                     (FieldKind::Integer, Value::Integer(_))
                         | (FieldKind::NullableInteger, Value::Null | Value::Integer(_))
                         | (FieldKind::Float, Value::Float(_))
+                        | (FieldKind::Guid, Value::Guid(_))
                         | (FieldKind::Reference, Value::Null | Value::Ref(_))
                 )
             })
@@ -89,6 +91,7 @@ pub enum Value {
     Null,
     Integer(i64),
     Float(f64),
+    Guid(Guid),
     Ref(ObjectId),
 }
 
@@ -429,6 +432,10 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     data.bytes(&[2])?;
                     data.bytes(&value.to_le_bytes())?;
                 }
+                Value::Guid(value) => {
+                    data.bytes(&[4])?;
+                    data.guid(*value)?;
+                }
                 Value::Ref(id) => {
                     data.bytes(&[3])?;
                     data.unsigned(ids[id] as u64)?;
@@ -684,6 +691,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     }
                     Value::Ref(ObjectId(base + id))
                 }
+                4 => Value::Guid(self.data.guid()?),
                 _ => return Err(invalid("unknown value kind")),
             });
         }

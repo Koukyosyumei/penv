@@ -71,6 +71,18 @@ const STAMPS: &[TypeStamp<'static>] = &[
         &[("items", FieldKind::Reference)],
     ),
     stamp("HashSet<CustomObject>", &[("items", FieldKind::Reference)]),
+    stamp(
+        "GenericBox<Guid>",
+        &[("<Element>k__BackingField", FieldKind::Guid)],
+    ),
+    stamp(
+        "ClassWithGuid",
+        &[
+            ("<Id>k__BackingField", FieldKind::Guid),
+            ("<Number>k__BackingField", FieldKind::Integer),
+            ("<Str>k__BackingField", FieldKind::Reference),
+        ],
+    ),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -1670,4 +1682,53 @@ stamp_modes!(
     different_serializations_plain,
     different_serializations_stamped,
     two_different_serializations
+);
+
+fn box_with_guid(stamped: bool) {
+    let mut graph = Graph::default();
+    let id = super::migrant::Random(0x268a_31af_f145_0f51).guid();
+    let root = graph.insert(record("GenericBox<Guid>", vec![Value::Guid(id)]));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(
+        fields(reader.graph().get(copy).unwrap())[0],
+        Value::Guid(id)
+    );
+}
+
+fn class_with_guid(stamped: bool) {
+    let mut graph = Graph::default();
+    let mut random = super::migrant::Random(0x67f9_e71b_25da_1d98);
+    let id = random.guid();
+    let number = i64::from(id.0[1]) * i64::from(id.0[0]);
+    let text: String = std::iter::from_fn(|| {
+        loop {
+            let character = char::from(random.next(256) as u8);
+            if !character.is_control() {
+                return Some(character);
+            }
+        }
+    })
+    .take((number / 256) as usize)
+    .collect();
+    let str_id = graph.insert(string(&text));
+    let root = graph.insert(record(
+        "ClassWithGuid",
+        vec![Value::Guid(id), Value::Integer(number), Value::Ref(str_id)],
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let Some(Object::Record { class, fields }) = graph.get(copy) else {
+        panic!("expected ClassWithGuid");
+    };
+    assert_eq!(class, "ClassWithGuid");
+    assert_eq!(fields[0], Value::Guid(id));
+    assert_eq!(fields[1], Value::Integer(number));
+    assert_eq!(string_value(graph, &fields[2]), text);
+}
+
+stamp_modes!(box_with_guid_plain, box_with_guid_stamped, box_with_guid);
+stamp_modes!(
+    class_with_guid_plain,
+    class_with_guid_stamped,
+    class_with_guid
 );

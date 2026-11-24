@@ -20,7 +20,7 @@ fn should_generate_unique_id() {
     }
 }
 
-struct Random(u64);
+pub(super) struct Random(pub(super) u64);
 
 impl Random {
     fn bits(&mut self) -> u64 {
@@ -30,8 +30,16 @@ impl Random {
         self.0
     }
 
-    fn next(&mut self, max: i32) -> i32 {
+    pub(super) fn next(&mut self, max: i32) -> i32 {
         (self.bits() % max as u64) as i32
+    }
+
+    pub(super) fn guid(&mut self) -> crate::migrant::primitive::Guid {
+        let mut bytes = std::array::from_fn(|_| self.bits() as u8);
+        // Version 4, in .NET Guid.ToByteArray order.
+        bytes[7] = (bytes[7] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        crate::migrant::primitive::Guid(bytes)
     }
 
     fn long(&mut self) -> i64 {
@@ -374,19 +382,8 @@ fn decimals(buffered: bool, count: usize) {
 }
 
 fn guids(buffered: bool, count: usize) {
-    use crate::migrant::primitive::Guid;
-
     let mut random = Random(0x8b6d_9409_a310_e747);
-    let values: Vec<_> = (0..count)
-        .map(|_| {
-            let mut bytes = std::array::from_fn(|_| random.bits() as u8);
-            // Guid.NewGuid produces an RFC 4122 version 4 value. The two
-            // leading Guid fields that are integers use .NET byte-array order.
-            bytes[7] = (bytes[7] & 0x0f) | 0x40;
-            bytes[8] = (bytes[8] & 0x3f) | 0x80;
-            Guid(bytes)
-        })
-        .collect();
+    let values: Vec<_> = (0..count).map(|_| random.guid()).collect();
     roundtrip(buffered, &values, |w, v| w.guid(v), |r| r.guid());
 }
 
