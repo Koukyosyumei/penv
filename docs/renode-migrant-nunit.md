@@ -48,5 +48,18 @@ TypeDescriptorComparisonTests の11件を追加した。型階層上のフィー
 固定 C# と Rust の対象実行で11件とも合格した。
 [公式 ID 別の比較](nunit-evidence/migrant-descriptor-comparison.tsv) · [公式ログ](nunit-evidence/migrant-descriptor-official.log)
 
-残りは10 fixture・2,133ケース。オブジェクトストリーム、サロゲート、フック、
-グラフと型変更の等価性は引き続き移植待ち。
+SerializationTests は、生成読み書き・コレクション特殊設定・型スタンプを
+すべて無効にする公式設定 `(False,False,False,False)` から9件を移植した。
+Rust のオブジェクトレコードは既存の Migrant プリミティブでフレーミングする。
+参照 ID をフィールドの走査前に確保し、読み手は各参照を検証してから
+オブジェクト群を公開する。二ノード循環、自己参照、配列の自己参照、
+共有文字列、45,000リンクの復元を確認した。
+
+Rust のレコード形式を使った基盤確認6件も合格した。対象は連続した読み書き、
+ルート間の強参照保持と参照テーブルのリセット、非バッファの列挙である。
+CLR 型スタンプのエンコードと復元が必要な ObjectReaderWriterTests と
+OpenStreamSerializationTests の公式 ID は移植待ちとして集計した。
+[公式 ID 別の対象実行結果](nunit-evidence/targeted-object-stream-symbol.tsv)
+
+残りは10 fixture・2,124ケース。弱参照保持、型スタンプ検証、生成読み書き、
+コレクション・CLR 型のコーデック、サロゲート、フックが必要。
