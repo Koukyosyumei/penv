@@ -739,3 +739,29 @@ Robot RPC `Provides` / `Requires` で固定 Renode と比較した。
 空マシンの保存は変更した未マップポリシーと保留中のイベントを拒否する。
 この変更後も未変更の HEX と未マップ読み出しのログ待機は合格した
 （`target/monitor-empty-snapshot-4b77168-{hex,read}/results.json`）。
+
+`2661ccf` では、起動スクリプト中の時刻照会、バス読み出し、`echo` と
+`lastLog` の応答を、ゲスト出力と別に `READY` フレームへ返す。
+`target/monitor-startup-outputs-proof/commands.resc` を固定 Renode、通常
+CLI、ストリーム起動の各経路で実行し、仮想時刻、同期量、読み出し値、
+出力順が一致した（`renode.normalized`、`penv-cli.log`、`frames.log`）。
+
+`9d662d9` では、開始を要求しないログ待機も Rust の履歴を調べる。
+停止中に既存のログに一致した場合は仮想時間を進めず、そのログを返す。
+停止中のログに一致しないまま仮想時間が必要な場合は `STOP Paused`
+を返す。外部からの非同期ログ待機は今後の対応となる。
+`351bbac` は Robot のバス読み出しを即時照会に送る。
+固定 Renode と同じ RPC コマンド列で読み出し `0x00000000`、
+警告文および時刻 0 ns が一致した
+（`target/monitor-buffered-log-proof/{renode,penv}.jsonl`）。
+未変更の未マップ読み書きログ待機、HEX、STM32F072b Console Echo は
+すべて合格した（`target/monitor-read-351bbac-*/results.json`）。
+nRF52840 の `Should Run Alarm Sample` は、時刻アサーションに到達する前の
+UART 待機中に 40 秒のホスト制限に達した
+（`target/monitor-startup-2661ccf-alarm/results.json`）。
+
+`7b13622` は `s` / `p` を Rust の開始・一時停止アクションにつなぐ。
+`pause.resc` を両 CLI で実行し、一時停止を挟んだ実行の仮想時刻 10 ms
+と同期量 2 ms が一致した。
+この変更後も未変更の HEX と STM32F072b Console Echo は合格した
+（`target/monitor-pause-7b13622-{hex,uart}/results.json`）。
