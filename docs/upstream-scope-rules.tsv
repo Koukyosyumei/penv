@@ -1,0 +1,16 @@
+lanes	source	upstream_anchor	reason
+riscv,rv64	tests/platforms/ARMv8R.robot	@platforms/cpus/cortex-r52.repl	固定フィクスチャが Arm Cortex-R52 のレジスター・例外・割り込みを使用
+riscv,rv64	tests/platforms/ARMv8R-PMSA.robot	@platforms/cpus/cortex-r52.repl	Arm Cortex-R52 の PMSA フィクスチャ
+riscv,rv64	tests/platforms/ARM_Cortex-R8.robot	@platforms/cpus/cortex-r8.repl	Arm Cortex-R8 と Cortex-R8 SMP の固定フィクスチャ
+riscv,rv64	tests/platforms/ARMv8A.robot	@platforms/cpus/cortex-a53-gicv	Arm Cortex-A53 と GIC の固定フィクスチャ
+riscv,rv64	tests/platforms/ARMv8A-Linux.robot	@scripts/single-node/cortex-a53-linux.resc	Arm Cortex-A53 の Linux と固定周辺機器を使用
+riscv,rv64	tests/platforms/ARMv8M-MVE.robot	cpuType: "cortex-m85"	Arm Cortex-M85 の MVE 命令と例外を使用
+riscv,rv64	tests/platforms/OpenTitan-EarlGrey.robot	@scripts/single-node/opentitan-earlgrey.resc	OpenTitan Earl Grey の専用 SoC・ファームウェア・配線
+riscv,rv64	tests/platforms/Zedboard.robot	@scripts/single-node/zedboard.resc	Zynq-7000 ZedBoard の固定 SoC とファームウェア
+riscv,rv64	tests/platforms/zynqmp.robot	@scripts/single-node/zynqmp_remoteproc.resc	Zynq UltraScale+ MPSoC の固定起動構成
+riscv,rv64	tests/platforms/nucleo_h753zi.robot	platforms/boards/nucleo_h753zi.repl	STM32H753 Nucleo のゲストと配線。STM32H7 担当に保持
+riscv,rv64	tests/platforms/NRF52840.robot	@platforms/cpus/nrf52840.repl	nRF52840 のゲストと配線。nRF52840 担当に保持
+riscv,rv64	tests/platforms/STM32L072.robot	@scripts/single-node/stm32l072.resc	STM32L072 向けの固定ファームウェアと周辺機器
+riscv,rv64	tests/platforms/STM32F4_Discovery.robot	@platforms/cpus/stm32f4.repl	STM32F407 Discovery のゲストと配線。STM32F407 担当に保持
+riscv,rv64	tests/platforms/Renesas_RZ_G2L.robot	@platforms/cpus/renesas_rz_g2l.repl	Renesas RZ/G2L の固定 SoC とゲスト構成
+riscv,rv64	tests/platforms/ambiq-apollo4.robot	@platforms/cpus/ambiq-apollo4.repl	Ambiq Apollo4 の専用 SoC と周辺機器
