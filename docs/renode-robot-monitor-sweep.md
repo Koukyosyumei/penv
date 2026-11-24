@@ -1426,3 +1426,22 @@ Rust モニターテスト24件と UART テスト36件が合格。
 未変更の Robot は全256バイトの UART ケース、STM32F072b Console Echo、
 保存・復元の4件合格、残り2,193件は未実行
 （`target/monitor-restored-uart-input-robot/results.json`）。
+
+### 復元した変数による UART の照合
+
+`0566e64` は UART のテキスト・バイナリ入力と待機パターンに同じ
+Rust の文字列変数解決を使う。失敗文字列の登録・解除も保存境界以降は
+実行時に解決する。
+
+固定 Renode、通常 CLI、Robot RPC で、上書きしてから復元したパターンで
+同じ受信データを照合した。テキスト `X` の結果オブジェクトと、
+バイナリ `58 0a` の結果が一致した。復元した `X` を失敗文字列として
+登録した場合は、別の行を待つ操作が `X` の受信で失敗した。
+固定 Renode と Robot RPC には読み出した値をキーワードの引数で渡し、
+通常 CLI は `$expected` を直接使った
+（`target/monitor-restored-uart-{pattern,byte-pattern,failing-pattern}-proof/`）。
+
+Rust モニターテスト25件と UART テスト36件が合格。
+未変更の Robot は全256バイトの UART ケース、STM32F072b Console Echo、
+保存・復元の4件合格、残り2,193件は未実行
+（`target/monitor-restored-uart-pattern-robot/results.json`）。
