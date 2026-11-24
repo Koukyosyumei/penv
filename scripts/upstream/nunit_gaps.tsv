@@ -8,7 +8,6 @@ Antmicro.Migrant.Tests.SerializationTests	The Rust machine snapshot is memory-sp
 Antmicro.Migrant.Tests.StampingTests	There is no Migrant serialized type/resource stamping implementation.
 Antmicro.Migrant.Tests.SurrogateTests	There is no registration of custom Migrant serialization/deserialization surrogates.
 Antmicro.Migrant.Tests.TwoDomainTests	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
-Antmicro.Migrant.Tests.TypeDescriptorComparisonTests	There are no Migrant type descriptors with the fixture's assembly, base-type and field comparisons.
 Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
 Antmicro.OptionsParser.Tests.ParserTests	The penv CLI parses flags directly. It lacks the attribute-driven OptionsParser binder for short and long aliases, typed positional values and option groups.
 Antmicro.OptionsParser.Tests.ValidationTests	The CLI has no OptionsParser validation metadata and validation pipeline for option object fields.
