@@ -2155,6 +2155,12 @@ fn run() -> Result<ExitCode, String> {
         }
         Ok(machine)
     };
+    if !monitor_stdio && !monitor_output.is_empty() {
+        let mut output = io::stdout().lock();
+        for message in &monitor_output {
+            writeln!(output, "{message}").map_err(|error| error.to_string())?;
+        }
+    }
     let mut machine = boot_machine()?;
     if let Some(quantum) = monitor_quantum {
         machine.monitor_quantum = quantum;

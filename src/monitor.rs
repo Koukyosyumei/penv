@@ -2030,7 +2030,7 @@ fn execute(
         return Ok(());
     }
     if let ["echo", value] = words
-        && (value.starts_with('$') || boot.started && boot.runtime.is_empty())
+        && (value.starts_with('$') || boot.runtime.is_empty())
     {
         let message = unquote(resolve(value)?).trim_start_matches('@').to_owned();
         if boot.started {
