@@ -2332,8 +2332,7 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
             && state.boot.runtime.is_empty()
             && let Ok(path) = platform_path(value, &source, root, &state.variables)
             && !path.to_string_lossy().contains("://")
-            && let Err(error) = path.metadata()
-            && error.kind() == io::ErrorKind::NotFound
+            && platform_file_missing(&path)
         {
             return Ok(StartupInput::Reply("REJECTED", format!("Could not find file '{}'.", path.display())));
         }
@@ -5117,13 +5116,24 @@ impl Asset {
     }
 }
 
+fn platform_file_missing(path: &Path) -> bool {
+    match path.metadata() {
+        Ok(metadata) => metadata.is_dir(),
+        Err(error) => error.kind() == io::ErrorKind::NotFound,
+    }
+}
+
 fn platform_path(
     value: &str, script: &Path, root: &Path, variables: &HashMap<String, String>,
 ) -> Result<PathBuf, String> {
     if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
         return Ok(path);
     }
-    let file = resolve(variables, value)?.strip_prefix('@').ok_or("expected @platform-path")?;
+    let value = resolve(variables, value)?;
+    if let Some(path) = monitor_string(value) {
+        return Ok(PathBuf::from(path));
+    }
+    let file = value.strip_prefix('@').ok_or("expected a platform path")?;
     Ok(local_path(&path_value(unquote(file)), script, root))
 }
 
@@ -5261,6 +5271,10 @@ greet "hello world"
             ("REJECTED", format!("Could not find file '{missing_repl}'.")),
         );
         assert_eq!(inspect("", "machine LoadPlatformDescription @missing.repl").0, "DEFER");
+        assert_eq!(inspect(machine, "machine LoadPlatformDescription @.").0, "REJECTED");
+        assert_eq!(inspect(machine, r#"machine LoadPlatformDescription ".""#).0, "REJECTED");
+        assert_eq!(platform_path(r#""relative board.repl""#, Path::new("script/boot.resc"),
+            Path::new("root"), &HashMap::new()).unwrap(), Path::new("relative board.repl"));
         let missing = format!("@/tmp/penv-missing-snapshot-{}.save", std::process::id());
         assert_eq!(inspect(machine, &format!("Load {missing}")).0, "REJECTED");
         let no_directory = format!("@/tmp/penv-missing-snapshot-directory-{}/state.save", std::process::id());
