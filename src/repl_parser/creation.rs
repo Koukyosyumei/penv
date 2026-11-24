@@ -240,7 +240,9 @@ impl CreatedPlatform {
         match name {
             "Placeholder" => {
                 cpu.placeholder = Some(
-                    quoted_value(value)
+                    crate::platform::multiline_value(value)
+                        .map(Ok)
+                        .unwrap_or_else(|| quoted_value(value))
                         .map_err(|error| format!("{source}: TypeMismatch: {error}"))?,
                 )
             }

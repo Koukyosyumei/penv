@@ -319,3 +319,113 @@ cpu:
     let cpu = platform.cpu("sysbus.cpu").unwrap();
     assert_eq!(cpu.enum_value, creation::TwoState::One);
 }
+
+#[test]
+fn should_handle_multiline_quoted_string_as_value() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is
+multiline
+string'''"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("this is\nmultiline\nstring")
+    );
+}
+
+#[test]
+fn should_handle_multiple_multiline_quoted_strings() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is a
+multiline
+string'''
+cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is another
+multilineeee
+stringgggg'''"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("this is a\nmultiline\nstring")
+    );
+    let cpu = platform.cpu("sysbus.cpu2").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("this is another\nmultilineeee\nstringgggg")
+    );
+}
+
+#[test]
+fn should_handle_multiline_quoted_string_in_one_line() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is single line'''"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(cpu.placeholder.as_deref(), Some("this is single line"));
+}
+
+#[test]
+fn should_handle_escaped_quote_in_multiline_string() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is \''' single line'''"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(cpu.placeholder.as_deref(), Some("this is ''' single line"));
+}
+
+#[test]
+fn should_handle_escaped_unescaped_single_quote_char_in_multiline_string() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: ''' this is string with ' and '' '''"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some(" this is string with ' and '' ")
+    );
+}
+
+#[test]
+fn should_not_treat_double_slash_in_multiline_string_as_comment() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: ''' // this is //
+// not
+a comment // neither is this
+or //this
+or// this
+or this // '''"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some(
+            " // this is //\n// not\na comment // neither is this\nor //this\nor// this\nor this // "
+        )
+    );
+}

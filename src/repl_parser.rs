@@ -911,6 +911,65 @@ fn parse_text(
     let mut comments = ReplComments::default();
     let mut lines = content.lines().enumerate().peekable();
     while let Some((index, raw)) = lines.next() {
+        if !comments.in_block
+            && raw.starts_with(char::is_whitespace)
+            && !init_indent.is_some_and(|parent| indentation(raw) > parent)
+            && let Some((key, after)) = raw.trim_start().split_once(':')
+            && !(key.trim() == "script"
+                && current.as_ref().is_some_and(|entry| entry.model == "Python.PythonPeripheral"))
+            && let Some(first) = after.trim_start().strip_prefix("'''")
+        {
+            let mut property = format!("{key}: '''");
+            let mut line = first;
+            loop {
+                let closing = line.match_indices("'''").find_map(|(at, _)| {
+                    let escapes = line.as_bytes()[..at]
+                        .iter()
+                        .rev()
+                        .take_while(|&&byte| byte == b'\\')
+                        .count();
+                    (escapes % 2 == 0).then_some(at)
+                });
+                if let Some(at) = closing {
+                    property.push_str(&line[..at + 3]);
+                    let tail = comments
+                        .line(&line[at + 3..])
+                        .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
+                    if !tail.trim().is_empty() {
+                        return Err(format!(
+                            "{}:{}: unexpected text after multiline string",
+                            path.display(),
+                            index + 1
+                        ));
+                    }
+                    break;
+                }
+                property.push_str(line);
+                property.push('\n');
+                line = lines.next().map(|(_, line)| line).ok_or_else(|| {
+                    format!(
+                        "{}:{}: unclosed multiline string",
+                        path.display(),
+                        index + 1
+                    )
+                })?;
+            }
+            let entry = current.as_mut().ok_or_else(|| {
+                format!(
+                    "{}:{}: property has no declaration",
+                    path.display(),
+                    index + 1
+                )
+            })?;
+            entry.body.push((
+                SourceLine {
+                    path: Rc::clone(&source_path),
+                    line: index + 1,
+                },
+                property,
+            ));
+            continue;
+        }
         let line = comments
             .first_line(raw)
             .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;

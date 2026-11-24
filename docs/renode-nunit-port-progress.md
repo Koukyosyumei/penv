@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,984 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,990 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 411 |
+| 移植待ち | 405 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -420,3 +420,5 @@ REPL のインラインオブジェクト生成を追加し、不明な型、参
 インラインオブジェクトを登録点として指定した際の型不一致と、別名で登録した周辺機器から複数のアドレス範囲を宣言順に取得するケースを移植した。対象の23件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-registration-list.tsv)・[実行ログ](nunit-evidence/targeted-repl-registration-list.log)
 
 `MergeAndCreationTests` の4件を移植した。CPU の登録別名、プロパティの上書き、エスケープされた二重引用符、`none` による列挙値の既定値への復帰を検証し、対象の27件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-cpu-properties.tsv)・[実行ログ](nunit-evidence/targeted-repl-cpu-properties.log)
+
+`MergeAndCreationTests` の三重引用符入力を6件移植した。改行、引用符のエスケープ、文字列中の `//` を保持し、登録された CPU の実際のプロパティ値を検証した。対象の33件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-multiline.tsv)・[実行ログ](nunit-evidence/targeted-repl-multiline.log)
