@@ -2690,14 +2690,20 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
             ))
         }
-        [target, "SetRegister", register, value] if boot.started || !boot.runtime.is_empty() => {
+        [target, "SetRegister", register, value]
+            if boot.started || !boot.runtime.is_empty()
+                || (boot.has_platform() && crate::parse_address(unquote(resolve(register)?)).is_err()) =>
+        {
             Some(Action::CpuRegister(
                 resolve(target)?.trim_start_matches("sysbus.").into(),
                 unquote(resolve(register)?).into(),
                 Some(crate::parse_address64(resolve(value)?)?),
             ))
         }
-        [target, "GetRegister", register] if boot.started || !boot.runtime.is_empty() => {
+        [target, "GetRegister", register]
+            if boot.started || !boot.runtime.is_empty()
+                || (boot.has_platform() && crate::parse_address(unquote(resolve(register)?)).is_err()) =>
+        {
             Some(Action::CpuRegister(
                 resolve(target)?.trim_start_matches("sysbus.").into(),
                 unquote(resolve(register)?).into(),

@@ -576,6 +576,25 @@ impl Machine {
         ];
         let hart = self.named_hart(name)?;
         let register = register.to_ascii_lowercase();
+        if hart.thumb.is_some() && register != "resetvector" {
+            let index = match register.as_str() {
+                "sp" => Some(13),
+                "lr" => Some(14),
+                "pc" => Some(15),
+                name => crate::parse_address(name.strip_prefix('r').unwrap_or(name)).ok(),
+            }.filter(|index| *index < 16)
+                .ok_or_else(|| format!("unsupported Cortex-M monitor register {register}"))?;
+            let target = if index == 15 { &mut hart.pc } else { &mut hart.registers[index as usize] };
+            if let Some(value) = value {
+                *target = u32::try_from(value).map_err(|_| "register value exceeds Cortex-M width")?;
+                if index == 15 {
+                    hart.pc_written = true;
+                    hart.reset_pc_written |= hart.reset_held;
+                }
+                return Ok(None);
+            }
+            return Ok(Some(u64::from(*target)));
+        }
         if register == "resetvector" {
             if let Some(cpu) = &mut hart.rv64 {
                 return Ok(match value {
