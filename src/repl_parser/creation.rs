@@ -1006,6 +1006,12 @@ impl CreatedPlatform {
             }
         }
         let endpoints = &mut self.objects[id].endpoints;
+        if connection.destinations.is_empty() {
+            for output in sources {
+                endpoints.remove(&output);
+            }
+            return Ok(());
+        }
         for (destination, receiver) in connection.destinations.into_iter().zip(receivers) {
             let pins = destination
                 .groups

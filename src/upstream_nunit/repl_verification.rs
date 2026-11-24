@@ -1808,3 +1808,93 @@ receiver3: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <2, 3>"#,
         assert_eq!(output.receiver, target);
     }
 }
+
+#[test]
+fn should_cancel_irq_connection() {
+    let platform = creation::create_objects(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender @ sysbus <0, 1> { [Irq] -> receiver@[0] }
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+sender:
+    Irq -> none"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let sender = platform.object_id("sysbus.sender").unwrap();
+    assert!(platform.irq_endpoints(sender, "Irq").is_empty());
+}
+
+#[test]
+fn should_cancel_and_replace_irq_connection() {
+    let platform = creation::create_objects(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender @ sysbus <0, 1> { [Irq] -> receiver@[0] }
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+receiver2: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <2, 3>
+sender:
+    Irq -> none
+sender:
+    Irq -> receiver2@0"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let sender = platform.object_id("sysbus.sender").unwrap();
+    let receiver = platform.object_id("sysbus.receiver2").unwrap();
+    let outputs = platform.irq_endpoints(sender, "Irq");
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].receiver, receiver);
+}
+
+#[test]
+fn should_cancel_and_replace_irq_connections_in_range() {
+    let platform = creation::create_objects(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral @ sysbus <0, 1>
+    gpios: 3
+    [0-1] -> receiver@[0-1]
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+sender:
+    [1-2] -> none
+receiver2: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <2, 3>
+sender:
+    [1-2] -> receiver2@[2-3]"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let sender = platform.object_id("sysbus.sender").unwrap();
+    let receiver = platform.object_id("sysbus.receiver").unwrap();
+    let receiver2 = platform.object_id("sysbus.receiver2").unwrap();
+    let pin0 = platform.irq_endpoints(sender, "0");
+    let pin1 = platform.irq_endpoints(sender, "1");
+    let pin2 = platform.irq_endpoints(sender, "2");
+    assert_eq!((pin0[0].pin, pin0[0].receiver), (0, receiver));
+    assert_eq!(pin1.len(), 1);
+    assert_eq!((pin1[0].pin, pin1[0].receiver), (2, receiver2));
+    assert_eq!((pin2[0].pin, pin2[0].receiver), (3, receiver2));
+}
+
+#[test]
+fn should_cancel_irq_connections_multiple_times() {
+    let platform = creation::create_objects(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender @ sysbus <0, 1> { [Irq] -> receiver@[0] }
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+receiver2: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <2, 3>
+receiver3: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <3, 4>
+sender:
+    Irq -> none
+sender:
+    Irq -> receiver2@0
+sender:
+    Irq -> none
+sender:
+    Irq -> receiver3@0"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let sender = platform.object_id("sysbus.sender").unwrap();
+    let receiver = platform.object_id("sysbus.receiver3").unwrap();
+    let outputs = platform.irq_endpoints(sender, "Irq");
+    assert_eq!(outputs.len(), 1);
+    assert_eq!((outputs[0].pin, outputs[0].receiver), (0, receiver));
+}

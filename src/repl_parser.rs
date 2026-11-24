@@ -152,6 +152,9 @@ pub(crate) fn irq_connection(input: &str) -> Result<IrqConnection<'_>, String> {
 
     let (source, destinations) = input.split_once("->").ok_or("expected IRQ connection")?;
     let sources = (!source.trim().is_empty()).then(|| groups(source, true)).transpose()?;
+    if destinations.trim() == "none" {
+        return Ok(IrqConnection { sources, destinations: Vec::new() });
+    }
     let destinations = destinations.split('|').map(|destination| {
         let (name, pins) = destination.split_once('@').ok_or("expected IRQ destination pins")?;
         let (name, local) = crate::platform::irq_receiver(name)?;
