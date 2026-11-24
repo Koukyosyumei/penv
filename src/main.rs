@@ -1421,13 +1421,20 @@ fn run() -> Result<ExitCode, String> {
                 return Ok(ExitCode::SUCCESS);
             }
         }
-        let parsed = if monitor_stdio {
+        let from_stdin = script == std::path::Path::new("-");
+        let parsed = if from_stdin {
+            if !monitor_stdio {
+                return Err("--script - requires --monitor-stdio".into());
+            }
+            monitor::load_session_stream(io::stdin().lock(), root)
+        } else if monitor_stdio {
             monitor::load_for_session(script, root)
         } else {
             monitor::load(script, root)
         };
         let boot = match parsed {
             Ok(boot) if uart_log_dir.is_none() => boot,
+            result if from_stdin => result?,
             result => {
                 let plan =
                     network_monitor::Plan::load(script, root).map_err(|error| match result {
@@ -1492,7 +1499,7 @@ fn run() -> Result<ExitCode, String> {
         };
         sd_setup_only = boot.is_sd_setup_only() && boot.image.is_none() && boot.binaries.is_empty();
         if let Some(server) = boot.network.into_tftp()? {
-            let file = server.file.resolve(root, asset_dir.as_deref())?;
+            let file = server.file.input_path(root, asset_dir.as_deref())?;
             let data = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             tftp = Some((
                 server.ethernet,
@@ -1522,20 +1529,20 @@ fn run() -> Result<ExitCode, String> {
         if path.is_none()
             && let Some(image) = boot.image
         {
-            path = Some(image.resolve(root, asset_dir.as_deref())?);
+            path = Some(image.input_path(root, asset_dir.as_deref())?);
         }
         for (value, address) in boot.binaries {
-            let path = value.resolve(root, asset_dir.as_deref())?;
+            let path = value.input_path(root, asset_dir.as_deref())?;
             binaries.push((path, u64::from(address)));
         }
         sd_cards = boot.sd_cards;
         mpfs_buttons = boot.mpfs_buttons;
         for (cpu, symbol, source, file) in boot.python_hooks {
-            let file = file.resolve(root, asset_dir.as_deref())?;
+            let file = file.input_path(root, asset_dir.as_deref())?;
             python_hooks.push((cpu, symbol, source, file));
         }
         for (cpu, symbol, target, value) in boot.halt_hooks {
-            let file = monitor::Asset::new(&value, script).resolve(root, asset_dir.as_deref())?;
+            let file = monitor::Asset::new(&value, script).input_path(root, asset_dir.as_deref())?;
             let address = fs::read(&file)
                 .map_err(|e| e.to_string())
                 .and_then(|bytes| image64::symbol(&bytes, &symbol))
@@ -1543,7 +1550,7 @@ fn run() -> Result<ExitCode, String> {
             halt_hooks.push((cpu, address, target));
         }
         for (device, input) in boot.pcm_inputs {
-            pcm_inputs.push((device, input.resolve(root, asset_dir.as_deref())?));
+            pcm_inputs.push((device, input.input_path(root, asset_dir.as_deref())?));
         }
         pcm_outputs = boot.pcm_outputs;
         run_steps = boot.run_steps;

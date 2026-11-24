@@ -515,10 +515,11 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def ensure_running(self):
         if self.proc is not None:
             return
-        if self.rust_monitor and self.script is None:
-            self.script = self.out / "boot.resc"
-            self.script.write_text("\n".join(self.commands) + "\n", encoding="utf-8")
-        if not self.script and (not self.commands or not (self.platform or self.inline)):
+        startup = None
+        if self.rust_monitor:
+            startup = ("\n".join(self.commands) + "\n").encode("utf-8")
+            (self.out / "boot.resc").write_bytes(startup)
+        if not self.rust_monitor and not self.script and (not self.commands or not (self.platform or self.inline)):
             raise Unsupported("requires a single machine and platform")
         platform = self.platform
         if self.inline:
@@ -530,7 +531,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         cmd = [str(self.binary), "run", "--platform-root", str(self.root), "--monitor-stdio"]
         if self.log_capacity is not None:
             cmd.extend(["--monitor-log-capacity", str(self.log_capacity)])
-        if self.script:
+        if startup is not None:
+            cmd.extend(["--script", "-", "--asset-dir", str(self.assets)])
+        elif self.script:
             cmd.extend(["--script", str(self.script), "--asset-dir", str(self.assets)])
         elif self.image:
             script = self.out / "boot.resc"
@@ -548,6 +551,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 self.proc = subprocess.Popen(cmd, cwd=self.out, stdin=subprocess.PIPE,
                                              stdout=subprocess.PIPE, stderr=stderr, bufsize=0)
             try:
+                if startup is not None:
+                    self.send_monitor_frame("PENV-STARTUP", startup)
                 status, startup_output = self.receive()
                 break
             except RuntimeError as exc:
@@ -583,11 +588,22 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             self.operation(self.log_level)
         return startup_output
 
+    def send_monitor_frame(self, name, body):
+        payload = memoryview(f"{name} {len(body)}\n".encode() + body)
+        while payload:
+            count = self.proc.stdin.write(payload)
+            if not count:
+                raise RuntimeError("penv closed the monitor stream")
+            payload = payload[count:]
+
     def operation(self, command, assertion=False):
         self.ensure_running()
         begin = time.monotonic()
         try:
-            self.proc.stdin.write((command + "\n").encode())
+            if self.rust_monitor:
+                self.send_monitor_frame("PENV-COMMAND", command.encode())
+            else:
+                self.proc.stdin.write((command + "\n").encode())
             status, value = self.receive()
         except (BrokenPipeError, RuntimeError) as exc:
             raise PenvExecutionError(f"penv monitor stopped during {command}: {exc}") from exc
@@ -704,7 +720,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def start(self):
         if self.started or not (self.image or self.rust_monitor):
             raise Unsupported("Start Emulation needs a loaded image on one machine")
-        self.ensure_running()
+        if self.rust_monitor:
+            self.operation("start")
+        else:
+            self.ensure_running()
         self.started = True
 
     def wait_for(self, verb, expected, *args):

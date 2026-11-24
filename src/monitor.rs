@@ -3,7 +3,7 @@ use crate::csr::TrapVector;
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Write},
     net::Ipv4Addr,
     path::{Path, PathBuf},
     time::Duration,
@@ -778,7 +778,18 @@ pub fn serve(
         if input.read_line(&mut line).map_err(|error| error.to_string())? == 0 {
             return Ok(());
         }
-        let text = line.trim();
+        let framed;
+        let text = if let Some(length) = line.strip_prefix("PENV-COMMAND ") {
+            framed = read_monitor_text(&mut input, length)?;
+            framed.trim()
+        } else {
+            line.trim()
+        };
+        if matches!(text, "start" | "pause") {
+            machine.primary.monitor_paused = text == "pause";
+            frame(&mut output, "OK", &[]).map_err(|error| error.to_string())?;
+            continue;
+        }
         if let Some(result) = crate::monitor_asm::handle(machine, text) {
             match result {
                 Ok(size) => frame(&mut output, "OK", size.to_string().as_bytes()),
@@ -1175,18 +1186,42 @@ struct ScriptState {
 }
 
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
-    load_script(path, root, false)
+    load_script(path, root, false, None)
 }
 
 pub fn load_for_session(path: &Path, root: &Path) -> Result<Boot, String> {
-    load_script(path, root, true)
+    load_script(path, root, true, None)
 }
 
-fn load_script(path: &Path, root: &Path, session: bool) -> Result<Boot, String> {
+pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Boot, String> {
+    let mut header = String::new();
+    input.by_ref().take(64).read_line(&mut header).map_err(|e| e.to_string())?;
+    let length = header.strip_prefix("PENV-STARTUP ")
+        .ok_or("expected PENV-STARTUP followed by the startup byte count")?;
+    let body = read_monitor_text(&mut input, length)?;
+    let source = std::env::current_dir().map_err(|e| e.to_string())?.join("<monitor-startup>");
+    load_script(&source, root, true, Some(&body))
+}
+
+fn read_monitor_text(input: &mut impl Read, length: &str) -> Result<String, String> {
+    let length = length.strip_suffix('\n').and_then(|length| length.trim_end().parse::<usize>().ok())
+        .filter(|length| *length <= 8 * 1024 * 1024)
+        .ok_or("invalid monitor frame byte count")?;
+    let mut body = vec![0; length];
+    input.read_exact(&mut body).map_err(|e| format!("reading monitor frame: {e}"))?;
+    String::from_utf8(body).map_err(|e| e.to_string())
+}
+
+fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) -> Result<Boot, String> {
     let mut state = ScriptState::default();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     state.variables.insert("global.CWD".into(), format!("@\"{}\"", cwd.display()));
-    load_file(path, root, &mut state)?;
+    state.variables.insert("global.ORIGIN".into(), format!("@\"{}\"", cwd.display()));
+    if let Some(source) = source {
+        load_text(path, path.to_owned(), root, &mut state, source)?;
+    } else {
+        load_file(path, root, &mut state)?;
+    }
     let mut boot = state.boot;
     boot.session.variables = state.variables;
     boot.materialize_platform()?;
@@ -1238,13 +1273,17 @@ fn load_script(path: &Path, root: &Path, session: bool) -> Result<Boot, String> 
 
 fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), String> {
     let canonical = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let content = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    load_text(path, canonical, root, state, &content)
+}
+
+fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptState, content: &str) -> Result<(), String> {
     if state.visiting.len() >= 64 || !state.visiting.insert(canonical.clone()) {
         return Err(format!(
             "{}: recursive or excessively deep script include",
             path.display()
         ));
     }
-    let content = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let origin = canonical.parent().unwrap_or(Path::new("."));
     let previous_origin = state.variables.insert(
         "global.ORIGIN".into(),
@@ -3007,6 +3046,14 @@ impl Asset {
         }
     }
 
+    pub fn input_path(&self, root: &Path, assets: Option<&Path>) -> Result<PathBuf, String> {
+        let path = self.resolve(root, assets)?;
+        if self.value.contains("://") && !path.is_file() {
+            return Err(format!("monitor asset unavailable: {}", self.value));
+        }
+        Ok(path)
+    }
+
     pub fn resolve(&self, root: &Path, assets: Option<&Path>) -> Result<PathBuf, String> {
         let value = &self.value;
         if let Some((_, url)) = value.split_once("://") {
@@ -3018,11 +3065,7 @@ impl Asset {
             let assets = assets.ok_or_else(|| {
                 format!("script references {value}; use --asset-dir with local assets")
             })?;
-            let path = assets.join(name);
-            if !path.is_file() {
-                return Err(format!("monitor asset unavailable: {value}"));
-            }
-            return Ok(path);
+            return Ok(assets.join(name));
         }
         Ok(local_path(value, &self.script, root))
     }
