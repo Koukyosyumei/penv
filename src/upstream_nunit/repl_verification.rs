@@ -1622,3 +1622,92 @@ peri:
     );
     assert!(handler.executed.is_empty());
 }
+
+#[test]
+fn should_fail_on_not_existing_irq_destination() {
+    assert_error(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender
+    IRQ -> receiver@0"#,
+        "IrqDestinationDoesNotExist",
+    );
+}
+
+#[test]
+fn should_fail_on_irq_destination_not_being_irq_receiver() {
+    assert_error(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender
+    Irq -> cpu@0"#,
+        "IrqDestinationIsNotIrqReceiver",
+    );
+}
+
+#[test]
+fn should_fail_on_wrong_irq_arity() {
+    assert_error(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender
+    [Irq] -> receiver@[0,1]
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver"#,
+        "WrongIrqArity",
+    );
+}
+
+#[test]
+fn should_fail_on_wrong_irq_name() {
+    assert_error(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender
+    Something -> receiver@0
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver"#,
+        "IrqSourceDoesNotExist",
+    );
+}
+
+#[test]
+fn should_fail_on_number_irq_source_not_being_numbered_gpio_output() {
+    assert_error(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender
+    [0-1] -> receiver@[0-1]
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver"#,
+        "IrqSourceIsNotNumberedGpioOutput",
+    );
+}
+
+#[test]
+fn should_fail_on_ambiguous_default_irq() {
+    assert_error(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSenderWithTwoInterrupts
+    -> receiver@0
+
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver"#,
+        "AmbiguousDefaultIrqSource",
+    );
+}
+
+#[test]
+fn should_fail_on_no_irq_when_using_default_one() {
+    assert_error(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU
+    -> receiver@0
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver"#,
+        "IrqSourceDoesNotExist",
+    );
+}
+
+#[test]
+fn should_fail_on_non_existing_irq_source_pin() {
+    assert_error(
+        r#"
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver
+sender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral
+    gpios: 2
+    2 -> receiver@1"#,
+        "IrqSourcePinDoesNotExist",
+    );
+}

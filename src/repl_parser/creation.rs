@@ -5,6 +5,10 @@ const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Model {
     Sysbus,
+    IrqSender,
+    DualIrqSender,
+    NumberedGpio,
+    IrqReceiver,
     Cpu,
     EmptyPeripheral,
     Register,
@@ -112,6 +116,14 @@ impl Model {
             "Antmicro.Renode.UnitTests.Mocks.EmptyInterestingType" => {
                 Some(Self::NonPeripheralRegister)
             }
+            "Antmicro.Renode.UnitTests.Mocks.MockIrqSender" => Some(Self::IrqSender),
+            "Antmicro.Renode.UnitTests.Mocks.MockIrqSenderWithTwoInterrupts" => {
+                Some(Self::DualIrqSender)
+            }
+            "Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral" => {
+                Some(Self::NumberedGpio)
+            }
+            "Antmicro.Renode.UnitTests.Mocks.MockReceiver" => Some(Self::IrqReceiver),
             MOCK_CPU => Some(Self::Cpu),
             "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
             "Antmicro.Renode.UnitTests.Mocks.MockExternal" => Some(Self::External),
@@ -150,6 +162,7 @@ struct CreatedObject {
     empty_peripheral_value: Option<String>,
     dependency: Option<usize>,
     throw_on_construction: bool,
+    gpio_count: u32,
     collections: Collections,
 }
 
@@ -430,6 +443,7 @@ pub(crate) fn create_with_init(
             empty_peripheral_value: None,
             dependency: None,
             throw_on_construction: false,
+            gpio_count: 0,
             collections: Collections::default(),
         });
         targets.push(Some(id));
@@ -445,6 +459,7 @@ pub(crate) fn create_with_init(
         empty_peripheral_value: None,
         dependency: None,
         throw_on_construction: false,
+        gpio_count: 0,
         collections: Collections::default(),
     });
     globals.insert("sysbus", sysbus);
@@ -579,6 +594,10 @@ pub(crate) fn create_with_init(
                                 | Model::AmbiguousRegister => "non-peripheral",
                                 Model::MockRegistrationPoint => "mock registration point",
                                 Model::Sysbus => "system bus",
+                                Model::IrqSender
+                                | Model::DualIrqSender
+                                | Model::NumberedGpio
+                                | Model::IrqReceiver => "IRQ peripheral",
                             };
                             return Err(entry.error(&format!(
                                 "TypeMismatch: {model} is not a registration point"
@@ -593,12 +612,17 @@ pub(crate) fn create_with_init(
                 pending.insert(id, (entry.alias.as_deref().unwrap_or(&entry.name), parents));
             }
         }
+        let mut connections = Vec::new();
         let mut sections = entry.body.iter().peekable();
         while sections
             .peek()
             .is_some_and(|(_, text)| init_header(text).is_none())
         {
             let (source, property) = sections.next().unwrap();
+            if property.contains("->") && property_key(property).is_none() {
+                connections.push((source, property));
+                continue;
+            }
             let (name, value) = property
                 .split_once(':')
                 .ok_or_else(|| format!("{source}: expected CPU property"))?;
@@ -611,6 +635,11 @@ pub(crate) fn create_with_init(
                 |name| resolve(&entry.source, name),
                 0,
             )?;
+        }
+        for (source, property) in connections {
+            platform
+                .verify_irq(id, property, |name| resolve(&entry.source, name))
+                .map_err(|error| format!("{source}: {error}"))?;
         }
         while let Some((_, marker)) = sections.next() {
             let (section, append) = init_header(marker).unwrap();
@@ -804,6 +833,79 @@ impl CreatedPlatform {
         Ok(())
     }
 
+    fn verify_irq(
+        &self,
+        id: usize,
+        text: &str,
+        resolve: impl Fn(&str) -> Option<usize>,
+    ) -> Result<(), String> {
+        let connection = irq_connection(text)?;
+        let sender = &self.objects[id];
+        let outputs: &[&str] = match sender.model {
+            Model::IrqSender => &["Irq"],
+            Model::DualIrqSender => &["Irq", "AnotherIrq"],
+            Model::NumberedGpio => &["Irq", "OtherIrq"],
+            Model::IrqReceiver => &["IRQ"],
+            _ => &[],
+        };
+        for destination in &connection.destinations {
+            let target =
+                resolve(destination.name).ok_or("IrqDestinationDoesNotExist: missing receiver")?;
+            if !matches!(
+                self.objects[target].model,
+                Model::IrqReceiver | Model::NumberedGpio
+            ) {
+                return Err(
+                    "IrqDestinationIsNotIrqReceiver: model does not implement IGPIOReceiver".into(),
+                );
+            }
+        }
+        let width = |end: &IrqEnd<'_>| match end {
+            IrqEnd::Range(a, b) => u64::from(a.abs_diff(*b)) + 1,
+            _ => 1,
+        };
+        let source_width = if let Some(sources) = &connection.sources {
+            for source in sources {
+                match source {
+                    IrqEnd::Property(name) if outputs.contains(name) => {}
+                    IrqEnd::Property(_) => {
+                        return Err("IrqSourceDoesNotExist: unknown output".into());
+                    }
+                    IrqEnd::Number(_) | IrqEnd::Range(_, _)
+                        if sender.model != Model::NumberedGpio =>
+                    {
+                        return Err(
+                            "IrqSourceIsNotNumberedGpioOutput: model has no numbered outputs"
+                                .into(),
+                        );
+                    }
+                    IrqEnd::Number(pin) if *pin >= sender.gpio_count => {
+                        return Err("IrqSourcePinDoesNotExist: pin outside GPIO count".into());
+                    }
+                    IrqEnd::Range(a, b) if *a.max(b) >= sender.gpio_count => {
+                        return Err("IrqSourcePinDoesNotExist: pin outside GPIO count".into());
+                    }
+                    _ => {}
+                }
+            }
+            sources.iter().map(width).sum()
+        } else {
+            match outputs.len() {
+                0 => return Err("IrqSourceDoesNotExist: no default output".into()),
+                1 => 1,
+                _ => return Err("AmbiguousDefaultIrqSource: more than one output".into()),
+            }
+        };
+        if connection
+            .destinations
+            .iter()
+            .any(|destination| destination.groups.iter().map(width).sum::<u64>() != source_width)
+        {
+            return Err("WrongIrqArity: source and destination widths differ".into());
+        }
+        Ok(())
+    }
+
     fn set_property(
         &mut self,
         id: usize,
@@ -815,6 +917,11 @@ impl CreatedPlatform {
     ) -> Result<(), String> {
         if depth >= 64 {
             return Err(format!("{source}: inline object nesting limit exceeded"));
+        }
+        if self.objects[id].model == Model::NumberedGpio && name == "gpios" {
+            self.objects[id].gpio_count =
+                number(value).map_err(|error| format!("{source}: {error}"))?;
+            return Ok(());
         }
         if self.objects[id].model == Model::DependentPeripheral {
             if name == "throwException" {
@@ -849,6 +956,7 @@ impl CreatedPlatform {
                     empty_peripheral_value: None,
                     dependency: None,
                     throw_on_construction: false,
+                    gpio_count: 0,
                     collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();
@@ -953,6 +1061,7 @@ impl CreatedPlatform {
                     empty_peripheral_value: None,
                     dependency: None,
                     throw_on_construction: false,
+                    gpio_count: 0,
                     collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();

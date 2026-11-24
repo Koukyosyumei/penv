@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,074 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,082 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 321 |
+| 移植待ち | 313 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -460,3 +460,5 @@ CPU参照を要素、キー、値に含むコレクション4件を移植した�
 `preinit` の置換・追記・実行順、`preinit` と `init` の検証失敗、および重複する `init` ブロックの計7件を移植した。呼び出し引数と順序は上流と同様に記録用ハンドラーで照合した。最終の対象実行では115件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-preinit.tsv)・[実行ログ](nunit-evidence/targeted-repl-preinit.log)
 
 リセットスクリプトの置換と追記の2件を移植した。上流と同じコマンド列をリセット用ハンドラーに登録することを検証した。[公式IDとの対応](nunit-evidence/targeted-repl-reset.tsv)・[実行ログ](nunit-evidence/targeted-repl-reset.log)
+
+IRQ の検証8件を移植した。モック型の出力と受信インターフェースに基づき、接続先、出力名、既定出力、ピン番号、接続数の診断を照合した。[公式IDとの対応](nunit-evidence/targeted-repl-irq.tsv)・[実行ログ](nunit-evidence/targeted-repl-irq.log)
