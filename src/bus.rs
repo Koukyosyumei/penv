@@ -347,6 +347,8 @@ struct NrfGpioConnector {
 pub struct Bus {
     monitor_log_level: Option<i8>,
     pub monitor_user_state: String,
+    traceable_memory: Vec<(String, Vec<u32>, u32)>,
+    traced_memory: Vec<(u32, u32, String)>,
     #[cfg(test)]
     pub faulting_accesses: Option<std::ops::RangeInclusive<u32>>,
     #[cfg(test)]
@@ -3091,6 +3093,46 @@ impl Bus {
         Ok(0xe000_e000 + offset)
     }
 
+    pub(crate) fn register_traceable_memory(&mut self, name: &str, addresses: &[u32], size: u32) {
+        self.traceable_memory.push((name.to_owned(), addresses.to_vec(), size));
+    }
+
+    pub(crate) fn set_trace_memory(&mut self, name: &str, enabled: bool) -> Result<(), String> {
+        let (_, addresses, size) = self.traceable_memory.iter()
+            .find(|(registered, _, _)| registered == name)
+            .ok_or_else(|| format!("unsupported peripheral access logging target {name:?}"))?;
+        self.traced_memory.retain(|(_, _, registered)| registered != name);
+        if enabled {
+            self.traced_memory.extend(addresses.iter().map(|&base| (base, *size, name.to_owned())));
+        }
+        Ok(())
+    }
+
+    fn log_memory_access(&self, write: bool, address: u32, width: usize, value: u32) {
+        for (base, size, name) in &self.traced_memory {
+            let Some(offset) = address.checked_sub(*base) else { continue };
+            if u64::from(offset) + width as u64 > u64::from(*size) {
+                continue;
+            }
+            let access = match width {
+                1 => "Byte",
+                2 => "Word",
+                4 => "DoubleWord",
+                _ => continue,
+            };
+            let value = value & (u32::MAX >> (32 - width * 8));
+            let message = if write {
+                format!("{name}: Write{access} to 0x{offset:X}, value 0x{value:X}")
+            } else {
+                format!("{name}: Read{access} from 0x{offset:X}, returned 0x{value:X}")
+            };
+            crate::monitor_log::record(1, &message);
+            if self.monitor_log_enabled(1) {
+                eprintln!("{message}");
+            }
+        }
+    }
+
     pub fn set_monitor_log_level(&mut self, level: i8) {
         self.monitor_log_level = Some(level);
         crate::monitor_log::set_level(level);
@@ -5748,6 +5790,10 @@ impl Bus {
         monitor: bool,
     ) -> Result<u32, BusError> {
         match self.read_mapped::<N>(address) {
+            Ok(value) => {
+                self.log_memory_access(false, address, N, value);
+                Ok(value)
+            }
             Err(BusError::Unmapped(..)) => self.unhandled_value(address, N, monitor),
             result => result,
         }
@@ -6518,6 +6564,10 @@ impl Bus {
         monitor: bool,
     ) -> Result<(), BusError> {
         match self.write_mapped(address, width, value, uart, None) {
+            Ok(()) => {
+                self.log_memory_access(true, address, width, value);
+                Ok(())
+            }
             Err(BusError::Unmapped(..)) => {
                 self.unhandled_value(address, width, monitor).map(|_| ())
             }
@@ -6534,6 +6584,10 @@ impl Bus {
         writer: Option<usize>,
     ) -> Result<(), BusError> {
         match self.write_mapped(address, width, value, uart, writer) {
+            Ok(()) => {
+                self.log_memory_access(true, address, width, value);
+                Ok(())
+            }
             Err(BusError::Unmapped(..)) => self.unhandled_value(address, width, false).map(|_| ()),
             result => result,
         }

@@ -32,6 +32,7 @@ pub struct Rv64 {
     pub(crate) stack_access_trace_name: Option<String>,
     pub pc: u64,
     reset_vector: u64,
+    reset_vector_configured: bool,
     pc_follows_reset_vector: bool,
     registers: [u64; 32],
     floating: [u64; 32],
@@ -40,6 +41,7 @@ pub struct Rv64 {
     translations: TranslationCache,
     pub allow_unaligned: bool,
     waiting: bool,
+    wfi_as_nop: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -223,6 +225,7 @@ impl Rv64 {
             stack_access_trace_name: None,
             pc: u64::from(RAM_BASE),
             reset_vector: u64::from(RAM_BASE),
+            reset_vector_configured: false,
             pc_follows_reset_vector: true,
             registers: [0; 32],
             floating: [0; 32],
@@ -231,14 +234,25 @@ impl Rv64 {
             translations: TranslationCache::default(),
             allow_unaligned: false,
             waiting: false,
+            wfi_as_nop: false,
         }
     }
 
     pub(crate) fn set_reset_vector(&mut self, address: u64) {
+        self.reset_vector_configured = true;
         self.reset_vector = address;
         if self.pc_follows_reset_vector {
             self.pc = address;
         }
+    }
+
+    pub(crate) fn initialize_monitor_reset_pc(&mut self) {
+        // A platform can override the Renode RISC-V default with resetVector.
+        if !self.reset_vector_configured {
+            self.reset_vector = 0x1000;
+        }
+        self.pc_follows_reset_vector = true;
+        self.pc = self.reset_vector;
     }
 
     pub(crate) fn set_program_counter(&mut self, address: u64) {
@@ -505,6 +519,13 @@ impl Rv64 {
         Some(old)
     }
 
+    pub(crate) fn set_wfi_as_nop(&mut self, enabled: bool) {
+        self.wfi_as_nop = enabled;
+        if enabled {
+            self.waiting = false;
+        }
+    }
+
     fn execute(
         &mut self,
         instruction: u32,
@@ -706,7 +727,7 @@ impl Rv64 {
                     0x0010_0073 => return Err(Fault::new(3, self.pc)),
                     0x3020_0073 => next = self.privilege.mret(epc_mask).ok_or(illegal)?,
                     0x1020_0073 => next = self.privilege.sret(epc_mask).ok_or(illegal)?,
-                    0x1050_0073 if self.privilege.allows_wfi() => self.waiting = true,
+                    0x1050_0073 if self.privilege.allows_wfi() => self.waiting = !self.wfi_as_nop,
                     _ if instruction & 0xfe00_7fff == 0x1200_0073
                         && self.privilege.allows_sfence() =>
                     {

@@ -11,7 +11,7 @@ import tempfile
 import time
 
 from memory_keywords import MemoryKeywords
-from monitor_input import MonitorInput, PUBLIC_ASSET, at_path, script_asset_urls, words
+from monitor_input import MonitorInput, PUBLIC_ASSET, at_path, script_asset_urls, unquote, words
 from penv_robot import (AssertionFailed, Endpoint, PenvExecutionError, PenvStartupError,
                         PenvUnsupported, Unsupported)
 
@@ -276,14 +276,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 self.platform = self.monitor_input.path(tokens[2])
                 return ""
             prefix = "machine LoadPlatformDescriptionFromString "
-            if command.startswith(prefix) and self.platform is None and not self.image:
+            if command.startswith(prefix) and not self.image:
                 arg = command[len(prefix):]
-                if arg.startswith('"""') and arg.endswith('"""'):
-                    repl = arg[3:-3]
-                elif arg.startswith('"') and arg.endswith('"') and "\n" not in arg:
-                    repl = arg[1:-1].replace(r'\"', '"')
-                else:
+                if not ((arg.startswith('"""') and arg.endswith('"""') and len(arg) >= 6)
+                        or re.fullmatch(r"""(['"])(?:\\[\s\S]|(?!\1)[^\\])*\1""", arg)):
                     raise Unsupported("invalid inline platform quoting")
+                repl = unquote(arg)
                 self.inline.append(repl)
                 return ""
             if (not self.image and tokens[:1] == ["sysbus"] and len(tokens) == 3
@@ -313,17 +311,28 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             rf'({cpu.strip()}) AssembleBlock (0x[0-9a-fA-F]+|[0-9]+|`(?:sysbus\.)?[\w.]+ PC`) (.+)',
             command, flags=re.DOTALL)
         if assembly:
-            target, address, body = assembly.groups()
+            target, address, suffix = assembly.groups()
+            arguments = re.fullmatch(
+                r'("""[\s\S]*?"""|"[^"]*")(?:\s+(null|"[\w-]+"))?(?:\s+(true|false))?',
+                suffix, flags=re.IGNORECASE)
+            if not arguments:
+                raise Unsupported("AssembleBlock needs quoted code and optional triple and dialect")
+            body, triple, alternate = arguments.groups()
+            if alternate and alternate.lower() == "true":
+                raise Unsupported("alternate assembly dialect is unavailable")
+            triple = triple.strip('"') if triple and triple.lower() != "null" else "default"
+            marker = 3 if body.startswith('"""') else 1
+            body = body[marker:-marker]
             if address.startswith("`"):
                 address = self.operation(address[1:-1]).strip()
-            if body.startswith('"""') and body.endswith('"""'):
-                body = body[3:-3]
-            elif body.startswith('"') and body.endswith('"'):
-                body = body[1:-1]
-            else:
-                raise Unsupported("AssembleBlock requires quoted assembly")
             return self.operation(
-                f"AssembleMonitorBlock {target.removeprefix('sysbus.')} {address} {body.encode().hex()}")
+                f"AssembleMonitorBlock {target.removeprefix('sysbus.')} {address} {triple} {body.encode().hex()}")
+        if re.fullmatch(cpu + r'ResetVector(?: ' + number + r')?', command):
+            reading = command.endswith(" ResetVector")
+            value = self.operation(command, assertion=reading)
+            return self.format_number(value) if reading else value
+        if re.fullmatch(cpu + r'Reset', command):
+            return self.operation(command)
         if re.fullmatch(cpu + r'(?:MTVEC|STVEC)(?: ' + number + r')?', command):
             reading = command.endswith((" MTVEC", " STVEC"))
             value = self.operation(command, assertion=reading)
@@ -390,7 +399,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         platform = self.platform
         if self.inline:
             platform = self.out / "platform.repl"
-            platform.write_text("\n".join(self.inline) + "\n")
+            source = self.inline
+            if self.platform:
+                source = [f"using {json.dumps(str(self.platform))}", *source]
+            platform.write_text("\n".join(source) + "\n")
         cmd = [str(self.binary), "run", "--platform-root", str(self.root), "--monitor-stdio"]
         if self.log_capacity is not None:
             cmd.extend(["--monitor-log-capacity", str(self.log_capacity)])

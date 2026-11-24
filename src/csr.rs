@@ -831,6 +831,11 @@ impl Csr {
             .is_some_and(|s| s.injected_interrupts != 0)
     }
 
+    pub(crate) fn wfi_wakeup_pending(&self, pending: u32) -> bool {
+        let injected = self.supervisor.as_ref().map_or(0, |s| s.injected_interrupts);
+        (pending | injected) & self.interrupt_enable != 0
+    }
+
     pub fn interrupt(&mut self, pc: u32, pending: u32) -> Option<u32> {
         self.pending = pending;
         let enabled = self.pending_interrupts() & self.interrupt_enable;

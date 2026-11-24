@@ -653,6 +653,9 @@ fn load_platform(
                         number(size).map_err(|e| entry.error(&e))? as usize,
                     )
                     .map_err(|e| entry.error(&e))?;
+                machine.bus.register_traceable_memory(
+                    &entry.name, &addresses, number(size).map_err(|e| entry.error(&e))?,
+                );
                 if entry.model == "Memory.MappedMemory" {
                     memory_bases.insert(
                         entry.name.as_str(),

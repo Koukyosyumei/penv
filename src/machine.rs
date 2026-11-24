@@ -131,6 +131,7 @@ pub struct Machine {
     next_hart: usize,
     pc_trace: Option<(usize, PcTrace)>,
     halt_hooks: Vec<(usize, u64, usize)>,
+    python_hooks: Vec<(usize, u64, crate::cpu_python_hook::Hook)>,
     halted: u8,
     pub(crate) stop_when_halted: bool,
     elapsed_steps: u64,
@@ -202,6 +203,8 @@ pub struct Hart {
     zalrsc: bool,
     bitmanip: BitManip,
     cpu_wait_asserted: bool,
+    wfi_as_nop: bool,
+    waiting_for_interrupt: bool,
     pub monitor_paused: bool,
     pub monitor_halted: bool,
     monitor_single_step: bool,
@@ -385,6 +388,8 @@ impl Machine {
                 zalrsc: false,
                 bitmanip: BitManip::default(),
                 cpu_wait_asserted: false,
+                wfi_as_nop: true,
+                waiting_for_interrupt: false,
                 monitor_paused: false,
                 monitor_halted: false,
                 monitor_single_step: false,
@@ -401,6 +406,7 @@ impl Machine {
             next_hart: 0,
             pc_trace: None,
             halt_hooks: Vec::new(),
+            python_hooks: Vec::new(),
             halted: 0,
             stop_when_halted: false,
             elapsed_steps: 0,
@@ -489,6 +495,53 @@ impl Machine {
             .translate_read(&mut self.bus, address)
     }
 
+    pub(crate) fn initialize_monitor_reset_pcs(&mut self) {
+        for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if let Some(cpu) = &mut hart.rv64 {
+                cpu.initialize_monitor_reset_pc();
+            } else if hart.thumb.is_none() {
+                hart.initialize_reset_pc();
+            }
+        }
+    }
+
+    pub(crate) fn monitor_reset_cpu(&mut self, name: &str, initial: &[Hart]) -> Result<(), String> {
+        let initial = initial.iter().find(|hart| hart.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown CPU {name:?}"))?;
+        let hart = self.named_hart(name)?;
+        if let Some(cpu) = &mut hart.rv64 {
+            cpu.reset_from(initial.rv64.as_ref().ok_or("missing initial RV64 CPU state")?);
+            hart.monitor_single_step = false;
+            hart.monitor_halted = false;
+            Ok(())
+        } else {
+            hart.monitor_reset(initial)
+        }
+    }
+
+    pub(crate) fn install_python_hook(&mut self, name: &str, pc: u64, source: &str, file: std::path::PathBuf) -> Result<(), String> {
+        let index = std::iter::once(&self.primary).chain(&self.secondary)
+            .position(|hart| hart.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown hook CPU {name:?}"))?;
+        self.python_hooks.push((index, pc, crate::cpu_python_hook::Hook::new(source, file)?));
+        Ok(())
+    }
+
+    pub(crate) fn set_riscv_wfi_as_nop(&mut self, name: &str, enabled: bool) -> Result<(), String> {
+        let hart = self.named_hart(name)?;
+        if let Some(cpu) = &mut hart.rv64 {
+            cpu.set_wfi_as_nop(enabled);
+        } else if hart.thumb.is_none() {
+            hart.wfi_as_nop = enabled;
+            if enabled {
+                hart.waiting_for_interrupt = false;
+            }
+        } else {
+            return Err(format!("WfiAsNop requires a RISC-V CPU, got {name:?}"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn monitor_named_pc(&mut self, name: &str) -> Result<u64, String> {
         Ok(self.named_hart(name)?.program_counter())
     }
@@ -503,6 +556,22 @@ impl Machine {
         ];
         let hart = self.named_hart(name)?;
         let register = register.to_ascii_lowercase();
+        if register == "resetvector" {
+            if let Some(cpu) = &mut hart.rv64 {
+                return Ok(match value {
+                    Some(value) => { cpu.set_reset_vector(value); None }
+                    None => cpu.monitor_register("resetvector"),
+                });
+            }
+            if let Some(value) = value {
+                hart.monitor_reset_vector(u32::try_from(value).map_err(|_| "reset vector exceeds RV32 width")?)?;
+                return Ok(None);
+            }
+            if hart.thumb.is_some() {
+                return Err("unsupported monitor ResetVector for Cortex-M".into());
+            }
+            return Ok(Some(u64::from(hart.reset_vector)));
+        }
         if let Some(vector) = match register.as_str() {
             "mtvec" => Some(crate::csr::TrapVector::Machine),
             "stvec" => Some(crate::csr::TrapVector::Supervisor),
@@ -609,6 +678,7 @@ impl Machine {
             cpu.set_program_counter(u64::from(entry));
         }
         hart.pc = entry;
+        hart.pc_written = true;
         hart.reset_pc_written |= hart.reset_held;
         Ok(())
     }
@@ -1547,6 +1617,14 @@ impl Machine {
                 }
                 continue;
             }
+            for (cpu, address, hook) in &mut self.python_hooks {
+                if hart.waiting_for_interrupt {
+                    break;
+                }
+                if *cpu == index && *address == hart.program_counter() {
+                    hook.execute(&mut self.bus, *address)?;
+                }
+            }
             let trace = self.pc_trace.as_ref().filter(|(id, _)| *id == index);
             let trace_pc = trace.map(|_| {
                 hart.rv64
@@ -2212,7 +2290,14 @@ impl Hart {
             && let Some(target) = self.csr.interrupt(self.pc, pending)
         {
             self.pc = target;
+            self.waiting_for_interrupt = false;
             return Ok(Step::Trap);
+        }
+        if self.waiting_for_interrupt {
+            if !self.csr.wfi_wakeup_pending(pending) {
+                return Ok(Step::Trap);
+            }
+            self.waiting_for_interrupt = false;
         }
         match self.step(bus, output, symbols) {
             Ok(Step::Retired) => {
@@ -2643,7 +2728,10 @@ impl Hart {
                 self.translations.clear();
                 None
             }
-            0x73 if insn == 0x1050_0073 && !self.csr.in_user_mode() => None, // WFI may resume immediately.
+            0x73 if insn == 0x1050_0073 && !self.csr.in_user_mode() => {
+                self.waiting_for_interrupt = !self.wfi_as_nop;
+                None
+            }
             0x73 if insn == 0x3020_0073 => {
                 next = self.csr.return_from_trap().ok_or_else(illegal)?;
                 None

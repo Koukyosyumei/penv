@@ -149,7 +149,7 @@ mod tests {
         attach(4).unwrap();
         record(0, "debug");
         record(1, "info");
-        let wait = |machine: &mut Machine, command| handle(machine, command).unwrap().unwrap();
+        let wait = |machine: &mut Machine, command: &str| handle(machine, command).unwrap().unwrap();
         assert_eq!(
             wait(
                 &mut machine,

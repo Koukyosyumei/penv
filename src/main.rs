@@ -9,6 +9,7 @@ mod collapsed_profile;
 mod compressed;
 mod constant_mmio;
 mod crc;
+mod cpu_python_hook;
 mod csr;
 mod designware_usb;
 mod dwt;
@@ -1391,12 +1392,15 @@ fn run() -> Result<ExitCode, String> {
     let mut sd_setup_only = false;
     let mut mpfs_buttons = Vec::new();
     let mut halt_hooks = Vec::new();
+    let mut python_hooks = Vec::new();
     let mut virtual_mips = None;
     let mut boot_writes = Vec::new();
     let mut zephyr = zephyr_boot::BootOptions::default();
     let mut cpu_registers = Vec::new();
     let mut log_function_names = false;
     let mut monitor_log_level = None;
+    let mut trace_memory = Vec::new();
+    let mut riscv_wfi_as_nop = Vec::new();
     let mut monitor_user_state = None;
     let mut monitor_output = Vec::new();
     if let Some(capacity) = monitor_log_capacity {
@@ -1515,6 +1519,8 @@ fn run() -> Result<ExitCode, String> {
         cpu_registers = boot.cpu_registers;
         log_function_names = boot.log_function_names;
         monitor_log_level = boot.monitor_log_level;
+        trace_memory = boot.trace_memory;
+        riscv_wfi_as_nop = boot.riscv_wfi_as_nop;
         monitor_user_state = boot.monitor_user_state;
         monitor_output = boot.monitor_output;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
@@ -1536,6 +1542,10 @@ fn run() -> Result<ExitCode, String> {
         }
         sd_cards = boot.sd_cards;
         mpfs_buttons = boot.mpfs_buttons;
+        for (cpu, symbol, source, file) in boot.python_hooks {
+            let file = file.resolve(root, asset_dir.as_deref())?;
+            python_hooks.push((cpu, symbol, source, file));
+        }
         for (cpu, symbol, target, value) in boot.halt_hooks {
             let file = monitor::Asset::new(&value, script).resolve(root, asset_dir.as_deref())?;
             let address = fs::read(&file)
@@ -1635,6 +1645,12 @@ fn run() -> Result<ExitCode, String> {
         if let Some(level) = monitor_log_level {
             machine.bus.set_monitor_log_level(level);
         }
+        for (name, enabled) in &riscv_wfi_as_nop {
+            machine.set_riscv_wfi_as_nop(name, *enabled)?;
+        }
+        for (name, enabled) in &trace_memory {
+            machine.bus.set_trace_memory(name, *enabled)?;
+        }
         if let Some(value) = &monitor_user_state {
             machine.bus.monitor_user_state.clone_from(value);
         }
@@ -1732,6 +1748,10 @@ fn run() -> Result<ExitCode, String> {
             gpio.set_button(*pressed);
         }
         machine.stop_when_halted = stop_when_halted;
+        for (cpu, symbol, source, file) in &python_hooks {
+            let pc = cpu_python_hook::symbol(file, symbol)?;
+            machine.install_python_hook(cpu, pc, source, file.clone())?;
+        }
         for (source, pc, target) in &halt_hooks {
             machine.halt_on_pc(source, *pc, target)?;
         }
@@ -2153,6 +2173,9 @@ fn run() -> Result<ExitCode, String> {
         }
     }
     if monitor_stdio {
+        if script.is_none() && !has_firmware && !machine.is_cortex_m() {
+            machine.initialize_monitor_reset_pcs();
+        }
         if !post_run.is_empty() {
             return Err("unsupported command: post-run actions in a monitor session".into());
         }

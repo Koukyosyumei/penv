@@ -41,6 +41,8 @@ pub struct Boot {
     pub use_virtual_elf_addresses: bool,
     pub log_function_names: bool,
     pub monitor_log_level: Option<i8>,
+    pub trace_memory: Vec<(String, bool)>,
+    pub riscv_wfi_as_nop: Vec<(String, bool)>,
     pub monitor_user_state: Option<String>,
     pub monitor_output: Vec<String>,
     pub cpu_registers: Vec<CpuRegisterCommand>,
@@ -48,6 +50,7 @@ pub struct Boot {
     pub supervisor_mask: Option<u32>,
     pub mpfs_buttons: Vec<(String, String, bool)>,
     pub halt_hooks: Vec<(String, String, String, String)>,
+    pub python_hooks: Vec<(String, String, String, Asset)>,
     symbols: Vec<String>,
     hooks: HashMap<String, String>,
     pub sd_cards: Vec<SdAttachment>,
@@ -656,6 +659,7 @@ pub fn serve(
         output.flush()
     }
 
+    let initial: Vec<_> = (0..machine.hart_count()).map(|id| machine.hart_mut(id).clone()).collect();
     let path = Path::new("<monitor>");
     let mut line = String::new();
     frame(&mut output, "READY", startup_output.as_bytes()).map_err(|error| error.to_string())?;
@@ -711,6 +715,12 @@ pub fn serve(
                 });
                 match result {
                     Ok((status, value)) => frame(&mut output, status, value.as_bytes()),
+                    Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+                }
+            }
+            (Ok(()), [RuntimeCommand { action: Action::CpuReset(cpu), .. }]) if !machine.is_cortex_m() => {
+                match machine.monitor_reset_cpu(cpu, &initial) {
+                    Ok(()) => frame(&mut output, "OK", &[]),
                     Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
             }
@@ -942,6 +952,7 @@ impl Boot {
 }
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct Asset {
     value: String,
     script: PathBuf,
@@ -1401,6 +1412,29 @@ fn execute(
         } else {
             boot.monitor_log_level = Some(level);
         }
+        return Ok(());
+    }
+    if let [cpu, "WfiAsNop", value] = words
+        && !boot.started && boot.runtime.is_empty() && boot.platform.is_some()
+    {
+        let enabled = match unquote(resolve(value)?) {
+            "true" => true,
+            "false" => false,
+            _ => return Err("expected true or false for WfiAsNop".into()),
+        };
+        boot.riscv_wfi_as_nop.push((cpu.trim_start_matches("sysbus.").to_owned(), enabled));
+        return Ok(());
+    }
+    if let ["sysbus", "LogPeripheralAccess", name, options @ ..] = words
+        && !boot.started && boot.runtime.is_empty() && boot.platform.is_some()
+    {
+        let enabled = match options {
+            [] | ["true"] => true,
+            ["false"] => false,
+            _ => return Err("expected optional true or false for peripheral access logging".into()),
+        };
+        let name = unquote(resolve(name)?);
+        boot.trace_memory.push((name.trim_start_matches("sysbus.").to_owned(), enabled));
         return Ok(());
     }
     let action = match words {
@@ -1868,6 +1902,14 @@ fn execute(
                 None,
             ))
         }
+        [target, "ResetVector", value @ ..]
+            if (boot.started || !boot.runtime.is_empty()) && value.len() <= 1 =>
+        {
+            let value = value.first().map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
+            Some(Action::CpuRegister(
+                resolve(target)?.trim_start_matches("sysbus.").into(), "ResetVector".into(), value,
+            ))
+        }
         [target, register @ ("MTVEC" | "STVEC"), value @ ..]
             if (boot.started || !boot.runtime.is_empty()) && value.len() <= 1 =>
         {
@@ -2242,7 +2284,13 @@ fn execute(
             let hook = match boot.hooks.get(name) {
                 Some(hook) => hook,
                 None if variables.contains_key(name) => {
-                    return Err(format!("unsupported CPU Python hook ${name} at symbol {symbol}"));
+                    let file = boot.symbols.last().map(|file| Asset::new(file, script))
+                        .or_else(|| boot.image.clone())
+                        .ok_or("CPU Python hook requires a loaded ELF symbol table")?;
+                    let source = unquote(resolve(callback)?);
+                    boot.python_hooks.push((cpu.trim_start_matches("sysbus.").to_owned(),
+                        symbol.to_owned(), source.to_owned(), file));
+                    return Ok(());
                 }
                 None => return Err(format!("unknown CPU hook ${name}")),
             };
