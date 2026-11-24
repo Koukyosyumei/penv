@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,997 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,002 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 398 |
+| 移植待ち | 393 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -424,3 +424,5 @@ REPL のインラインオブジェクト生成を追加し、不明な型、参
 `MergeAndCreationTests` の三重引用符入力を6件移植した。改行、引用符のエスケープ、文字列中の `//` を保持し、登録された CPU の実際のプロパティ値を検証した。対象の33件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-multiline.tsv)・[実行ログ](nunit-evidence/targeted-repl-multiline.log)
 
 列挙型コンストラクタ引数の7件を移植した。型名付き・省略形の列挙定数、数値を受理する条件、任意の数値を受理する属性付き列挙型を区別し、登録後の値と失敗時の診断を検証した。[公式IDとの対応](nunit-evidence/targeted-repl-enum.tsv)・[実行ログ](nunit-evidence/targeted-repl-enum.log)
+
+三重引用符の不正入力5件を移植した。未終了、閉じた引用符の後の余分な文字、同一行での複数の区切り、`using` 内の三重引用符に対する構文診断を検証した。上流が位置をアサートする4件では行・列も一致した。[公式IDとの対応](nunit-evidence/targeted-repl-string-position.tsv)・[実行ログ](nunit-evidence/targeted-repl-string-position.log)

@@ -510,3 +510,85 @@ peripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribut
     let values = platform.enum_values("sysbus.peripheral").unwrap();
     assert_eq!(values.1, 2);
 }
+
+#[test]
+fn should_fail_on_multiline_quoted_string_in_using() {
+    let error = creation::create_objects(
+        r#"
+using '''this is
+multiline
+string '''"#,
+        Path::new("."),
+    )
+    .err()
+    .expect("expected syntax error");
+    assert!(error.contains("SyntaxError:"), "{error}");
+}
+
+#[test]
+fn should_fail_on_any_string_after_closed_multiline_string() {
+    let error = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is
+not a single line ''' xx"#,
+        Path::new("."),
+    )
+    .err()
+    .expect("expected syntax error");
+    assert!(error.contains("SyntaxError:"), "{error}");
+    assert_eq!(error.lines().nth(1), Some("At 4:23:"));
+}
+
+#[test]
+fn should_fail_on_unclosed_multiline_string() {
+    let error = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is "#,
+        Path::new("."),
+    )
+    .err()
+    .expect("expected syntax error");
+    assert!(error.contains("SyntaxError:"), "{error}");
+    assert_eq!(error.lines().nth(1), Some("At 3:17:"));
+}
+
+#[test]
+fn should_fail_on_unclosed_multiple_multiline_quoted_strings() {
+    let error = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is
+multiline
+string'''
+cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is
+multiline
+string'''
+cpu3: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is
+multiline
+string"#,
+        Path::new("."),
+    )
+    .err()
+    .expect("expected syntax error");
+    assert!(error.contains("SyntaxError:"), "{error}");
+    assert_eq!(error.lines().nth(1), Some("At 11:17:"));
+}
+
+#[test]
+fn should_fail_on_multiple_multiline_string_signs_in_one_line() {
+    let error = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is \''' ''' ''' '''
+not a single line '''"#,
+        Path::new("."),
+    )
+    .err()
+    .expect("expected syntax error");
+    assert!(error.contains("SyntaxError:"), "{error}");
+    assert_eq!(error.lines().nth(1), Some("At 3:37:"));
+}

@@ -920,7 +920,10 @@ fn parse_text(
             && let Some(first) = after.trim_start().strip_prefix("'''")
         {
             let mut property = format!("{key}: '''");
+            let start_offset = raw.len() - first.len();
             let mut line = first;
+            let mut line_number = index + 1;
+            let mut offset = start_offset;
             loop {
                 let closing = line.match_indices("'''").find_map(|(at, _)| {
                     let escapes = line.as_bytes()[..at]
@@ -932,27 +935,31 @@ fn parse_text(
                 });
                 if let Some(at) = closing {
                     property.push_str(&line[..at + 3]);
-                    let tail = comments
-                        .line(&line[at + 3..])
-                        .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
+                    let suffix = &line[at + 3..];
+                    let tail = comments.line(suffix)
+                        .map_err(|error| format!("{}:{line_number}: {error}", path.display()))?;
                     if !tail.trim().is_empty() {
-                        return Err(format!(
-                            "{}:{}: unexpected text after multiline string",
-                            path.display(),
-                            index + 1
-                        ));
+                        let prefix = offset + at + 3;
+                        let whitespace = if suffix.trim_start().starts_with("'''") {
+                            0
+                        } else {
+                            suffix.len() - suffix.trim_start().len()
+                        };
+                        let full_line = if offset == 0 { line } else { raw };
+                        let column = full_line[..prefix + whitespace].chars().count() + 1;
+                        return Err(format!("SyntaxError: unexpected text after multiline string\nAt {line_number}:{column}:"));
                     }
                     break;
                 }
                 property.push_str(line);
                 property.push('\n');
-                line = lines.next().map(|(_, line)| line).ok_or_else(|| {
-                    format!(
-                        "{}:{}: unclosed multiline string",
-                        path.display(),
-                        index + 1
-                    )
+                let (next_index, next_line) = lines.next().ok_or_else(|| {
+                    let column = raw[..raw.len() - after.len()].chars().count() + 1;
+                    format!("SyntaxError: unclosed multiline string\nAt {}:{column}:", index + 1)
                 })?;
+                line = next_line;
+                line_number = next_index + 1;
+                offset = 0;
             }
             let entry = current.as_mut().ok_or_else(|| {
                 format!(
@@ -1105,7 +1112,8 @@ fn parse_text(
             definitions.push(entry);
         }
         if let Some(argument) = text.strip_prefix("using ") {
-            let filename = using_path(argument).map_err(error)?;
+            let filename = using_path(argument)
+                .map_err(|detail| error(&format!("SyntaxError: {detail}")))?;
             if !seen_usings.insert(filename.clone()) {
                 return Err(error("Duplicate using entry."));
             }
