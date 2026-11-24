@@ -640,7 +640,7 @@ pub fn run(
     budget: u64,
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
-    run_commands(machine, commands, budget, output, session, false, None)
+    run_commands(machine, commands, budget, output, session, None)
 }
 
 pub fn run_startup(
@@ -651,7 +651,7 @@ pub fn run_startup(
     guest_output: &mut impl Write,
     replies: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
-    run_commands(machine, commands, budget, guest_output, session, false, Some(replies))
+    run_commands(machine, commands, budget, guest_output, session, Some(replies))
 }
 
 fn run_commands<'a>(
@@ -660,7 +660,6 @@ fn run_commands<'a>(
     mut budget: u64,
     output: &'a mut impl Write,
     session: &mut Session,
-    save_session: bool,
     replies: Option<&'a mut dyn Write>,
 ) -> Result<(Stop, u64), String> {
     if commands.is_empty() {
@@ -709,10 +708,8 @@ fn run_commands<'a>(
             Action::SaveMemory(path, restorable) => {
                 if *restorable {
                     snapshot_platform(machine).and_then(|_| session.save(machine, path))
-                } else if save_session {
-                    session.save(machine, path)
                 } else {
-                    write_snapshot(path, |file| machine.write_boot_snapshot(file))
+                    session.save(machine, path)
                 }
             }.map(|()| None),
             Action::ClearMemory => machine.clear_memory_snapshot().map(|()| {
@@ -1484,7 +1481,7 @@ pub fn serve(
                 let echo_assertion = matches!(commands,
                     [RuntimeCommand { action: Action::WriteTesterUart(_, text, _, echo, _), .. }]
                         if !text.is_empty() && echo.unwrap_or_else(|| machine.bus.default_uart_echo()));
-                match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, true, None) {
+                match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, None) {
                     Ok((Stop::ScriptComplete, _)) => {
                         session.number_mode = boot.session.number_mode;
                         if let Some((variables, macros, aliases)) = included_state.take() {
