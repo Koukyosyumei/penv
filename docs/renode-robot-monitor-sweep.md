@@ -1174,3 +1174,22 @@ Rust UART テスト35件とモニターテスト22件が合格。
 `uart_hub_nucleo_h753.resc:8` の2台目の作成で起動前停止し、未実行。
 最終実行は2件合格、2,195件未実行
 （`target/monitor-uart-raw-robot/results.json`）。
+
+### 停止中の STM32F7 USART 入力の配送
+
+`71273a5` は、クロック周波数が分かる F7 レイアウトの USART で
+ボーレート分周値が 0 の場合にも、テスター入力を仮想時間で配送する。
+固定 Renode の `STM32F7_USART.BaudRate` は分周値を最低 1 として扱う。
+既存のフレーム間隔を優先し、未設定時はこの下限を使う。
+テスター以外の入力経路の分周値 0 の処理は維持する。
+
+固定 Renode と penv で同じ STM32F072b のコマンド列を実行した。
+CPU を停止し、USART に `X` を送信した直後の RDR は両方 `0x00`。
+仮想時間を 100 µs 進めた後は両方 `0x58` で、`IsStarted` は
+`False` だった。通常 CLI の RESC でも同じ値を確認した。
+配送の最初のクロック刻みはこの比較では計測していない
+（`target/monitor-uart-rx-schedule-proof/`）。
+
+Rust の UART テスト36件が合格。未変更の Robot は全256バイト、
+STM32F072b Console Echo、モニター保存・復元の4件合格。
+残り2,193件は未実行（`target/monitor-uart-rx-schedule-robot/results.json`）。
