@@ -279,6 +279,7 @@ pub struct RuntimeCommand {
 }
 
 enum Action {
+    MonitorLog(String),
     RunFor(u64),
     RunUntil(u64),
     RunToSyncPoint,
@@ -610,6 +611,18 @@ fn run_commands(
                     monitor_timestamp(machine.monitor_elapsed_ns()),
                     monitor_timestamp(u128::from(machine.monitor_quantum) * 10))
                     .map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::MonitorLog(command) => {
+                let start = machine.elapsed_steps();
+                let (status, message) = crate::monitor_log::handle(machine, command, budget)
+                    .ok_or("invalid log monitor command")??;
+                budget -= machine.elapsed_steps().wrapping_sub(start);
+                match status {
+                    "OK" => Ok(None),
+                    "MATCH" => writeln!(output.output, "{message}")
+                        .map(|()| None).map_err(|error| error.to_string()),
+                    _ => Err(format!("log monitor {status}: {message}")),
+                }
             }
             Action::UartIdle(timeout, tester) => {
                 let cycles = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?;
@@ -1037,7 +1050,7 @@ pub fn serve(
             }.map_err(|error| error.to_string())?;
             continue;
         }
-        if let Some(result) = crate::monitor_log::handle(machine, text) {
+        if let Some(result) = crate::monitor_log::handle(machine, text, u64::MAX) {
             match result {
                 Ok((status, value)) => frame(&mut output, status, value.as_bytes()),
                 Err(error) if error.starts_with("unsupported") => {
@@ -2050,6 +2063,9 @@ fn execute(
         return Ok(());
     }
     let action = match words {
+        [command, ..] if crate::monitor_log::is_command(command) => {
+            Some(Action::MonitorLog(text.to_owned()))
+        }
         [target, "VendorSpecific1", value] if boot.started => Some(Action::PhyRegister(
             (*target).to_owned(), u16::try_from(crate::parse_address(resolve(value)?)?)
                 .map_err(|_| "PHY register exceeds 16 bits")?)),

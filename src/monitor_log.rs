@@ -85,9 +85,18 @@ pub(crate) fn attach(limit: usize) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn is_command(word: &str) -> bool {
+    matches!(
+        word,
+        "AttachMonitorLog" | "ClearMonitorLog" | "RegisterFailingMonitorLog"
+            | "UnregisterFailingMonitorLog" | "WaitForMonitorLog" | "AssertAbsentMonitorLog"
+    )
+}
+
 pub(crate) fn handle(
     machine: &mut Machine,
     command: &str,
+    budget: u64,
 ) -> Option<Result<(&'static str, String), String>> {
     let words: Vec<_> = command.split_ascii_whitespace().collect();
     match words.as_slice() {
@@ -170,6 +179,7 @@ pub(crate) fn handle(
                     })
                 })
             };
+            let limit = steps.min(budget);
             let mut found = find(keep);
             let mut stop = Stop::Limit;
             if found.is_none() && steps != 0 {
@@ -179,7 +189,7 @@ pub(crate) fn handle(
                     })
                 };
                 let checked = std::cell::Cell::new(revision());
-                (stop, _) = crate::monitor::run_until_deadline(machine, steps, &mut io::sink(), |_, _| {
+                (stop, _) = crate::monitor::run_until_deadline(machine, limit, &mut io::sink(), |_, _| {
                     let current = revision();
                     checked.replace(current) != current && find(true).is_some()
                 })?;
@@ -198,6 +208,7 @@ pub(crate) fn handle(
                     format!("Unexpected line detected in the log: {message}"),
                 ),
                 Some((message, false)) => ("MATCH", message),
+                None if stop == Stop::Limit && limit < steps => ("STOP", "Limit".into()),
                 None if stop == Stop::Limit && absent => {
                     ("MATCH", format!("No log entry matched {:?}", pattern.text))
                 }
@@ -234,12 +245,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn script_budget_cannot_satisfy_a_larger_absence_window() {
+        let mut machine = Machine::new(4096).unwrap();
+        attach(4).unwrap();
+        let result = handle(&mut machine, "AssertAbsentMonitorLog 1 literal keep any 78", 0)
+            .unwrap().unwrap();
+        assert_eq!(result, ("STOP", "Limit".into()));
+        assert_eq!(machine.elapsed_steps(), 0);
+    }
+
+    #[test]
     fn paused_monitor_does_not_satisfy_a_positive_absence_window() {
         let mut machine = Machine::new(4096).unwrap();
         machine.primary.monitor_paused = true;
         attach(4).unwrap();
         let (status, reason) = handle(
-            &mut machine, "AssertAbsentMonitorLog 1 literal keep any 78",
+            &mut machine, "AssertAbsentMonitorLog 1 literal keep any 78", u64::MAX,
         ).unwrap().unwrap();
         assert_eq!((status, reason.as_str()), ("STOP", "Paused"));
     }
@@ -248,7 +269,7 @@ mod tests {
     fn log_absence_rejects_matches_and_dropped_entries() {
         let mut machine = Machine::new(4096).unwrap();
         let absent = "AssertAbsentMonitorLog 0 literal keep any 6e6565646c65";
-        let run = |machine: &mut Machine, command| handle(machine, command).unwrap().unwrap().0;
+        let run = |machine: &mut Machine, command| handle(machine, command, u64::MAX).unwrap().unwrap().0;
         attach(1).unwrap();
         assert_eq!(run(&mut machine, absent), "MATCH");
         record(2, "needle");
@@ -266,7 +287,7 @@ mod tests {
         attach(4).unwrap();
         record(2, "expected");
         record(2, "failure 42");
-        let run = |machine: &mut Machine, command| handle(machine, command).unwrap().unwrap();
+        let run = |machine: &mut Machine, command| handle(machine, command, u64::MAX).unwrap().unwrap();
         run(
             &mut machine,
             "RegisterFailingMonitorLog regex 6661696c757265205b302d395d",
@@ -289,7 +310,7 @@ mod tests {
         record(0, "debug");
         record(1, "info");
         let wait =
-            |machine: &mut Machine, command: &str| handle(machine, command).unwrap().unwrap();
+            |machine: &mut Machine, command: &str| handle(machine, command, u64::MAX).unwrap().unwrap();
         assert_eq!(
             wait(
                 &mut machine,
