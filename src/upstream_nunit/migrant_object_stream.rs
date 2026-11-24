@@ -16,6 +16,22 @@ const fn stamp(
 }
 
 const STAMPS: &[TypeStamp<'static>] = &[
+    stamp("SimpleEnum", &[("value__", FieldKind::Integer)]),
+    stamp("EnumByte", &[("value__", FieldKind::Integer)]),
+    stamp("EnumLong", &[("value__", FieldKind::Integer)]),
+    stamp("EnumShort", &[("value__", FieldKind::Integer)]),
+    stamp("TestEnumFlags", &[("value__", FieldKind::Integer)]),
+    stamp(
+        "ClassWithNullableEnum",
+        &[("E", FieldKind::NullableInteger)],
+    ),
+    stamp(
+        "KeyValuePair<int,int>",
+        &[("key", FieldKind::Integer), ("value", FieldKind::Integer)],
+    ),
+    stamp("Stack", &[("items", FieldKind::Reference)]),
+    stamp("Stack<char>", &[("items", FieldKind::Reference)]),
+    stamp("System.Char", &[("m_value", FieldKind::Integer)]),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -1346,3 +1362,110 @@ stamp_modes!(empty_3d_plain, empty_3d_stamped, |s| empty_rectangular(
     s,
     &[2, 0, 2]
 ));
+
+fn enum_values(stamped: bool, class: &str, values: &[i64]) {
+    for &value in values {
+        let mut graph = Graph::default();
+        let original = record(class, vec![Value::Integer(value)]);
+        let root = graph.insert(original.clone());
+        let (reader, copy) = deep_clone(&graph, root, stamped);
+        assert_eq!(reader.graph().get(copy), Some(&original));
+    }
+}
+
+fn multiple_enum_values(stamped: bool) {
+    enum_values(
+        stamped,
+        "EnumLong",
+        &[i64::MAX - 12345, i64::MAX - 12344, -1],
+    );
+    enum_values(stamped, "EnumShort", &[6, 7, i64::from(i16::MIN) + 2]);
+    enum_values(
+        stamped,
+        "TestEnumFlags",
+        &[1, 2, 4, 1 | 2, 1 | 2 | 4, 2 | 4],
+    );
+}
+
+fn nullable_enum(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("ClassWithNullableEnum", vec![Value::Integer(1)]));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(
+        fields(reader.graph().get(copy).unwrap())[0],
+        Value::Integer(1)
+    );
+}
+
+fn key_value_pair(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record(
+        "KeyValuePair<int,int>",
+        vec![Value::Integer(12), Value::Integer(34)],
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let restored = fields(reader.graph().get(copy).unwrap());
+    assert_eq!(restored[0], Value::Integer(12));
+    assert_eq!(restored[1], Value::Integer(34));
+}
+
+fn character_stack(stamped: bool, boxed: bool) {
+    let mut graph = Graph::default();
+    let class = if boxed { "Stack" } else { "Stack<char>" };
+    let input: Vec<_> = "It works!".encode_utf16().collect();
+    let mut elements: Vec<_> = input
+        .iter()
+        .copied()
+        .map(|character| {
+            let value = Value::Integer(i64::from(character));
+            if boxed {
+                Value::Ref(graph.insert(record("System.Char", vec![value])))
+            } else {
+                value
+            }
+        })
+        .collect();
+    elements.reverse();
+    let root = list(&mut graph, class, elements);
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let actual: Vec<_> = list_values(graph, copy, class)
+        .iter()
+        .map(|value| {
+            let value = if boxed {
+                let Some(Object::Record { class, fields }) = graph.get(reference(value)) else {
+                    panic!("expected a boxed character");
+                };
+                assert_eq!(class, "System.Char");
+                &fields[0]
+            } else {
+                value
+            };
+            let Value::Integer(character) = value else {
+                panic!("expected a character")
+            };
+            u16::try_from(*character).unwrap()
+        })
+        .collect();
+    assert_eq!(actual, input.into_iter().rev().collect::<Vec<_>>());
+}
+
+stamp_modes!(simple_enum_plain, simple_enum_stamped, |s| enum_values(
+    s,
+    "SimpleEnum",
+    &[1]
+));
+stamp_modes!(byte_enum_plain, byte_enum_stamped, |s| enum_values(
+    s,
+    "EnumByte",
+    &[200]
+));
+stamp_modes!(enums_plain, enums_stamped, multiple_enum_values);
+stamp_modes!(nullable_enum_plain, nullable_enum_stamped, nullable_enum);
+stamp_modes!(key_value_pair_plain, key_value_pair_stamped, key_value_pair);
+stamp_modes!(nongeneric_stack_plain, nongeneric_stack_stamped, |s| {
+    character_stack(s, true)
+});
+stamp_modes!(generic_stack_plain, generic_stack_stamped, |s| {
+    character_stack(s, false)
+});

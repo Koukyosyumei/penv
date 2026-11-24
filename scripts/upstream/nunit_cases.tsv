@@ -887,3 +887,17 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests.ShouldGenerateNumbersDeterministically	upstream_nunit::pseudorandom::should_generate_numbers_deterministically	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests.ShouldGenerateNumbersDeterministicallyMultithreaded	upstream_nunit::pseudorandom::should_generate_numbers_deterministically_multithreaded	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests.ShouldHandleSerialization	upstream_nunit::pseudorandom::should_handle_serialization	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeByteEnum	upstream_nunit::migrant_object_stream::byte_enum_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeEnums	upstream_nunit::migrant_object_stream::enums_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeGenericStack	upstream_nunit::migrant_object_stream::generic_stack_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeKeyValuePair	upstream_nunit::migrant_object_stream::key_value_pair_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeNongenericStack	upstream_nunit::migrant_object_stream::nongeneric_stack_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeNullableEnum	upstream_nunit::migrant_object_stream::nullable_enum_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeSimpleEnum	upstream_nunit::migrant_object_stream::simple_enum_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeByteEnum	upstream_nunit::migrant_object_stream::byte_enum_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeEnums	upstream_nunit::migrant_object_stream::enums_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeGenericStack	upstream_nunit::migrant_object_stream::generic_stack_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeKeyValuePair	upstream_nunit::migrant_object_stream::key_value_pair_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeNongenericStack	upstream_nunit::migrant_object_stream::nongeneric_stack_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeNullableEnum	upstream_nunit::migrant_object_stream::nullable_enum_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeSimpleEnum	upstream_nunit::migrant_object_stream::simple_enum_stamped	new
