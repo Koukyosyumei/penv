@@ -17,6 +17,7 @@ pub enum FieldKind {
     Integer = 1,
     Float = 2,
     Reference = 3,
+    NullableInteger = 4,
 }
 
 #[derive(Clone, Copy)]
@@ -42,6 +43,7 @@ impl TypeStamp<'_> {
                 matches!(
                     (kind, value),
                     (FieldKind::Integer, Value::Integer(_))
+                        | (FieldKind::NullableInteger, Value::Null | Value::Integer(_))
                         | (FieldKind::Float, Value::Float(_))
                         | (FieldKind::Reference, Value::Null | Value::Ref(_))
                 )

@@ -17,6 +17,11 @@ const fn stamp(
 
 const STAMPS: &[TypeStamp<'static>] = &[
     stamp("System.Object", &[]),
+    stamp("System.Int32", &[("m_value", FieldKind::Integer)]),
+    stamp(
+        "GenericBox<int?>",
+        &[("<Element>k__BackingField", FieldKind::NullableInteger)],
+    ),
     stamp("Box", &[("<Element>k__BackingField", FieldKind::Reference)]),
     stamp(
         "GenericBox<long>",
@@ -756,3 +761,108 @@ stamp_modes!(
 );
 stamp_modes!(box_with_long_plain, box_with_long_stamped, box_with_long);
 stamp_modes!(string_tuple_plain, string_tuple_stamped, string_tuple);
+
+fn nullable_field(stamped: bool, value: Option<i32>) {
+    let mut graph = Graph::default();
+    let element = value.map_or(Value::Null, |value| Value::Integer(i64::from(value)));
+    let root = graph.insert(record("GenericBox<int?>", vec![element]));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(
+        fields(reader.graph().get(copy).unwrap())[0],
+        fields(graph.get(root).unwrap())[0]
+    );
+}
+
+fn boxed_integer(graph: &mut Graph, value: i32) -> Value {
+    Value::Ref(graph.insert(record(
+        "System.Int32",
+        vec![Value::Integer(i64::from(value))],
+    )))
+}
+
+fn boxed_nullable_field(stamped: bool, value: Option<i32>) {
+    let mut graph = Graph::default();
+    let element = value.map_or(Value::Null, |value| boxed_integer(&mut graph, value));
+    let root = graph.insert(record("Box", vec![element.clone()]));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let actual = &fields(reader.graph().get(copy).unwrap())[0];
+    match element {
+        Value::Ref(id) => assert_eq!(reader.graph().get(reference(actual)), graph.get(id)),
+        Value::Null => assert_eq!(*actual, Value::Null),
+        _ => unreachable!(),
+    }
+}
+
+fn non_null_nullable(stamped: bool) {
+    nullable_field(stamped, Some(3));
+}
+fn null_nullable(stamped: bool) {
+    nullable_field(stamped, None);
+}
+// The upstream method names are reversed relative to their inputs.
+fn boxed_null_nullable(stamped: bool) {
+    boxed_nullable_field(stamped, Some(66));
+}
+fn boxed_non_null_nullable(stamped: bool) {
+    boxed_nullable_field(stamped, None);
+}
+
+stamp_modes!(
+    non_null_nullable_plain,
+    non_null_nullable_stamped,
+    non_null_nullable
+);
+stamp_modes!(null_nullable_plain, null_nullable_stamped, null_nullable);
+stamp_modes!(
+    boxed_null_nullable_plain,
+    boxed_null_nullable_stamped,
+    boxed_null_nullable
+);
+stamp_modes!(
+    boxed_non_null_nullable_plain,
+    boxed_non_null_nullable_stamped,
+    boxed_non_null_nullable
+);
+
+fn two_serializations(stamped: bool) {
+    let mut graph = Graph::default();
+    let one = Value::Ref(graph.insert(string("One")));
+    let two = boxed_integer(&mut graph, 2);
+    let four = Value::Ref(graph.insert(string("Four")));
+    let root = graph.insert(Object::Array(vec![one, two, Value::Null, four]));
+    let mut stream = Cursor::new(Vec::new());
+    // Serializer.Serialize starts a fresh write with an independently flushed buffer.
+    for _ in 0..2 {
+        let mut writer = ObjectWriter::new(&mut stream, &graph, References::PerRoot, true);
+        if stamped {
+            writer = writer.with_type_stamps(STAMPS);
+        }
+        writer.write_object(root).unwrap();
+        writer.finish().unwrap();
+    }
+    stream.rewind().unwrap();
+    for _ in 0..2 {
+        let mut reader = ObjectReader::new(&mut stream, References::PerRoot, true);
+        if stamped {
+            reader = reader.with_type_stamps(STAMPS);
+        }
+        let copy = reader.read_object().unwrap();
+        let actual = array_values(reader.graph(), copy);
+        let expected = array_values(&graph, root);
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            match expected {
+                Value::Ref(id) => assert_eq!(reader.graph().get(reference(actual)), graph.get(*id)),
+                Value::Null => assert_eq!(*actual, Value::Null),
+                _ => unreachable!(),
+            }
+        }
+        reader.finish().unwrap();
+    }
+}
+
+stamp_modes!(
+    two_serializations_plain,
+    two_serializations_stamped,
+    two_serializations
+);

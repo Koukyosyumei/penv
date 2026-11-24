@@ -769,3 +769,13 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeBoxWithLong	upstream_nunit::migrant_object_stream::box_with_long_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeFieldWithDifferentFormalAndActualType	upstream_nunit::migrant_object_stream::field_actual_type_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeTuple	upstream_nunit::migrant_object_stream::string_tuple_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldHandleTwoSerializations	upstream_nunit::migrant_object_stream::two_serializations_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeBoxedNonNullNullable	upstream_nunit::migrant_object_stream::boxed_non_null_nullable_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeBoxedNullNullable	upstream_nunit::migrant_object_stream::boxed_null_nullable_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeNonNullNullable	upstream_nunit::migrant_object_stream::non_null_nullable_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeNullNullable	upstream_nunit::migrant_object_stream::null_nullable_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldHandleTwoSerializations	upstream_nunit::migrant_object_stream::two_serializations_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeBoxedNonNullNullable	upstream_nunit::migrant_object_stream::boxed_non_null_nullable_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeBoxedNullNullable	upstream_nunit::migrant_object_stream::boxed_null_nullable_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeNonNullNullable	upstream_nunit::migrant_object_stream::non_null_nullable_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeNullNullable	upstream_nunit::migrant_object_stream::null_nullable_stamped	new
