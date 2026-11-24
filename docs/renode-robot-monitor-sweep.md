@@ -1445,3 +1445,22 @@ Rust モニターテスト25件と UART テスト36件が合格。
 未変更の Robot は全256バイトの UART ケース、STM32F072b Console Echo、
 保存・復元の4件合格、残り2,193件は未実行
 （`target/monitor-restored-uart-pattern-robot/results.json`）。
+
+### 復元した変数によるログ照合
+
+`b004e09` はログ待機と失敗文字列の登録・解除で文字列変数を使える
+ようにした。通常 CLI とライブモニターは同じ Rust 処理で UTF-8 の
+パターンをログテスターへ渡す。
+
+固定 Renode、通常 CLI、Robot RPC で、上書きして復元した
+`µ original` と正規表現 `µ .+` が受信ログに一致した。
+復元値を失敗文字列として登録すると、別のログを待つ操作は失敗した。
+固定 Renode の例外表示では `µ` が省かれた。待機の合否と照合結果を
+比較し、Robot RPC では復元後に取得した文字列をキーワードに渡した。
+通常 CLI と penv のライブモニターは変数を直接指定した
+（`target/monitor-restored-log-{pattern,regex}-proof/`）。
+
+Rust モニターテスト26件とログテスト8件が合格。
+未変更の Robot はログ2件、保存・復元2件、STM32F072b Console Echo の
+計5件が合格。残り2,192件は未実行
+（`target/monitor-restored-log-pattern-robot/results.json`）。
