@@ -346,7 +346,7 @@ fn renode_resc_guestless_snapshot_restores_monitor_state_in_command_order() {
 alias say echo
 macro greet "echo 123"
 $script=@saved.resc
-Save @monitor.save
+Save "monitor state.save"
 $script=@changed.resc
 include $script
 alias say log
@@ -355,7 +355,7 @@ set name "changed"
 echo $name
 printenv
 runMacro $greet
-Load @monitor.save
+Load "monitor state.save"
 include $script
 echo $name
 printenv

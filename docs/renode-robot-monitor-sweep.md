@@ -1464,3 +1464,18 @@ Rust モニターテスト26件とログテスト8件が合格。
 未変更の Robot はログ2件、保存・復元2件、STM32F072b Console Echo の
 計5件が合格。残り2,192件は未実行
 （`target/monitor-restored-log-pattern-robot/results.json`）。
+
+### 引用符付きスナップショットパス
+
+`516f604` は共通 Rust モニターの `Save` / `Load` で引用符付き
+パスを受理する。固定 Renode、通常 CLI、Robot RPC で空白を含むパスを
+使用し、上書き後の `changed` が復元後に `saved` に戻ることを確認した。
+固定 Renode では通常の `$snapshot` は文字列を設定しても拒否された
+（`target/monitor-snapshot-path-forms/`）。
+既存の `$CWD/...` 形式は固定 Renode と通常 CLI で同じ結果だった
+（`target/monitor-snapshot-anchor-proof/`）。
+
+Rust モニターテスト26件、引用符付き相対パスを使う CLI 回帰と
+既存のメモリ保存・復元 CLI テストが合格。
+未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
+残り2,193件は未実行（`target/monitor-snapshot-quoted-robot/results.json`）。
