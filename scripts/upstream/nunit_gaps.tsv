@@ -2,10 +2,8 @@ fixture	missing_api
 Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	Migrant serialization of BlockingCollection and its synchronization state is unavailable.
 Antmicro.Migrant.Tests.BuiltinSurrogatesTests	The snapshot reader/writer does not have Migrant built-in CLR surrogate mappings.
 Antmicro.Migrant.Tests.HooksTests	Migrant object graph serialization hooks and attribute-based callbacks are unavailable.
-Antmicro.Migrant.Tests.IdGeneratorTests	There is no object-reference identity table implementing Migrant ObjectIdentifier.GetId.
 Antmicro.Migrant.Tests.ObjectReaderWriterTests	There is no Migrant ObjectReader/ObjectWriter pair for arbitrary managed object graphs.
 Antmicro.Migrant.Tests.OpenStreamSerializationTests	There is no Migrant open-stream graph serializer/deserializer with shared object identity across writes.
-Antmicro.Migrant.Tests.PrimitiveReaderWriterTests	The snapshot codec lacks Migrant PrimitiveReader/PrimitiveWriter's binary contract and CLR primitive types.
 Antmicro.Migrant.Tests.SerializationTests	The Rust machine snapshot is memory-specific. It lacks the Migrant arbitrary object graph serializer, references and CLR type handling exercised by this fixture.
 Antmicro.Migrant.Tests.StampingTests	There is no Migrant serialized type/resource stamping implementation.
 Antmicro.Migrant.Tests.SurrogateTests	There is no registration of custom Migrant serialization/deserialization surrogates.

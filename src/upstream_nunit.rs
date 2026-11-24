@@ -41,3 +41,4 @@ fn hexadecimal_unsigned_long_0ff() {
 }
 
 mod memory;
+mod migrant;

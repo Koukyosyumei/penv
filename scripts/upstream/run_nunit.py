@@ -118,7 +118,7 @@ def discover(project, mapping, clone, dotnet, output):
                           categories=sorted(categories), status=status,
                           rust_test=row["rust_test"] if row else "",
                           origin=row["origin"] if row else "",
-                          parameters=case_parameters(case["methodname"], case["name"])))
+                          parameters=case_parameters(case["methodname"], case["name"], name)))
     return cases, dict(project=project, command=command, discovered=len(nodes),
                        xml=str(xml.relative_to(output.parent)), log=str(log.relative_to(output.parent)),
                        assembly_sha256=hashlib.sha256(dll.read_bytes()).hexdigest())

@@ -39,6 +39,7 @@ mod lps25hb;
 mod lsm6dso;
 mod machine;
 mod memory_setup;
+pub mod migrant;
 mod mii_phy;
 mod monitor;
 mod murax;
