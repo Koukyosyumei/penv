@@ -1277,3 +1277,21 @@ True を返した。この動作は既存の Rust 実装と一致した
 Rust モニターテスト22件と CLI のスナップショット回帰テストが合格。
 未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
 残り2,193件は未実行（`target/monitor-number-mode-robot/results.json`）。
+
+### ログレベルの起動前検証とライブ照会
+
+`55bdcc4` は単一引数の `logLevel` を起動前に Rust で検証し、
+無効な変更を起動列へ入れない。ライブの `lastLog` 応答は観測として記録し、
+合否は元の Robot アサーションに従う。
+
+固定 Renode と penv の RPC では、`logLevel 4` が拒否された後も
+有効な設定を行えた。保存時と復元直前のレベルを 0 と 2 で入れ替えた
+両方向の比較で、`Load` 後も直前のレベルが効いた。直前が 2 なら
+警告だけが表示され、0 なら情報も表示された。
+通常 CLI でも警告だけが表示される経路を確認した
+（`target/monitor-log-level-restore-proof/`）。
+Rust モニターテスト22件が合格。
+
+未変更 Robot はログバッファの上限、未処理のバス読み出し・書き込みの
+ログ、および STM32F072b Console Echo の4件が合格した。
+残り2,193件は未実行（`target/monitor-log-level-validation-robot/results.json`）。
