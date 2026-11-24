@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,383 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,384 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 12 |
+| 移植待ち | 11 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -544,3 +544,8 @@ PythonPeripherals.SerializationTests のリスト・辞書ケースを移植し�
 辞書復元と Migrant の既存プリミティブ I/O を使い、メモリーストリームを巻き戻して復元する。
 対象実行は公式3件と回帰1件が合格、0件失敗。
 [追加ケースの公式 ID 別結果](nunit-evidence/targeted-python-peripheral-stream.tsv) · [対象実行ログ](nunit-evidence/targeted-python-peripheral-stream.log)
+
+SerializationTests の MappedMemory 単体ケースを移植した。128 MiB のメモリーに
+100 KiB の非重複バッファー30個を書き込み、LZ4 圧縮したストリームから復元して全バイトを比較した。
+Rust 側では既存の固定シード乱数器を使用した。対象実行は1件合格、0件失敗。
+[公式 ID 別の結果](nunit-evidence/targeted-emulation-mapped-memory.tsv) · [対象実行ログ](nunit-evidence/targeted-emulation-mapped-memory.log)

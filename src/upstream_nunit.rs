@@ -108,3 +108,4 @@ mod opentitan_spi_device;
 mod cast_canctrl;
 mod opentitan_key_manager;
 mod python_peripheral_serialization;
+mod emulation_serialization;
