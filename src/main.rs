@@ -37,6 +37,7 @@ mod memory_setup;
 mod mii_phy;
 mod monitor;
 mod monitor_log;
+mod monitor_asm;
 mod murax;
 mod network_monitor;
 mod network_platform;
@@ -331,15 +332,19 @@ fn report_ram(machine: &Machine, (cpu, address, width): &RamRead) -> Result<(), 
 }
 
 fn llvm_mc(features: &str, mode: &str, input: &str) -> Result<std::process::Output, String> {
+    llvm_mc_for("riscv64", features, mode, input)
+}
+
+fn llvm_mc_for(triple: &str, features: &str, mode: &str, input: &str) -> Result<std::process::Output, String> {
     use std::process::{Command, Stdio};
 
     let mut child = Command::new("llvm-mc")
-        .args([mode, "--triple=riscv64", &format!("--mattr={features}")])
+        .args([mode, &format!("--triple={triple}"), &format!("--mattr={features}")])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("could not start llvm-mc for RV64: {error}"))?;
+        .map_err(|error| format!("could not start llvm-mc for {triple}: {error}"))?;
     child
         .stdin
         .take()

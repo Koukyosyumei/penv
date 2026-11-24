@@ -305,8 +305,25 @@ class LiveEndpoint(Endpoint):
             reading = command.startswith("sysbus Read")
             data = self.operation(command, assertion=reading)
             return self.format_number(data) if reading else data
-        cpu = r"(?:sysbus\.)?cpu[\w]* "
+        cpu = r"(?:sysbus\.)?(?:cpu|u54|e51)[\w]* "
         number = r"(?:0x[\da-fA-F]+|\d+)"
+        assembly = re.fullmatch(
+            rf'({cpu.strip()}) AssembleBlock (0x[0-9a-fA-F]+|[0-9]+|`(?:sysbus\.)?[\w.]+ PC`) (.+)',
+            command, flags=re.DOTALL)
+        if assembly:
+            target, address, body = assembly.groups()
+            if address.startswith("`"):
+                address = self.operation(address[1:-1]).strip()
+            if body.startswith('"""') and body.endswith('"""'):
+                body = body[3:-3]
+            elif body.startswith('"') and body.endswith('"'):
+                body = body[1:-1]
+            else:
+                raise Unsupported("AssembleBlock requires quoted assembly")
+            return self.operation(
+                f"AssembleMonitorBlock {target.removeprefix('sysbus.')} {address} {body.encode().hex()}")
+        if re.fullmatch(cpu + r'ExecutionMode(?: (?:SingleStep|Continuous))?', command):
+            return self.operation(command, assertion=command.endswith(" ExecutionMode"))
         if re.fullmatch(cpu + r'(?:GetRegister "?[\w]+"?|SetRegister "?[\w]+"? ' + number
                         + r'|MEPC|MCAUSE|MTVAL)', command):
             reading = " SetRegister " not in command
@@ -440,6 +457,8 @@ class LiveEndpoint(Endpoint):
         self.calls[-1]["monitor"] = measurement
         with (self.out / "monitor.jsonl").open("a") as log:
             print(json.dumps(measurement), file=log)
+        if status == "UNSUPPORTED" and "could not start llvm-mc" in value:
+            raise OSError(value)
         if status == "UNSUPPORTED" or status == "ERROR" and re.search(
                 r"UART peripheral not found|unknown STM32 UART|unknown LED|not a Cortex-M CPU|"
                 r"requires a Cortex-M platform|unsupported monitor", value, re.I):

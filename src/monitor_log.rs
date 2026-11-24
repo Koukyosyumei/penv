@@ -138,3 +138,46 @@ fn decode(value: &str) -> Result<String, String> {
         .collect::<Result<Vec<_>, _>>()?;
     String::from_utf8(data).map_err(|error| error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_filters_levels_and_keeps_or_consumes_matches() {
+        let mut machine = Machine::new(4096).unwrap();
+        attach(4).unwrap();
+        record(0, "debug");
+        record(1, "info");
+        let wait = |machine: &mut Machine, command| handle(machine, command).unwrap().unwrap();
+        assert_eq!(
+            wait(
+                &mut machine,
+                "WaitForMonitorLog 0 literal keep 0 6465627567"
+            )
+            .0,
+            "FAIL"
+        );
+        for mode in ["keep", "consume"] {
+            let command = format!("WaitForMonitorLog 0 literal {mode} 1 696e666f");
+            assert_eq!(wait(&mut machine, &command), ("MATCH", "info".into()));
+        }
+        assert_eq!(
+            wait(
+                &mut machine,
+                "WaitForMonitorLog 0 literal consume any 696e666f"
+            )
+            .0,
+            "FAIL"
+        );
+        set_level(0);
+        record(0, "debug");
+        assert_eq!(
+            wait(
+                &mut machine,
+                "WaitForMonitorLog 0 literal consume 0 6465627567"
+            ),
+            ("MATCH", "debug".into())
+        );
+    }
+}

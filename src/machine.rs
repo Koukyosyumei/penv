@@ -204,6 +204,7 @@ pub struct Hart {
     cpu_wait_asserted: bool,
     pub monitor_paused: bool,
     pub monitor_halted: bool,
+    monitor_single_step: bool,
     pub monitor_hooks: Vec<(u32, CpuHook)>,
     reset_held: bool,
     reset_release: Option<SyncAction<()>>,
@@ -386,6 +387,7 @@ impl Machine {
                 cpu_wait_asserted: false,
                 monitor_paused: false,
                 monitor_halted: false,
+                monitor_single_step: false,
                 monitor_hooks: Vec::new(),
                 reset_held: false,
                 reset_release: None,
@@ -528,12 +530,64 @@ impl Machine {
         hart.monitor_integer_register(index as u32, value).map(|value| value.map(u64::from))
     }
 
+    pub(crate) fn monitor_assembly_target(
+        &mut self, name: &str,
+    ) -> Result<(Option<usize>, &'static str, String), String> {
+        if let Ok(index) = self.rv64_hart_by_name(name) {
+            let cpu = self.hart_mut(index).rv64.as_ref().expect("named RV64 CPU");
+            return Ok((Some(index), "riscv64", cpu.isa().llvm_features()));
+        }
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_some() || hart.csr.embedded_base {
+            return Err("unsupported monitor assembler target".into());
+        }
+        let available = [
+            ("+m", hart.csr.m_extension), ("+a", hart.csr.a_extension),
+            ("+c", hart.csr.c_extension), ("+f", hart.csr.f_extension),
+            ("+d", hart.csr.d_extension), ("+zba", hart.bitmanip.zba),
+            ("+zbb", hart.bitmanip.zbb), ("+zbc", hart.bitmanip.zbc),
+            ("+zbs", hart.bitmanip.zbs), ("+zicond", hart.zicond),
+            ("+zacas", hart.zacas),
+        ];
+        let features = available.into_iter().filter_map(|(name, enabled)| enabled.then_some(name))
+            .collect::<Vec<_>>().join(",");
+        Ok((None, "riscv32", features))
+    }
+
+    pub(crate) fn monitor_execution_mode(
+        &mut self, name: &str, single_step: Option<bool>,
+    ) -> Result<bool, String> {
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_some() {
+            return Err("unsupported monitor ExecutionMode for Cortex-M".into());
+        }
+        if let Some(single_step) = single_step {
+            hart.monitor_single_step = single_step;
+        }
+        Ok(hart.monitor_single_step)
+    }
+
+    pub(crate) fn monitor_riscv_halted(
+        &mut self, name: &str, halted: Option<bool>,
+    ) -> Result<bool, String> {
+        let hart = self.named_hart(name)?;
+        if let Some(halted) = halted {
+            hart.monitor_halted = halted;
+        }
+        Ok(hart.monitor_halted)
+    }
+
     pub(crate) fn monitor_step_riscv(&mut self, name: &str, steps: u64, output: &mut impl Write)
         -> Result<(Stop, u64), String>
     {
         let index = std::iter::once(&self.primary).chain(&self.secondary)
             .position(|hart| hart.name.as_deref() == Some(name) && hart.thumb.is_none())
             .ok_or_else(|| format!("unknown RISC-V CPU {name:?}"))?;
+        let hart = self.hart_mut(index);
+        if hart.monitor_halted {
+            return Ok((Stop::Limit, 0));
+        }
+        hart.monitor_single_step = true;
         self.run_selected(steps, Some(index), output, |_, _| false)
     }
 
@@ -1471,6 +1525,14 @@ impl Machine {
                 }
             }
             if self.halted & (1 << index) != 0 {
+                continue;
+            }
+            if hart.thumb.is_none() && (hart.monitor_halted
+                || (selected.is_none() && hart.monitor_single_step))
+            {
+                if matched(&self.bus, output) {
+                    return Ok((Stop::OutputMatch, retired));
+                }
                 continue;
             }
             let trace = self.pc_trace.as_ref().filter(|(id, _)| *id == index);

@@ -87,6 +87,7 @@ enum Action {
     CpuHalted(String, Option<bool>),
     ReadCpuPc(String),
     CpuRegister(String, String, Option<u64>),
+    ExecutionMode(String, Option<bool>),
     AddCpuHook(String, Option<u32>, CpuHook),
     NvicLog(String),
     NvicWrite(String, u32, u32),
@@ -368,6 +369,24 @@ pub fn run(
                     .map_err(|e| e.to_string())
                     .map(|()| None)
             }),
+            Action::ExecutionMode(cpu, single_step) => {
+                machine.monitor_execution_mode(cpu, *single_step).and_then(|state| {
+                    if single_step.is_none() {
+                        let mode = if state { "SingleStep" } else { "Continuous" };
+                        writeln!(output.output, "{mode}").map_err(|error| error.to_string())?;
+                    }
+                    Ok(None)
+                })
+            }
+            Action::CpuHalted(cpu, requested) if !machine.is_cortex_m() => {
+                machine.monitor_riscv_halted(cpu, *requested).and_then(|state| {
+                    if requested.is_none() {
+                        let state = if state { "True" } else { "False" };
+                        writeln!(output.output, "{state}").map_err(|error| error.to_string())?;
+                    }
+                    Ok(None)
+                })
+            }
             Action::CpuPaused(cpu, requested) | Action::CpuHalted(cpu, requested) => {
                 machine.cortex_m_monitor_cpu(cpu).and_then(|hart| {
                     let state = if matches!(command.action, Action::CpuPaused(..)) {
@@ -646,6 +665,13 @@ pub fn serve(
             return Ok(());
         }
         let text = line.trim();
+        if let Some(result) = crate::monitor_asm::handle(machine, text) {
+            match result {
+                Ok(()) => frame(&mut output, "OK", &[]),
+                Err(error) => frame(&mut output, "UNSUPPORTED", error.as_bytes()),
+            }.map_err(|error| error.to_string())?;
+            continue;
+        }
         if let Some(result) = crate::monitor_log::handle(machine, text) {
             match result {
                 Ok((status, value)) => frame(&mut output, status, value.as_bytes()),
@@ -1891,6 +1917,16 @@ fn execute(
                 requested,
             ))
         }
+        [target, "ExecutionMode", mode @ ..] if mode.len() <= 1 => {
+            let cpu = resolve(target)?;
+            let single_step = match mode {
+                [] => None,
+                ["SingleStep"] => Some(true),
+                ["Continuous"] => Some(false),
+                _ => return Err("unsupported monitor ExecutionMode value".into()),
+            };
+            Some(Action::ExecutionMode(cpu.trim_start_matches("sysbus.").into(), single_step))
+        }
         [target, "IsHalted", value @ ..] if value.len() <= 1 => {
             let cpu = resolve(target)?;
             let requested = value
@@ -2194,10 +2230,14 @@ fn execute(
                 .strip_prefix('"')
                 .and_then(|s| s.strip_suffix("\"`"))
                 .ok_or("expected quoted hook symbol")?;
-            let hook = callback
-                .strip_prefix('$')
-                .and_then(|name| boot.hooks.get(name))
-                .ok_or("unknown halt hook")?;
+            let name = callback.strip_prefix('$').ok_or("expected a named CPU hook")?;
+            let hook = match boot.hooks.get(name) {
+                Some(hook) => hook,
+                None if variables.contains_key(name) => {
+                    return Err(format!("unsupported CPU Python hook ${name} at symbol {symbol}"));
+                }
+                None => return Err(format!("unknown CPU hook ${name}")),
+            };
             let file = boot
                 .symbols
                 .last()
