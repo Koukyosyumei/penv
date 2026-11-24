@@ -16,6 +16,7 @@ mod serializable_mapped_segment;
 mod pseudorandom;
 mod sht21;
 mod bma180;
+mod efm32_i2c;
 mod weak_multi_table;
 mod option_validation;
 mod option_parser;

@@ -1042,3 +1042,6 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests.ShouldRecordAndPlayEvents	upstream_nunit::time_source::should_record_and_play_events	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,False).ShouldNotGenerateGenericSurrogateTwice	upstream_nunit::migrant_surrogate::generic_registration_count_plain	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,True).ShouldNotGenerateGenericSurrogateTwice	upstream_nunit::migrant_surrogate::generic_registration_count_stamped	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest.CtrlTest	upstream_nunit::efm32_i2c::ctrl_test	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest.InitTest	upstream_nunit::efm32_i2c::init_test	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest.InterruptTest	upstream_nunit::efm32_i2c::interrupt_test	new

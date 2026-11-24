@@ -16,7 +16,7 @@ Antmicro.Renode.MonitorTests.TokenizerTests	The active monitor parser does not e
 Antmicro.Renode.PeripheralsTests.BMC050Test	BMC050 accelerometer/magnetometer register model is absent.
 Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.
 Antmicro.Renode.PeripheralsTests.CortexA9GICTests	The Cortex-A9 host platform and its ARM Generic Interrupt Controller are absent.
-Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest	EFM32 Giant Gecko I2C controller registers and its slave callback contract are absent.
+Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest	Remaining DualI2CAddressBMC050Test needs addressed slave registration and I2C START/STOP packet exchange with the BMC050 model.
 Antmicro.Renode.PeripheralsTests.EFR32_I2CControllerTests	EFR32 I2C controller registers, FIFO and interrupt state machine are absent.
 Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test	LPC43xx GPIO register/interrupt model is absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_AES_Tests	OpenTitan AES interaction and register model are absent; existing STM32 AES models expose a different register map.
