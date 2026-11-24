@@ -5,6 +5,10 @@ import argparse
 from collections import Counter
 import json
 from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+sys.dont_write_bytecode = True
 
 from compare import load
 
@@ -19,6 +23,33 @@ def command_call(call):
     return ""
 
 
+def next_from_xml(row, command, cache):
+    evidence = row.get("evidence")
+    if not evidence or not Path(evidence).is_file():
+        return None
+    if evidence not in cache:
+        cache[evidence] = {node.get("name"): node
+                           for node in ET.parse(evidence).getroot().findall("./suite/test")}
+    test = cache[evidence].get(row.get("name"))
+    if test is None:
+        return None
+    found = False
+    for parent in test.findall("kw"):
+        if parent.get("type") in {"SETUP", "TEARDOWN"}:
+            continue
+        for keyword in parent.iter("kw"):
+            name = keyword.get("name")
+            status = keyword.find("status")
+            if status is None or status.get("status") == "NOT RUN":
+                continue
+            if found:
+                return {"keyword": name, "status": status.get("status"), "evidence": evidence}
+            if name == "Execute Command" and status.get("status") == "PASS" and any(
+                    (arg.text or "").strip() == command for arg in keyword.findall("arg")):
+                found = True
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("baseline", type=Path)
@@ -30,7 +61,7 @@ def main():
         parser.error("reports have different upstream SHAs")
     if before_report["metadata"]["host"] != after_report["metadata"]["host"]:
         parser.error("reports have different hosts")
-    cohorts, cases = {}, []
+    cohorts, cases, xml = {}, [], {}
     for key, row in before.items():
         blocked = next((call for call in row.get("remote_calls", [])
                         if call["status"] == "unsupported"), None)
@@ -46,6 +77,7 @@ def main():
         following = next((call for call in calls[index + 1:] if call["keyword"] not in LIFECYCLE),
                          None) if index is not None else None
         if retry.get("status") == "ok":
+            following = following or next_from_xml(rerun, command, xml)
             outcome = "next_operation" if following or rerun.get("verdict") == "PASS" else "accepted_only"
         elif retry.get("penv_ready") or retry.get("command"):
             outcome = "penv_attempted_same_operation"

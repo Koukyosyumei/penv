@@ -24,6 +24,7 @@ class LiveEndpoint(Endpoint):
         "Create LED Tester": "create_led",
         "Assert LED State": "assert_led",
         "Execute Script": "execute_script",
+        "Download File": "download_file",
         "Allocate Temporary File": "temporary_file",
         "Allocate Temporary Directory": "temporary_directory",
         "Handle Hot Spot": "hotspot",
@@ -37,7 +38,7 @@ class LiveEndpoint(Endpoint):
         self.platform = None
         self.script = None
         self.script_urls = {}
-        self.monitor_input = MonitorInput(self.root, self.out)
+        self.monitor_input = MonitorInput(self.root, self.out, self.assets)
         self.replaying = False
         self.inline = []
         self.using_bus = False
@@ -67,7 +68,7 @@ class LiveEndpoint(Endpoint):
         if self.replaying or kind != "Reexecution":
             raise Unsupported(f"Provides {kind} requires a snapshot-capable adapter")
         replay = {
-            "Execute Command", "Execute Script", "Create Terminal Tester", "Start Emulation",
+            "Execute Command", "Execute Script", "Download File", "Create Terminal Tester", "Start Emulation",
             "Wait For Line On Uart", "Wait For Prompt On Uart", "Write Line To Uart",
             "Create LED Tester", "Assert LED State", "Handle Hot Spot",
             "Set Default Uart Timeout", "Set Crash On Abort",
@@ -107,6 +108,12 @@ class LiveEndpoint(Endpoint):
         if action != "None":
             raise Unsupported(f"HotSpot action {action} requires additional lifecycle support")
 
+    def download_file(self, uri):
+        if not PUBLIC_ASSET.fullmatch(uri):
+            raise Unsupported("Download File requires a versioned public Renode asset")
+        self.fetch(uri)
+        return str(self.assets / uri.rsplit("/", 1)[1])
+
     def execute_script(self, script):
         self.load_script(self.monitor_input.path(script))
         return ""
@@ -123,8 +130,11 @@ class LiveEndpoint(Endpoint):
         if file.suffix in {".cs", ".py"}:
             raise PenvUnsupported(f"penv has no monitor loader for {file.suffix} includes")
         if file.suffix == ".repl":
-            if not self.commands or self.proc or self.platform or self.inline or self.script:
+            if self.proc or self.platform or self.inline or self.script:
                 raise Unsupported("REPL inclusion needs one machine before its platform is loaded")
+            if not self.commands:
+                self.commands.append("mach create")
+                self.monitor_input.name_machine("machine")
             self.platform = file
             self.calls[-1]["include"]["stage"] = "platform selected for penv load"
         else:
@@ -164,6 +174,7 @@ class LiveEndpoint(Endpoint):
             command = " ".join(command)
         elif fragments:
             raise Unsupported(f"Execute Command machine context or arguments: {fragments}")
+        command = command.strip()
         assigned = self.monitor_input.assign(command)
         if assigned is not None:
             name, value = assigned

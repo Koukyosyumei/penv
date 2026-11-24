@@ -1013,6 +1013,11 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
         ));
     }
     let content = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let origin = canonical.parent().unwrap_or(Path::new("."));
+    let previous_origin = state.variables.insert(
+        "global.ORIGIN".into(),
+        format!("@{}", origin.display()),
+    );
     let mut cursor = content.lines().enumerate();
     while let Some((line, raw)) = cursor.next() {
         let text = raw.trim();
@@ -1118,7 +1123,7 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
         }
         let words = command_words(text).map_err(|e| error(&e))?;
         match words.as_slice() {
-            ["set", name, value] if !state.boot.started => {
+            ["set", name, value] => {
                 let name = name.strip_prefix('$').unwrap_or(name);
                 state.variables.insert(name.into(), (*value).into());
             }
@@ -1135,7 +1140,7 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
                     path.parent().unwrap_or(Path::new(".")).join(path_value(relative))
                 } else {
                     let value = resolve(&state.variables, value).map_err(|e| error(&e))?;
-                    let file = value.strip_prefix('@').unwrap_or_else(|| unquote(value));
+                    let file = unquote(value.strip_prefix('@').unwrap_or(value));
                     let file = path_value(file);
                     // Renode searches the current monitor path before the script fallback.
                     let candidate = root.join(&file);
@@ -1146,7 +1151,8 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
                     }
                 };
                 match included.extension().and_then(|suffix| suffix.to_str()) {
-                    Some("repl") if state.machine && state.boot.platform.is_none() => {
+                    Some("repl") if state.boot.platform.is_none() => {
+                        state.machine = true;
                         state.boot.platform = Some(included);
                     }
                     Some("repl" | "cs" | "py") => {
@@ -1201,6 +1207,11 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
                     .map_err(|e| format!("{}:{}: {e}", body.script.display(), index + 1))?;
             }
         }
+    }
+    if let Some(previous_origin) = previous_origin {
+        state.variables.insert("global.ORIGIN".into(), previous_origin);
+    } else {
+        state.variables.remove("global.ORIGIN");
     }
     state.visiting.remove(&canonical);
     Ok(())
@@ -2491,7 +2502,9 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
         start.get_or_insert(index);
         if quote == Some(character) {
             quote = None;
-        } else if new_word && matches!(character, '"' | '\'') {
+        } else if (new_word || start.is_some_and(|start| &text[start..index] == "@"))
+            && matches!(character, '"' | '\'')
+        {
             quote = Some(character);
         }
     }
@@ -2507,7 +2520,7 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
 impl Asset {
     pub(crate) fn new(value: &str, script: &Path) -> Self {
         Self {
-            value: path_value(value),
+            value: path_value(unquote(value)),
             script: script.into(),
         }
     }
@@ -2541,6 +2554,30 @@ fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_tokens_keep_quoted_include_paths_together() {
+        assert_eq!(
+            command_words(r#"include @"scripts/a file.resc""#).unwrap(),
+            ["include", r#"@"scripts/a file.resc""#],
+        );
+        assert_eq!(
+            command_words(r"i @scripts/a\ file.resc").unwrap(),
+            ["i", r"@scripts/a\ file.resc"],
+        );
+    }
+
+    #[test]
+    fn monitor_resolves_aliases_through_global_variables() {
+        let mut variables = HashMap::from([
+            ("file".into(), "$location".into()),
+            ("global.location".into(), "@example.resc".into()),
+        ]);
+        assert_eq!(resolve(&variables, "$file"), Ok("@example.resc"));
+        variables.insert("global.location".into(), "$file".into());
+        assert!(resolve(&variables, "$file").is_err());
+    }
+
 
     #[test]
     fn renode_button_press_and_release_latches_exti_between_steps() {

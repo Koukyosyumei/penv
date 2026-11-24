@@ -29,8 +29,8 @@ def at_path(path):
 
 
 class MonitorInput:
-    def __init__(self, root, out):
-        self.root, self.out = root, out
+    def __init__(self, root, out, assets):
+        self.root, self.out, self.assets = root, out, assets
         self.global_values = {}
         self.machine_values = {}
         self.machine = None
@@ -40,7 +40,7 @@ class MonitorInput:
 
     def get(self, name):
         if name in {"CWD", "global.CWD"}:
-            return at_path(self.root)
+            return at_path(self.out)
         if name in {"ORIGIN", "global.ORIGIN"} and name not in self.global_values:
             return at_path(self.root)
         if name.startswith("global."):
@@ -71,7 +71,7 @@ class MonitorInput:
         return TOKEN.sub(lambda match: self.expand(match[0]), command)
 
     def assign(self, command):
-        if command.startswith("set "):
+        if re.match(r"set\s", command):
             tokens = words(command)
             if len(tokens) != 3 or not re.fullmatch(rf"\$?{NAME}", tokens[1]):
                 raise Unsupported("set requires a variable and a single monitor token")
@@ -95,9 +95,10 @@ class MonitorInput:
     def path(self, token):
         value = unquote(self.expand(token).removeprefix("@"))
         path = Path(value)
-        for directory in (self.root, self.out):
+        for directory in (self.out, self.root, self.assets):
             candidate = (directory / path).resolve()
-            if (candidate.is_relative_to(self.root) or candidate.is_relative_to(self.out)) and candidate.is_file():
+            if candidate.is_file() and any(candidate.is_relative_to(allowed)
+                                           for allowed in (self.root, self.out, self.assets)):
                 return candidate
         raise FileNotFoundError(f"File does not exist: {value}")
 
