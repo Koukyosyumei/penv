@@ -42,7 +42,65 @@ const SET_FIELDS: &[(&str, FieldKind)] = &[
     ("m_version", FieldKind::Integer),
 ];
 
+const DICTIONARY_FIELDS: &[(&str, FieldKind)] = &[
+    ("buckets", FieldKind::Reference),
+    ("entries", FieldKind::Reference),
+    ("count", FieldKind::Integer),
+    ("version", FieldKind::Integer),
+    ("freeList", FieldKind::Integer),
+    ("freeCount", FieldKind::Integer),
+    ("comparer", FieldKind::Reference),
+];
+const INT_DICT: DictionaryLayout = DictionaryLayout {
+    class: "Dictionary<int,int>",
+    entry: "Dictionary<int,int>.Entry",
+    comparer: "GenericEqualityComparer<int>",
+};
+const STR_DICT: DictionaryLayout = DictionaryLayout {
+    class: "Dictionary<string,string>",
+    entry: "Dictionary<string,string>.Entry",
+    comparer: "GenericEqualityComparer<string>",
+};
+const SHARED_DICT: DictionaryLayout = DictionaryLayout {
+    class: "Dictionary<int,string>",
+    entry: "Dictionary<int,string>.Entry",
+    comparer: "GenericEqualityComparer<int>",
+};
+const CUSTOM_DICT: DictionaryLayout = DictionaryLayout {
+    class: "Dictionary<CustomObject,string>",
+    entry: "Dictionary<CustomObject,string>.Entry",
+    comparer: "ObjectEqualityComparer<CustomObject>",
+};
+
+#[derive(Clone, Copy)]
+struct DictionaryLayout {
+    class: &'static str,
+    entry: &'static str,
+    comparer: &'static str,
+}
+
+const fn dictionary_stamp(
+    class: &'static str,
+    fields: &'static [(&'static str, FieldKind)],
+) -> TypeStamp<'static> {
+    TypeStamp {
+        class,
+        module: "mscorlib",
+        revision: 0,
+        fields,
+    }
+}
+
 const CODECS: &[Codec] = &[
+    generated_record!("GenericEqualityComparer<string>";),
+    generated_record!(INT_DICT.class; buckets: reference, entries: reference, count: integer, version: integer, free_list: integer, free_count: integer, comparer: reference),
+    generated_record!(INT_DICT.entry; hash: integer, next: integer, key: integer, value: integer),
+    generated_record!(STR_DICT.class; buckets: reference, entries: reference, count: integer, version: integer, free_list: integer, free_count: integer, comparer: reference),
+    generated_record!(STR_DICT.entry; hash: integer, next: integer, key: reference, value: reference),
+    generated_record!(SHARED_DICT.class; buckets: reference, entries: reference, count: integer, version: integer, free_list: integer, free_count: integer, comparer: reference),
+    generated_record!(SHARED_DICT.entry; hash: integer, next: integer, key: integer, value: reference),
+    generated_record!(CUSTOM_DICT.class; buckets: reference, entries: reference, count: integer, version: integer, free_list: integer, free_count: integer, comparer: reference),
+    generated_record!(CUSTOM_DICT.entry; hash: integer, next: integer, key: reference, value: reference),
     generated_record!(INT_SET; buckets: reference, slots: reference, count: integer, last: integer, free: integer, comparer: reference, version: integer),
     generated_record!(OBJECT_SET; buckets: reference, slots: reference, count: integer, last: integer, free: integer, comparer: reference, version: integer),
     generated_record!(INT_SLOT; hash: integer, next: integer, value: integer),
@@ -71,6 +129,47 @@ const CODECS: &[Codec] = &[
 ];
 
 const STAMPS: &[TypeStamp<'static>] = &[
+    dictionary_stamp("GenericEqualityComparer<string>", &[]),
+    dictionary_stamp(INT_DICT.class, DICTIONARY_FIELDS),
+    dictionary_stamp(
+        INT_DICT.entry,
+        &[
+            ("hashCode", FieldKind::Integer),
+            ("next", FieldKind::Integer),
+            ("key", FieldKind::Integer),
+            ("value", FieldKind::Integer),
+        ],
+    ),
+    dictionary_stamp(STR_DICT.class, DICTIONARY_FIELDS),
+    dictionary_stamp(
+        STR_DICT.entry,
+        &[
+            ("hashCode", FieldKind::Integer),
+            ("next", FieldKind::Integer),
+            ("key", FieldKind::Reference),
+            ("value", FieldKind::Reference),
+        ],
+    ),
+    dictionary_stamp(SHARED_DICT.class, DICTIONARY_FIELDS),
+    dictionary_stamp(
+        SHARED_DICT.entry,
+        &[
+            ("hashCode", FieldKind::Integer),
+            ("next", FieldKind::Integer),
+            ("key", FieldKind::Integer),
+            ("value", FieldKind::Reference),
+        ],
+    ),
+    dictionary_stamp(CUSTOM_DICT.class, DICTIONARY_FIELDS),
+    dictionary_stamp(
+        CUSTOM_DICT.entry,
+        &[
+            ("hashCode", FieldKind::Integer),
+            ("next", FieldKind::Integer),
+            ("key", FieldKind::Reference),
+            ("value", FieldKind::Reference),
+        ],
+    ),
     TypeStamp {
         class: STACK,
         module: "mscorlib",
@@ -637,6 +736,186 @@ fn hash_set(options: Options, objects: bool) {
     }
 }
 
+impl DictionaryLayout {
+    fn store(
+        self,
+        graph: &mut Graph,
+        input: impl IntoIterator<Item = (i64, Value, Value)>,
+        capacity: usize,
+    ) -> ObjectId {
+        let mut buckets = vec![-1; capacity];
+        let mut entries = Vec::new();
+        for (hash, key, value) in input {
+            let bucket = (hash as usize) % capacity;
+            let next = std::mem::replace(&mut buckets[bucket], entries.len() as i64);
+            entries.push(Value::Ref(graph.insert(record(
+                self.entry,
+                vec![Value::Integer(hash), Value::Integer(next), key, value],
+            ))));
+        }
+        let count = Value::Integer(entries.len() as i64);
+        entries.resize(capacity, Value::Null);
+        let buckets = graph.insert(Object::Array(
+            buckets.into_iter().map(Value::Integer).collect(),
+        ));
+        let entries = graph.insert(Object::Array(entries));
+        let comparer = graph.insert(record(self.comparer, vec![]));
+        graph.insert(record(
+            self.class,
+            vec![
+                Value::Ref(buckets),
+                Value::Ref(entries),
+                count.clone(),
+                count,
+                Value::Integer(-1),
+                Value::Integer(0),
+                Value::Ref(comparer),
+            ],
+        ))
+    }
+
+    fn restore(self, graph: &Graph, id: ObjectId) -> Vec<(&Value, &Value)> {
+        let Some(Object::Record { class, fields }) = graph.get(id) else {
+            panic!("expected dictionary");
+        };
+        assert_eq!(class, self.class);
+        let [Value::Ref(buckets), Value::Ref(entries), Value::Integer(count), Value::Integer(_), Value::Integer(-1), Value::Integer(0), Value::Ref(comparer)] =
+            fields.as_slice()
+        else {
+            panic!("expected populated dictionary without removed entries");
+        };
+        assert_eq!(graph.get(*comparer), Some(&record(self.comparer, vec![])));
+        let Some(Object::Array(buckets)) = graph.get(*buckets) else {
+            panic!("expected buckets");
+        };
+        let Some(Object::Array(entries)) = graph.get(*entries) else {
+            panic!("expected entries");
+        };
+        let count = usize::try_from(*count).unwrap();
+        let mut visited = vec![false; count];
+        let mut result = Vec::with_capacity(count);
+        for (bucket, head) in buckets.iter().enumerate() {
+            let Value::Integer(mut index) = *head else {
+                panic!("expected bucket index");
+            };
+            while index != -1 {
+                let at = usize::try_from(index).unwrap();
+                assert!(!std::mem::replace(&mut visited[at], true));
+                let Some(Object::Record { class, fields }) = graph.get(reference(&entries[at]))
+                else {
+                    panic!("expected dictionary entry");
+                };
+                assert_eq!(class, self.entry);
+                let [Value::Integer(hash), Value::Integer(next), key, value] = fields.as_slice()
+                else {
+                    panic!("expected entry fields");
+                };
+                assert_eq!(usize::try_from(*hash).unwrap() % buckets.len(), bucket);
+                result.push((key, value));
+                index = *next;
+            }
+        }
+        assert_eq!(result.len(), count);
+        result
+    }
+}
+
+fn integer_dictionary(options: Options) {
+    let mut graph = Graph::default();
+    let root = INT_DICT.store(
+        &mut graph,
+        (0..100).map(|i| (i, Value::Integer(i), Value::Integer(i + 1))),
+        197,
+    );
+    let (restored, copy) = options.restore(&graph, root);
+    let actual: std::collections::BTreeMap<_, _> = INT_DICT
+        .restore(&restored, copy)
+        .into_iter()
+        .map(|(key, value)| {
+            let (Value::Integer(key), Value::Integer(value)) = (key, value) else {
+                panic!("expected integer pair");
+            };
+            (*key, *value)
+        })
+        .collect();
+    assert_eq!(actual, (0..100).map(|i| (i, i + 1)).collect());
+}
+
+fn string_from_ref<'g>(graph: &'g Graph, value: &Value) -> &'g str {
+    let Some(Object::String(text)) = graph.get(reference(value)) else {
+        panic!("expected string");
+    };
+    text
+}
+
+fn string_dictionary(options: Options) {
+    let mut graph = Graph::default();
+    let input = [("Ball", "Piłka"), ("Cat", "Kot"), ("Line", "Linia")];
+    let entries = input.map(|(key, value)| {
+        // The Rust fixture uses a deterministic UTF-16 hash for the graph's buckets.
+        let hash = key.encode_utf16().fold(0i32, |hash, c| {
+            hash.wrapping_mul(31).wrapping_add(i32::from(c))
+        }) & i32::MAX;
+        (
+            i64::from(hash),
+            string_ref(&mut graph, key),
+            string_ref(&mut graph, value),
+        )
+    });
+    let root = STR_DICT.store(&mut graph, entries, 3);
+    let (restored, copy) = options.restore(&graph, root);
+    let actual: std::collections::BTreeMap<_, _> = STR_DICT
+        .restore(&restored, copy)
+        .into_iter()
+        .map(|(key, value)| {
+            (
+                string_from_ref(&restored, key),
+                string_from_ref(&restored, value),
+            )
+        })
+        .collect();
+    assert_eq!(actual, input.into_iter().collect());
+}
+
+fn dictionary_identity(options: Options) {
+    let mut graph = Graph::default();
+    let shared = string_ref(&mut graph, "Word");
+    let other = string_ref(&mut graph, "One");
+    let entries = [(10, shared.clone()), (20, other), (30, shared)]
+        .map(|(key, value)| (key, Value::Integer(key), value));
+    let root = SHARED_DICT.store(&mut graph, entries, 3);
+    let (restored, copy) = options.restore(&graph, root);
+    let actual: std::collections::BTreeMap<_, _> = SHARED_DICT
+        .restore(&restored, copy)
+        .into_iter()
+        .map(|(key, value)| {
+            let Value::Integer(key) = key else {
+                panic!("expected integer key");
+            };
+            (*key, value)
+        })
+        .collect();
+    let contents: Vec<_> = actual
+        .iter()
+        .map(|(&key, value)| (key, string_from_ref(&restored, value)))
+        .collect();
+    assert_eq!(contents, [(10, "Word"), (20, "One"), (30, "Word")]);
+    assert_eq!(reference(actual[&10]), reference(actual[&30]));
+    assert_ne!(reference(actual[&10]), reference(actual[&20]));
+}
+
+fn custom_dictionary(options: Options) {
+    let mut graph = Graph::default();
+    let entries = ["test1", "test2", "test3"].map(|text| {
+        let identity = graph.insert(record("System.Object", vec![]));
+        let key = graph.insert(record("CustomObject", vec![Value::Ref(identity)]));
+        (0, Value::Ref(key), string_ref(&mut graph, text))
+    });
+    let root = CUSTOM_DICT.store(&mut graph, entries, 3);
+    let (restored, copy) = options.restore(&graph, root);
+    assert_eq!(CUSTOM_DICT.restore(&restored, copy).len(), 3);
+}
+
 macro_rules! configurations {
     ($module:ident, $case:expr) => {
         mod $module {
@@ -724,3 +1003,7 @@ configurations!(primitive_array_list, primitive_array_list);
 configurations!(read_only_collection, read_only_collection);
 configurations!(integer_set, |m| hash_set(m, false));
 configurations!(custom_set, |m| hash_set(m, true));
+configurations!(integer_dictionary, integer_dictionary);
+configurations!(string_dictionary, string_dictionary);
+configurations!(dictionary_identity, dictionary_identity);
+configurations!(custom_dictionary, custom_dictionary);
