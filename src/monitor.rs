@@ -1830,6 +1830,18 @@ impl Network {
     }
 }
 
+fn monitor_string(token: &str) -> Option<String> {
+    if let Some(body) = token.strip_prefix("\"\"\"").and_then(|body| body.strip_suffix("\"\"\"")) {
+        return Some(body.to_owned());
+    }
+    for (quote, escaped) in [('"', r#"\""#), ('\'', r"\'")] {
+        if let Some(body) = token.strip_prefix(quote).and_then(|body| body.strip_suffix(quote)) {
+            return Some(body.replace(escaped, if quote == '"' { "\"" } else { "'" }));
+        }
+    }
+    None
+}
+
 fn unquote(text: &str) -> &str {
     text.strip_prefix('"')
         .and_then(|text| text.strip_suffix('"'))
@@ -2526,7 +2538,7 @@ fn execute(
             if let Some(path) = value.strip_prefix('@') {
                 path_value(path)
             } else {
-                unquote(value).to_owned()
+                monitor_string(value).unwrap_or_else(|| value.to_owned())
             }
         };
         if boot.started || !boot.runtime.is_empty() {
@@ -2649,11 +2661,19 @@ fn execute(
         }
         ["log", value, level @ ..] if level.len() <= 1 => {
             let value = resolve(value)?;
-            let message = value.strip_prefix('"').and_then(|value| value.strip_suffix('"'))
-                .ok_or(LOG_PARAMETERS)?;
+            let message = monitor_string(value).ok_or(LOG_PARAMETERS)?;
             let level = match level {
                 [] => 1,
-                [level] => crate::monitor_log::parse_level(unquote(resolve(level)?)).map_err(|_| LOG_PARAMETERS)?,
+                [level] => {
+                    let token = resolve(level)?;
+                    match monitor_string(token) {
+                        Some(name) if matches!(name.as_str(), "Noisy" | "Debug" | "Info" | "Warning" | "Error") =>
+                            crate::monitor_log::parse_level(&name).map_err(|_| LOG_PARAMETERS)?,
+                        None if matches!(token, "-1" | "0" | "1" | "2" | "3") =>
+                            crate::monitor_log::parse_level(token).map_err(|_| LOG_PARAMETERS)?,
+                        _ => return Err(LOG_PARAMETERS.into()),
+                    }
+                }
                 _ => unreachable!(),
             };
             Some(Action::ScriptLog(level, format!("Script: {message}")))
