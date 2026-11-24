@@ -374,7 +374,13 @@ impl Session {
     }
 
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
-        let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
+        let mut input = io::BufReader::new(fs::File::open(path).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                missing_snapshot(path)
+            } else {
+                format!("{}: {error}", path.display())
+            }
+        })?);
         let result = (|| {
             let Some(SnapshotMetadata { selected, user_state, number_mode, machine_cleared, quantum, cpu_mips, mut variables, macros, aliases }) =
                 read_snapshot_metadata(&mut input)?
@@ -2321,6 +2327,16 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         }
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }
+    if let Ok(["Load", value]) = command_words(command.trim()).as_deref() {
+        let mut pending = script_state()?;
+        if load_text(&source, source.clone(), root, &mut pending, &body).is_ok()
+            && pending.boot.runtime.is_empty()
+            && let Ok(path) = snapshot_path(value, source.parent().unwrap_or(Path::new(".")), &pending.variables)
+            && fs::metadata(&path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+        {
+            return Ok(StartupInput::Reply("REJECTED", missing_snapshot(&path)));
+        }
+    }
     if let Ok(words) = command_words(command.trim())
         && (matches!(words.first(), Some(&("log" | "Save" | "Load")))
             || matches!(words.as_slice(), ["logLevel", _]))
@@ -2880,6 +2896,10 @@ const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expec
 
 fn invalid_command_parameters(error: &str) -> bool {
     matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | SNAPSHOT_PARAMETERS)
+}
+
+fn missing_snapshot(path: &Path) -> String {
+    format!("Parameters did not match the signature: snapshot file does not exist: {}", path.display())
 }
 
 fn missing_include(message: &str) -> bool {
@@ -5155,6 +5175,10 @@ greet "hello world"
         assert_eq!(inspect(machine, "mach set 0").0, "DEFER");
         assert_eq!(inspect(machine, "mach set 9").0, "REJECTED");
         assert_eq!(inspect(machine, "logLevel 4").0, "REJECTED");
+        let missing = format!("@/tmp/penv-missing-snapshot-{}.save", std::process::id());
+        assert_eq!(inspect(machine, &format!("Load {missing}")).0, "REJECTED");
+        let pending = format!("{machine}Save {missing}\n");
+        assert_eq!(inspect(&pending, &format!("Load {missing}")).0, "DEFER");
         assert_eq!(inspect(machine, "logLevel 2").0, "DEFER");
         assert_eq!(inspect(machine, "mach set \"missing\"").0, "REJECTED");
         assert_eq!(inspect("", "echo $var").0, "ERROR");
