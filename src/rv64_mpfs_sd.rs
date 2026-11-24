@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, Read, Seek, SeekFrom},
+    io,
     path::Path,
 };
 
@@ -581,13 +581,7 @@ impl Card {
                 "SD sector outside capacity",
             ));
         }
-        buffer.fill(0);
-        let stored = self.length.saturating_sub(offset).min(buffer.len() as u64) as usize;
-        if stored != 0 {
-            self.file.seek(SeekFrom::Start(offset))?;
-            self.file.read_exact(&mut buffer[..stored])?;
-        }
-        Ok(())
+        crate::block_storage::read_sparse(&mut self.file, self.length, offset, buffer)
     }
 }
 

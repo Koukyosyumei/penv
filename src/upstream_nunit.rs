@@ -6,6 +6,7 @@ mod misc;
 mod parser_primitives;
 mod read_extensions;
 mod range;
+mod storage;
 mod system_bus;
 mod time_interval;
 mod write_extensions;

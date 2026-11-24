@@ -3,6 +3,7 @@ pub mod address_range;
 mod andes_csr;
 mod bit_field;
 mod bitmanip;
+pub mod block_storage;
 mod bus;
 pub mod circular_buffer;
 mod clint;

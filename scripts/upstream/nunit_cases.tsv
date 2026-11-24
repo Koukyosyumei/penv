@@ -341,6 +341,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ReadExtensionsTest.ShouldReadWordUsingDoubleWordBigEndian	upstream_nunit::read_extensions::should_read_word_using_double_word_big_endian	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ReadExtensionsTest.ShouldReadWordUsingQuadWord	upstream_nunit::read_extensions::should_read_word_using_quad_word	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ReadExtensionsTest.ShouldReadWordUsingQuadWordBigEndian	upstream_nunit::read_extensions::should_read_word_using_quad_word_big_endian	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.StorageTests.ShouldReadAndWriteLBABackend	upstream_nunit::storage::should_read_and_write_lba_backend	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindAfterManyRegistrations	upstream_nunit::system_bus::find_after_many_registrations	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindAfterRegistration	upstream_nunit::system_bus::find_after_registration	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindBytePattern	bus::memory_segment_cases::upstream_find_byte_pattern	existing
