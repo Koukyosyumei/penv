@@ -754,3 +754,33 @@ mockPeripheral:
     let value = platform.collections("sysbus.mockPeripheral").unwrap();
     assert_eq!(value.integers.as_deref(), Some([4, 5].as_slice()));
 }
+
+#[test]
+fn should_handle_empty_dict_value() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntStringDict: {}"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    assert_eq!(value.dictionary.as_ref().unwrap().len(), 0);
+}
+
+#[test]
+fn should_handle_empty_keyword_dict_value() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntStringDict: empty"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    assert_eq!(value.dictionary, None);
+}
+
+#[test]
+fn should_handle_dict_int_string() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntStringDict: {0: "zero" ; 1: "one" }"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    let dict = value.dictionary.as_ref().unwrap();
+    assert_eq!(dict.len(), 2);
+    assert_eq!(dict[&0], "zero");
+    assert_eq!(dict[&1], "one");
+}

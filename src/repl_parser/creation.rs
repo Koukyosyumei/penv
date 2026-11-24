@@ -157,6 +157,7 @@ pub(crate) struct Collections {
     pub(crate) integers: Option<Vec<i32>>,
     pub(crate) array: Option<Vec<i32>>,
     pub(crate) strings: Option<Vec<String>>,
+    pub(crate) dictionary: Option<std::collections::BTreeMap<i32, String>>,
 }
 
 fn bind_list<T>(
@@ -186,6 +187,24 @@ fn signed_integer(item: ListItem<'_>) -> Option<i32> {
 impl Collections {
     fn bind(&mut self, name: &str, value: &str) -> Result<(), String> {
         match name {
+            "mockIntStringDict" => {
+                self.dictionary = if value == "empty" {
+                    None
+                } else {
+                    let mut items = std::collections::BTreeMap::new();
+                    for (key, value) in dictionary_value(value)? {
+                        let key = key
+                            .parse()
+                            .map_err(|_| "TypeMismatch: expected integer key")?;
+                        let value = quoted_value(value)
+                            .map_err(|_| "TypeMismatch: expected string value")?;
+                        if items.insert(key, value).is_some() {
+                            return Err("An item with the same key has already been added.".into());
+                        }
+                    }
+                    Some(items)
+                };
+            }
             "mockIntList" => self.integers = bind_list(value, signed_integer)?,
             "mockIntArray" => self.array = bind_list(value, signed_integer)?,
             "mockStringList" => {
