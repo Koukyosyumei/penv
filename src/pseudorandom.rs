@@ -6,13 +6,13 @@ use std::sync::Mutex;
 const MODULUS: i32 = i32::MAX;
 const SLOTS: usize = 55;
 
-struct Sequence {
+pub(crate) struct Sequence {
     samples: [i32; SLOTS],
     next: usize,
 }
 
 impl Sequence {
-    fn new(seed: i32) -> Self {
+    pub(crate) fn new(seed: i32) -> Self {
         let mut samples = [0; SLOTS];
         let mut previous = 161_803_398 - seed.saturating_abs();
         let mut next = 1;
@@ -35,7 +35,7 @@ impl Sequence {
         Self { samples, next: 0 }
     }
 
-    fn next(&mut self) -> i32 {
+    pub(crate) fn next(&mut self) -> i32 {
         let mut value = self.samples[self.next] - self.samples[(self.next + 21) % SLOTS];
         if value == MODULUS {
             value -= 1;

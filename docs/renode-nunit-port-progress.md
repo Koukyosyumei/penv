@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,225 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,234 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,171 |
+| 移植待ち | 2,162 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 27 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 26 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -251,3 +251,9 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 
 - [入力検証の公式 ID](nunit-evidence/targeted-svd-validation.tsv)と[実行ログ](nunit-evidence/targeted-svd-validation.log)
 - [読み出しと継承の公式 ID](nunit-evidence/targeted-svd-reads.tsv)と[38件の実行ログ](nunit-evidence/targeted-svd-reads.log)
+
+## OpenTitan AES
+
+公式9件を移植した。固定上流のキー共有とデータベクトルを使い、ECB の自動・手動動作、復号、同一キーの再利用、入力追跡とランダム化を検証した。キー長の処理は上流の AesManaged と同様、設定値を検証してから全キーバッファを使う。乱数シードは Rust テストで固定した。アラート線や ECB 以外のモードはこのモデルの検証範囲外。
+
+- [公式 ID](nunit-evidence/targeted-opentitan_aes.tsv)と[実行ログ](nunit-evidence/targeted-opentitan_aes.log)

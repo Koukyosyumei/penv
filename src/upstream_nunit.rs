@@ -26,6 +26,7 @@ mod bmc050;
 mod register_enum;
 mod register_fields;
 mod svd;
+mod opentitan_aes;
 mod packet_layout;
 mod monitor_tokenizer;
 mod machine_registry;
