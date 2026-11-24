@@ -1040,3 +1040,5 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests.ShouldNotSleepOnAdvanceImmediately	upstream_nunit::time_source::should_not_sleep_on_advance_immediately	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests.ShouldNotTickDisconnectedSlaveTimeSource	upstream_nunit::time_source::should_not_tick_disconnected_slave_time_source	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests.ShouldRecordAndPlayEvents	upstream_nunit::time_source::should_record_and_play_events	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,False).ShouldNotGenerateGenericSurrogateTwice	upstream_nunit::migrant_surrogate::generic_registration_count_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,True).ShouldNotGenerateGenericSurrogateTwice	upstream_nunit::migrant_surrogate::generic_registration_count_stamped	new

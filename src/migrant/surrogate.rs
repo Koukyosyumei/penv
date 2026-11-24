@@ -40,6 +40,40 @@ impl<'a> Surrogates<'a> {
         self.set(class.into(), Some(Box::new(converter)))
     }
 
+    /// Convert a closed generic record using the same type arguments on a new definition.
+    pub fn register_generic_record(
+        &mut self,
+        source_definition: &str,
+        target_definition: &str,
+        mut construct: impl FnMut(ObjectId, &Object) -> io::Result<Vec<super::object_stream::Value>>
+        + 'a,
+    ) -> Result<(), RegistrationClosed> {
+        let target = target_definition.to_owned();
+        self.register(source_definition, move |id, object| {
+            let Object::Record { class, .. } = object else {
+                unreachable!()
+            };
+            let arguments = class
+                .split_once('<')
+                .and_then(|(_, arguments)| arguments.strip_suffix('>'))
+                .filter(|arguments| !arguments.is_empty())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "expected a closed generic record",
+                    )
+                })?;
+            Ok(Object::Record {
+                class: format!("{target}<{arguments}>"),
+                fields: construct(id, object)?,
+            })
+        })
+    }
+
+    pub fn registration_count(&self) -> usize {
+        self.registrations.len()
+    }
+
     /// Stop fallback to a more general registration when this type matches.
     pub fn disable(&mut self, class: impl Into<String>) -> Result<(), RegistrationClosed> {
         self.set(class.into(), None)

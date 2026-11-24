@@ -5,7 +5,7 @@ Antmicro.Migrant.Tests.HooksTests	All 40 reflection read/write cases are ported 
 Antmicro.Migrant.Tests.OpenStreamSerializationTests	All seven reflection-mode open-stream cases are ported, including weak references. The other 21 cases need generated reader and/or writer paths.
 Antmicro.Migrant.Tests.SerializationTests	Stamped and unstamped reflection modes restore record, array and ordered list graphs. Remaining settings and cases need generated reader/writer paths, collection-as-user-object layouts, dictionary and other CLR codecs, surrogate and hook dispatch, and delegate/state restoration.
 Antmicro.Migrant.Tests.StampingTests	All four reflection-mode stamp configurations are ported. The remaining 12 cases require the generated writer and/or reader paths.
-Antmicro.Migrant.Tests.SurrogateTests	Reflection substitutions cover exact, inherited, interface and open-generic matching. Remaining cases need generic converter generation/cache behavior, read-side callback ordering, or generated reader/writer paths.
+Antmicro.Migrant.Tests.SurrogateTests	Reflection substitutions cover exact, inherited, interface and open-generic matching. Remaining cases need the read-side callback ordering for multiply referenced surrogates and generated reader/writer paths, including generated converter caching.
 Antmicro.Migrant.Tests.TwoDomainTests	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
 Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
 Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests	There is no RegistersEnumParser for C enum extraction with preprocessor conditions, aliases and indexed registers.

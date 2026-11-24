@@ -17,6 +17,16 @@ const fn stamp(
 }
 
 const STAMPS: &[TypeStamp<'static>] = &[
+    stamp(
+        "ClassWithGenericSurrogates",
+        &[
+            ("fieldA", FieldKind::Reference),
+            ("fieldB", FieldKind::Reference),
+            ("fieldC", FieldKind::Reference),
+        ],
+    ),
+    stamp("SurrogatingClass<int>", &[]),
+    stamp("SurrogatingClass<float>", &[]),
     stamp("System.Object", &[]),
     stamp("System.Int32", &[("m_value", FieldKind::Integer)]),
     stamp("IntSurrogate", &[("Cwi.Field", FieldKind::Integer)]),
@@ -577,4 +587,54 @@ modes!(
     boxed_value_surrogate_plain,
     boxed_value_surrogate_stamped,
     boxed_value_surrogate
+);
+
+fn generic_registration_count(stamped: bool) {
+    const DEFINITION: &str = "ClassToBeSurrogated<>";
+    let mut graph = Graph::default();
+    let elements = [
+        "ClassToBeSurrogated<int>",
+        "ClassToBeSurrogated<float>",
+        "ClassToBeSurrogated<int>",
+    ]
+    .map(|class| Value::Ref(graph.insert(record(class, vec![]))));
+    let root = graph.insert(record("ClassWithGenericSurrogates", elements.to_vec()));
+
+    let mut encode = Surrogates::default();
+    for class in ["ClassToBeSurrogated<int>", "ClassToBeSurrogated<float>"] {
+        encode.describe(class, &[DEFINITION]).unwrap();
+    }
+    encode
+        .register_generic_record(DEFINITION, "SurrogatingClass", |_, _| Ok(Vec::new()))
+        .unwrap();
+    let before = encode.registration_count();
+    round_trip(
+        &graph,
+        root,
+        stamped,
+        &mut encode,
+        &mut Surrogates::default(),
+        |copy, id| {
+            let Some(Object::Record { class, fields }) = copy.get(id) else {
+                panic!("expected custom object");
+            };
+            assert_eq!(class, "ClassWithGenericSurrogates");
+            assert_eq!(fields.len(), 3);
+            let expected = [
+                "SurrogatingClass<int>",
+                "SurrogatingClass<float>",
+                "SurrogatingClass<int>",
+            ];
+            for (field, expected) in fields.iter().zip(expected) {
+                assert_eq!(copy.get(ref_id(field)), Some(&record(expected, vec![])));
+            }
+        },
+    );
+    assert_eq!(encode.registration_count() - before, 0);
+}
+
+modes!(
+    generic_registration_count_plain,
+    generic_registration_count_stamped,
+    generic_registration_count
 );
