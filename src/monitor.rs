@@ -70,6 +70,7 @@ pub struct Boot {
 #[derive(Default)]
 pub struct Session {
     macros: HashMap<String, Macro>,
+    aliases: HashMap<String, String>,
     variables: HashMap<String, String>,
     machine: Option<String>,
     number_mode: NumberMode,
@@ -97,7 +98,8 @@ impl NumberMode {
 const SESSION_SNAPSHOT_V1: &[u8; 9] = b"PENVSESS\x01";
 const SESSION_SNAPSHOT_V2: &[u8; 9] = b"PENVSESS\x02";
 const SESSION_SNAPSHOT_V3: &[u8; 9] = b"PENVSESS\x03";
-const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x04";
+const SESSION_SNAPSHOT_V4: &[u8; 9] = b"PENVSESS\x04";
+const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x05";
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
 fn write_snapshot(
@@ -127,11 +129,14 @@ struct SnapshotMetadata {
     cpu_mips: Option<u32>,
     variables: HashMap<String, String>,
     macros: HashMap<String, Macro>,
+    aliases: HashMap<String, String>,
 }
 
 fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMetadata>, String> {
     let header = input.fill_buf().map_err(|e| e.to_string())?;
     let version = if header.starts_with(SESSION_SNAPSHOT) {
+        5
+    } else if header.starts_with(SESSION_SNAPSHOT_V4) {
         4
     } else if header.starts_with(SESSION_SNAPSHOT_V3) {
         3
@@ -198,6 +203,17 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
             }
         }
     }
+    let mut aliases = HashMap::new();
+    if version >= 5 {
+        let count = read_size(&mut data)?;
+        for _ in 0..count {
+            let name = read_string(&mut data)?;
+            let command = read_string(&mut data)?;
+            if name.is_empty() || command.is_empty() || aliases.insert(name, command).is_some() {
+                return Err("invalid monitor alias snapshot".into());
+            }
+        }
+    }
     let mut variables = HashMap::new();
     while !data.is_empty() {
         let key = read_string(&mut data)?;
@@ -206,7 +222,7 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
             return Err("invalid monitor variable snapshot".into());
         }
     }
-    Ok(Some(SnapshotMetadata { selected, quantum, cpu_mips, variables, macros }))
+    Ok(Some(SnapshotMetadata { selected, quantum, cpu_mips, variables, macros, aliases }))
 }
 
 fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<String>), String> {
@@ -248,7 +264,7 @@ impl Session {
             data.extend_from_slice(&value.to_le_bytes());
             Ok(())
         }
-        if !self.macros.is_empty() {
+        if !self.macros.is_empty() || !self.aliases.is_empty() {
             let mut macros: Vec<_> = self.macros.iter().collect();
             macros.sort_unstable_by_key(|(name, _)| *name);
             encode_size(&mut data, macros.len())?;
@@ -262,12 +278,27 @@ impl Session {
                 }
             }
         }
+        if !self.aliases.is_empty() {
+            let mut aliases: Vec<_> = self.aliases.iter().collect();
+            aliases.sort_unstable_by_key(|(name, _)| *name);
+            encode_size(&mut data, aliases.len())?;
+            for (name, command) in aliases {
+                encode(&mut data, name)?;
+                encode(&mut data, command)?;
+            }
+        }
         for (key, value) in entries {
             encode(&mut data, key)?;
             encode(&mut data, value)?;
         }
         write_snapshot(path, |file| {
-            let version = if self.macros.is_empty() { SESSION_SNAPSHOT_V3 } else { SESSION_SNAPSHOT };
+            let version = if !self.aliases.is_empty() {
+                SESSION_SNAPSHOT
+            } else if !self.macros.is_empty() {
+                SESSION_SNAPSHOT_V4
+            } else {
+                SESSION_SNAPSHOT_V3
+            };
             file.write_all(version).map_err(|e| e.to_string())?;
             file.write_all(&machine.monitor_quantum.to_le_bytes()).map_err(|e| e.to_string())?;
             let mips = if machine.cpu_less { 0 } else { (machine.bus.monitor_step_hz() / 1_000_000) as u32 };
@@ -281,7 +312,7 @@ impl Session {
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
         let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
         let result = (|| {
-            let Some(SnapshotMetadata { selected, quantum, cpu_mips, mut variables, macros }) =
+            let Some(SnapshotMetadata { selected, quantum, cpu_mips, mut variables, macros, aliases }) =
                 read_snapshot_metadata(&mut input)?
             else {
                 return machine.read_boot_snapshot(&mut input);
@@ -309,6 +340,7 @@ impl Session {
             }
             self.variables = variables;
             self.macros = macros;
+            self.aliases = aliases;
             Ok(())
         })();
         result.map_err(|e| format!("{}: {e}", path.display()))
@@ -1315,13 +1347,17 @@ pub fn serve(
                 [verb @ ("include" | "i" | "ExecuteScript"), value] => Some((*verb, *value)),
                 _ => None,
             };
-            if include.is_some() || matches!(words.first(), Some(&("macro" | "runMacro"))) {
+            if include.is_some() || words.first().is_some_and(|verb|
+                matches!(*verb, "alias" | "macro" | "runMacro")
+                    || monitor_alias(&session.aliases, session.machine.as_deref(), verb).is_some())
+            {
                 let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
                 let mut state = ScriptState {
                     boot: std::mem::take(&mut boot),
                     machine: true,
                     variables: session.variables.clone(),
                     macros: session.macros.clone(),
+                    aliases: session.aliases.clone(),
                     ..ScriptState::default()
                 };
                 if let Some((verb, value)) = include {
@@ -1342,7 +1378,7 @@ pub fn serve(
                     return Err("use live Save and Load as separate monitor commands".into());
                 }
                 boot = state.boot;
-                included_state = Some((state.variables, state.macros));
+                included_state = Some((state.variables, state.macros, state.aliases));
                 return Ok(());
             }
             if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables)? {
@@ -1354,9 +1390,10 @@ pub fn serve(
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), []) => {
                 session.number_mode = boot.session.number_mode;
-                if let Some((variables, macros)) = included_state.take() {
+                if let Some((variables, macros, aliases)) = included_state.take() {
                     session.variables = variables;
                     session.macros = macros;
+                    session.aliases = aliases;
                 }
                 frame(&mut output, "OK", &[])
             }
@@ -1446,9 +1483,10 @@ pub fn serve(
                 match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, true, None) {
                     Ok((Stop::ScriptComplete, _)) => {
                         session.number_mode = boot.session.number_mode;
-                        if let Some((variables, macros)) = included_state.take() {
+                        if let Some((variables, macros, aliases)) = included_state.take() {
                             session.variables = variables;
                             session.macros = macros;
+                            session.aliases = aliases;
                         }
                         frame(&mut output, if echo_assertion { "MATCH" } else { "OK" }, &bytes)
                     }
@@ -1946,6 +1984,7 @@ struct Macro {
 struct ScriptState {
     variables: HashMap<String, String>,
     macros: HashMap<String, Macro>,
+    aliases: HashMap<String, String>,
     visiting: HashSet<PathBuf>,
     boot: Boot,
     machine: bool,
@@ -2114,11 +2153,19 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
     let mut boot = state.boot;
     boot.session.variables = state.variables;
     boot.session.macros = state.macros;
+    boot.session.aliases = state.aliases;
     if !session && !state.machine && !boot.has_platform() && !boot.started
         && (!boot.monitor_output.is_empty() || !boot.runtime.is_empty())
         && boot.runtime.iter().all(|command| is_console_action(&command.action))
     {
         boot.console_only = true;
+        return Ok(boot);
+    }
+    // A framed session can hold monitor state before it has a guest.
+    if session && !state.machine && !boot.has_platform() && !boot.started
+        && boot.runtime.iter().all(|command| is_console_action(&command.action))
+    {
+        boot.empty_machine = true;
         return Ok(boot);
     }
     if state.machine && !boot.has_platform() && (session || !boot.runtime.is_empty())
@@ -2349,6 +2396,19 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     _ => load_file(&included, root, state).map_err(|e| error(&e))?,
                 }
             }
+            ["alias", name, command] => {
+                let command = monitor_string(command).unwrap_or_else(|| (*command).to_owned());
+                if name.is_empty() || command.trim().is_empty()
+                    || !name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '.'))
+                {
+                    return Err(error("invalid monitor alias"));
+                }
+                let scope = state.boot.session.machine.as_deref().map(normalized_monitor_scope);
+                let key = if name.contains('.') { (*name).to_owned() }
+                    else { format!("{}.{name}", scope.as_deref().unwrap_or("global")) };
+                state.aliases.insert(key, command);
+            }
+            ["alias", ..] => return Err(error("invalid monitor alias parameters")),
             ["runMacro", name] if name.starts_with('$') => {
                 let body = state
                     .macros
@@ -2370,17 +2430,25 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     .map_err(|e| format!("{}:{}: {e}", body.script.display(), index + 1))?;
                 }
             }
-            _ => execute(
-                text,
-                &words,
-                &state.variables,
-                &mut state.machine,
-                &mut state.boot,
-                path,
-                root,
-                line + 1,
-            )
-            .map_err(|e| error(&e))?,
+            _ => {
+                if let Err(failure) = execute(
+                    text, &words, &state.variables, &mut state.machine, &mut state.boot,
+                    path, root, line + 1,
+                ) {
+                    let Some(verb) = words.first().filter(|_| {
+                        failure.starts_with("unsupported monitor command")
+                            || failure == "commands after start are unsupported in a boot script"
+                    }) else {
+                        return Err(error(&failure));
+                    };
+                    let Some(command) = monitor_alias(&state.aliases, state.boot.session.machine.as_deref(), verb) else {
+                        return Err(error(&failure));
+                    };
+                    let expanded = format!("{command}{}", &text[verb.len()..]);
+                    let alias_source = canonical.with_file_name(format!("<alias:{verb}>"));
+                    load_text(path, alias_source, root, state, &expanded).map_err(|e| error(&e))?;
+                }
+            }
         }
         if let Some(RuntimeCommand {
             line: command_line,
@@ -2492,7 +2560,7 @@ fn assign_variable(
     if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') || value.is_empty() {
         return Err("invalid monitor variable assignment".into());
     }
-    let scope = machine.map(|name| name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"));
+    let scope = machine.map(normalized_monitor_scope);
     let local = scope.as_ref().and_then(|scope| name.strip_prefix(scope)?.strip_prefix('.'));
     if !conditional || variable_binding(variables, name).is_none() {
         let anchored = anchored_path(value, monitor_origin(variables), variables)?
@@ -2509,6 +2577,16 @@ fn assign_variable(
         }
     }
     Ok(true)
+}
+
+fn normalized_monitor_scope(name: &str) -> String {
+    name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
+}
+
+fn monitor_alias<'a>(aliases: &'a HashMap<String, String>, machine: Option<&str>, verb: &str) -> Option<&'a String> {
+    aliases.get(verb)
+        .or_else(|| machine.and_then(|name| aliases.get(&format!("{}.{verb}", normalized_monitor_scope(name)))))
+        .or_else(|| aliases.get(&format!("global.{verb}")))
 }
 
 fn variable_binding<'a>(variables: &'a HashMap<String, String>, name: &str) -> Option<&'a String> {
@@ -4441,6 +4519,22 @@ mod tests {
         let mut remaining = String::new();
         stream.read_to_string(&mut remaining).unwrap();
         assert_eq!(remaining, runtime);
+    }
+
+    #[test]
+    fn monitor_alias_expands_arguments_and_rejects_cycles() {
+        let script = r#"alias say echo
+alias greet say
+greet "hello world"
+"#;
+        let boot = load_script(Path::new("aliases.resc"), Path::new("."), false, Some(script)).unwrap();
+        let mut output = Vec::new();
+        run_console_script(&boot, &mut output).unwrap();
+        assert_eq!(output, b"hello world\n");
+
+        let cycle = "alias first second\nalias second first\nfirst";
+        let result = load_script(Path::new("aliases.resc"), Path::new("."), false, Some(cycle));
+        assert!(result.err().unwrap().contains("recursive"));
     }
 
     #[test]
