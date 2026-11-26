@@ -207,6 +207,7 @@ enum TesterPort {
     LiteX,
     Nrf(usize),
     Rv64(usize),
+    Ns16550,
 }
 
 enum TesterHistory {
@@ -449,6 +450,7 @@ pub struct Bus {
     named_stm32_gpios: Vec<(String, u32)>,
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
+    ns16550_name: Option<String>,
     litex_uart: Option<LiteXUart>,
     litex_timer: Option<LiteXTimer>,
     pub litex_cpu_timer: Option<litex::CpuTimer>,
@@ -3562,12 +3564,25 @@ impl Bus {
         if let Some(watchdog) = self.andes_watchdogs.iter().find(|watchdog| watchdog.name == name) {
             return (offset < crate::andes_watchdog::AndesWatchdog::SIZE).then(|| watchdog.base + offset);
         }
+        if let Some(syscon) = self.egis_syscon.as_ref().filter(|syscon| syscon.name == name) {
+            return (offset < crate::egis_syscon::EgisSyscon::SIZE).then(|| syscon.base + offset);
+        }
         let (_, plic) = self.plics.iter().find(|(registered, _)| registered == name)?;
         (u64::from(offset) < plic.size).then(|| plic.base + offset)
     }
 
     pub fn map_ns16550(
         &mut self,
+        base: u32,
+        source: Option<u32>,
+        wide: bool,
+    ) -> Result<(), String> {
+        self.map_named_ns16550("uart", base, source, wide)
+    }
+
+    pub(crate) fn map_named_ns16550(
+        &mut self,
+        name: &str,
         base: u32,
         source: Option<u32>,
         wide: bool,
@@ -3586,6 +3601,7 @@ impl Bus {
             ));
         }
         self.ns16550 = Some(uart);
+        self.ns16550_name = Some(name.to_owned());
         Ok(())
     }
 
@@ -5455,6 +5471,10 @@ impl Bus {
             self.litex_uart.as_mut().unwrap().queue_input(bytes.collect());
             return Ok(());
         }
+        if port == TesterPort::Ns16550 {
+            self.ns16550.as_mut().unwrap().queue_input(bytes.collect());
+            return Ok(());
+        }
         if let TesterPort::Rv64(_) = port {
             self.rv64_devices.select_uart(name.trim_start_matches("sysbus."))?;
             self.rv64_devices.queue_input(bytes.collect());
@@ -5585,6 +5605,8 @@ impl Bus {
             .position(|device| device.is_uart() && device.name == name)
         {
             Ok(TesterPort::Nrf(index))
+        } else if self.ns16550_name.as_deref() == Some(name) {
+            Ok(TesterPort::Ns16550)
         } else if let Some(index) = self.rv64_devices.uart_index(name) {
             Ok(TesterPort::Rv64(index))
         } else {
@@ -7860,9 +7882,15 @@ impl Bus {
         if let Some(device) = self.ns16550.as_mut()
             && let Some(register) = device.register(address, width)
         {
-            return device
-                .write(register, value, uart)
-                .map_err(BusError::Output);
+            if self.uart_testers.is_empty() && self.uart_logs.is_empty() {
+                return device.write(register, value, uart).map_err(BusError::Output);
+            }
+            let mut bytes = Vec::new();
+            device.write(register, value, &mut bytes).map_err(BusError::Output)?;
+            uart.write_all(&bytes).map_err(BusError::Output)?;
+            let console = self.monitor_log_enabled(1);
+            self.observe_uart_output(TesterPort::Ns16550, &bytes, console);
+            return Ok(());
         }
         if width == 4
             && let Some((_, plic)) = self.plics.iter_mut().find(|(_, plic)| plic.contains(address))

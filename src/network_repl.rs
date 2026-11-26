@@ -804,7 +804,7 @@ fn build_machine_with_timing(
             keys(uart, &[])?;
             machine
                 .bus
-                .map_ns16550(uart.address()?, None, false)
+                .map_named_ns16550(&uart.name, uart.address()?, None, false)
                 .map_err(|error| uart.error(&error))?;
         }
         if let Some(uart) = uart.filter(|uart| uart.model != "UART.NS16550") {
@@ -1279,7 +1279,7 @@ fn build_machine_with_timing(
                 .ok_or_else(|| entry.error("expected a valid NS16550 IRQ connection to PLIC"))?;
             machine
                 .bus
-                .map_ns16550(entry.address()?, Some(source), wide.unwrap_or(false))
+                .map_named_ns16550(&entry.name, entry.address()?, Some(source), wide.unwrap_or(false))
                 .map_err(|e| entry.error(&e))?;
         }
     }

@@ -1691,7 +1691,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .ok_or_else(|| entry.error("expected a valid NS16550 IRQ connection to PLIC"))?;
             machine
                 .bus
-                .map_ns16550(entry.address()?, Some(source), wide.unwrap_or(false))
+                .map_named_ns16550(&entry.name, entry.address()?, Some(source), wide.unwrap_or(false))
                 .map_err(|e| entry.error(&e))?;
         }
     }

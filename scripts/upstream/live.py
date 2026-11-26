@@ -382,6 +382,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 re.fullmatch(r"(?:printenv|lastLog(?:\s+\S+)?|emulation\s+IsStarted)", command)
                 or re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
                 or re.match(r"(?:sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)|[\w.]+\s+GetRegister)\s", command)
+                or re.fullmatch(r"[\w.]+\s+Read(?:DoubleWord|ByteUsingDoubleWord|WordUsingDoubleWord)\s+\S+", command)
+                or re.fullmatch(r"[\w.]+\s+(?:APBClockFrequency|RootClockFrequency|IRQ\s+IsSet)", command)
                 or re.fullmatch(r"sysbus IsPeripheralEnabled [\w.]+", command)
                 or re.fullmatch(r"[\w.]+ (?:Config|Address)CSRRead \S+", command)
                 or re.fullmatch(r"[\w.]+\s+(?:PC|SP|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency|PerformanceInMips|CSRValidation)", command)

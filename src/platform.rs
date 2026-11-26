@@ -3006,7 +3006,7 @@ fn load_platform(
             }
             machine
                 .bus
-                .map_ns16550(entry.address()?, source, wide.unwrap_or(false))
+                .map_named_ns16550(&entry.name, entry.address()?, source, wide.unwrap_or(false))
                 .map_err(|e| entry.error(&e))?;
         }
     }
