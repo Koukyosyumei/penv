@@ -611,6 +611,20 @@ impl Machine {
                 .map_err(|_| "register value exceeds Cortex-M width")?;
             return hart.monitor_integer_register(index, value).map(|value| value.map(u64::from));
         }
+        if register == "pc" {
+            return match value {
+                Some(value) if let Some(cpu) = &mut hart.rv64 => {
+                    cpu.set_program_counter(value);
+                    Ok(None)
+                }
+                Some(value) => {
+                    let address = u32::try_from(value).map_err(|_| "PC exceeds RV32 width")?;
+                    self.set_named_entry(name, address)?;
+                    Ok(None)
+                }
+                None => Ok(Some(hart.program_counter())),
+            };
+        }
         if register == "priv" {
             return match &mut hart.rv64 {
                 Some(cpu) => cpu.privilege.monitor_privilege(value),
