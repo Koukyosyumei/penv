@@ -44,6 +44,7 @@ pub struct Boot {
     pub session: Session,
     pub serial_analyzer: Option<String>,
     pub image: Option<Asset>,
+    pub prior_elf_images: Vec<(Asset, bool)>,
     pub hex: bool,
     pub vector_tables: Vec<(String, u32)>,
     pub runtime: Vec<RuntimeCommand>,
@@ -1814,7 +1815,9 @@ fn live_load_elf(
         let path = asset.input_path(root, assets)?;
         let file = fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         crate::image::load(machine, file, false, Some(virtual_addresses), false)
-            .map_err(|error| format!("{}: {error}", path.display()))
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        machine.monitor_firmware = Some(path);
+        Ok(())
     })())
 }
 
@@ -4920,11 +4923,14 @@ fn execute(
                 .push(SdAttachment::parse(args, resolve, script)?);
         }
         ["sysbus", "LoadELF", value, options @ ..]
-            if boot.has_platform() && boot.image.is_none() && options.len() <= 1 =>
+            if boot.has_platform() && !boot.hex && options.len() <= 1 =>
         {
-            boot.use_virtual_elf_addresses = load_elf_address_mode(options)?;
+            let virtual_addresses = load_elf_address_mode(options)?;
             let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
-            boot.image = Some(Asset::new(file, script));
+            if let Some(previous) = boot.image.replace(Asset::new(file, script)) {
+                boot.prior_elf_images.push((previous, boot.use_virtual_elf_addresses));
+            }
+            boot.use_virtual_elf_addresses = virtual_addresses;
         }
         ["sysbus", "LoadHEX", value] if boot.has_platform() && boot.image.is_none() => {
             let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;

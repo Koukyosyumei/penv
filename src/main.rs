@@ -1429,6 +1429,7 @@ fn run() -> Result<ExitCode, String> {
         return Err("--raw and --hex are mutually exclusive".into());
     }
     let mut binaries = Vec::new();
+    let mut prior_elf_images = Vec::new();
     let mut boot_pcs = Vec::new();
     let mut vector_tables = Vec::new();
     let mut runtime = Vec::new();
@@ -1624,6 +1625,9 @@ fn run() -> Result<ExitCode, String> {
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
         hex = boot.hex;
+        for (image, virtual_addresses) in boot.prior_elf_images {
+            prior_elf_images.push((image.input_path(root, asset_dir.as_deref())?, virtual_addresses));
+        }
         if path.is_some() && boot.image.is_none() {
             return Err(
                 "a firmware override requires a LoadELF or LoadHEX command in the script".into(),
@@ -1979,6 +1983,11 @@ fn run() -> Result<ExitCode, String> {
         }
         if log_function_names {
             machine.enable_function_logging()?;
+        }
+        for (path, virtual_addresses) in &prior_elf_images {
+            let file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            image::load(&mut machine, file, false, Some(*virtual_addresses), false)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
         }
         if let Some(path) = path.as_deref() {
             let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;

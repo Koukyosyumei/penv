@@ -475,6 +475,18 @@ fn apply_repl_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
             && entry.registration.is_none()
             && !entry.body.is_empty()
             && let Some(&index) = declarations.get(&entry.name)
+            && matches!(merged[index].model.as_str(), "UART.STM32F7_USART" | "UART.STM32_UART")
+            && entry.body.iter().all(|(_, text)| {
+                text.split_once("->").is_some_and(|(source, _)| {
+                    matches!(source.trim(), "ReceiveDmaRequest" | "TransmitDmaRequest")
+                })
+            })
+        {
+            merged[index].body.extend(entry.body);
+        } else if entry.model.is_empty()
+            && entry.registration.is_none()
+            && !entry.body.is_empty()
+            && let Some(&index) = declarations.get(&entry.name)
             && matches!(
                 merged[index].model.as_str(),
                 "Timers.STM32_Timer" | "GPIOPort.STM32_GPIOPort"
