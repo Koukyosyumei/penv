@@ -147,16 +147,26 @@ class Endpoint:
     def fetch(self, url):
         filename = url.rsplit("/", 1)[1]
         pin = re.search(r"-s_(\d+)-([0-9a-f]{40})$", filename)
-        if not pin:
-            raise Unsupported(f"unversioned firmware: {url}")
+        svd_pins = {
+            "https://dl.antmicro.com/projects/renode/svd/FE310.svd.gz": (
+                5786, "a7d96f7f152eeb9f078c00909160d5902527e67aa54313da2895b8f9780fc333",
+            ),
+        }
+        if pin:
+            size, digest, hash_data = int(pin[1]), pin[2], hashlib.sha1
+        elif url in svd_pins:
+            size, digest = svd_pins[url]
+            hash_data = hashlib.sha256
+        else:
+            raise Unsupported(f"unversioned upstream asset: {url}")
         asset = self.assets / filename
         if not asset.exists():
             with urllib.request.urlopen(url, timeout=30) as response:
-                data = response.read(int(pin[1]) + 1)
+                data = response.read(size + 1)
         else:
             data = asset.read_bytes()
-        if len(data) != int(pin[1]) or hashlib.sha1(data).hexdigest() != pin[2]:
-            raise ValueError(f"upstream firmware integrity check failed: {url}")
+        if len(data) != size or hash_data(data).hexdigest() != digest:
+            raise ValueError(f"upstream asset integrity check failed: {url}")
         if not asset.exists():
             with tempfile.NamedTemporaryFile(dir=self.assets, delete=False) as staged:
                 staged.write(data)

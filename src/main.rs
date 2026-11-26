@@ -1714,9 +1714,9 @@ fn run() -> Result<ExitCode, String> {
                 if f4_repl_timing {
                     network_repl::load_with_timing(platform_path, platform_root.as_deref(), true)?
                 } else {
-                    load_platform(platform_path, platform_root.as_deref(), stm32f0_console)
+                    load_platform_with_assets(platform_path, platform_root.as_deref(), stm32f0_console, asset_dir.as_deref())
                         .or_else(|original| {
-                            if stm32f0_console {
+                            if stm32f0_console || original.starts_with("monitor asset unavailable:") {
                                 return Err(original);
                             }
                             network_repl::load(platform_path, platform_root.as_deref())
@@ -2829,7 +2829,19 @@ fn load_platform(
     root: Option<&std::path::Path>,
     stm32f0_console: bool,
 ) -> Result<Machine, String> {
-    platform::load(path, root, stm32f0_console).or_else(|original| {
+    load_platform_with_assets(path, root, stm32f0_console, None)
+}
+
+fn load_platform_with_assets(
+    path: &std::path::Path,
+    root: Option<&std::path::Path>,
+    stm32f0_console: bool,
+    assets: Option<&std::path::Path>,
+) -> Result<Machine, String> {
+    platform::load_with_assets(path, root, stm32f0_console, assets).or_else(|original| {
+        if original.starts_with("monitor asset unavailable:") {
+            return Err(original);
+        }
         nrf_repl::load(path, root, stm32f0_console)
             .map_err(|error| format!("{original}; nRF REPL: {error}"))
     })

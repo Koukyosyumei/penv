@@ -1,5 +1,5 @@
 use roxmltree::{Document, Node};
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, io::Read, path::Path};
 
 #[derive(Clone, Copy, Default)]
 struct Settings {
@@ -27,13 +27,16 @@ impl Settings {
     }
 }
 
+#[derive(Clone, Debug)]
 struct Register {
+    name: String,
     address: u64,
     width: u64,
     value: u64,
     readable: bool,
 }
 
+#[derive(Clone, Debug)]
 pub struct Svd {
     registers: Vec<Register>,
     bytes: BTreeMap<u64, usize>,
@@ -124,8 +127,16 @@ fn register_settings(
 impl Svd {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
-        let source = std::fs::read_to_string(path)
-            .map_err(|error| format!("{}: {error}", path.display()))?;
+        let data = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let mut source = String::new();
+        if data.starts_with(&[0x1f, 0x8b]) {
+            flate2::read::GzDecoder::new(data.as_slice())
+                .read_to_string(&mut source)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+        } else {
+            source =
+                String::from_utf8(data).map_err(|error| format!("{}: {error}", path.display()))?;
+        }
         Self::parse(&source)
     }
 
@@ -156,11 +167,26 @@ impl Svd {
             .children()
             .filter(|node| node.has_tag_name("peripheral"))
         {
-            mandatory(peripheral, "name")?;
+            let name = mandatory(peripheral, "name")?;
             let base = address(peripheral, "baseAddress")?;
-            let settings = defaults.apply(peripheral)?;
-            if let Some(registers) = child(peripheral, "registers") {
-                result.scan(registers, base, settings, big_endian)?;
+            let mut sources = vec![peripheral];
+            while let Some(reference) = sources.last().unwrap().attribute("derivedFrom") {
+                let source = named_child(peripherals, "peripheral", reference)
+                    .ok_or_else(|| format!("unknown derived peripheral {reference}"))?;
+                if sources.contains(&source) {
+                    return Err(format!("cyclic peripheral derivation: {reference}"));
+                }
+                sources.push(source);
+            }
+            let settings = sources
+                .iter()
+                .rev()
+                .try_fold(defaults, |settings, source| settings.apply(*source))?;
+            if let Some(registers) = sources
+                .into_iter()
+                .find_map(|source| child(source, "registers"))
+            {
+                result.scan(registers, base, settings, big_endian, name)?;
             }
         }
         Ok(result)
@@ -172,53 +198,98 @@ impl Svd {
         base: u64,
         inherited: Settings,
         big_endian: bool,
+        prefix: &str,
     ) -> Result<(), String> {
         for node in scope
             .children()
             .filter(|node| node.has_tag_name("register") || node.has_tag_name("cluster"))
         {
-            mandatory(node, "name")?;
+            let name = mandatory(node, "name")?;
             let address = base
                 .checked_add(address(node, "addressOffset")?)
                 .ok_or("address overflow")?;
             let settings = register_settings(node, inherited, &mut Vec::new())?;
-            if node.has_tag_name("cluster") {
-                self.scan(node, address, settings, big_endian)?;
-            } else {
-                let size = settings
-                    .size
-                    .filter(|size| *size > 0)
-                    .ok_or("missing or invalid register size")?;
-                let width = u64::from(size.div_ceil(8));
-                let value = match size {
-                    1..=63 => settings.reset & ((1u64 << size) - 1),
-                    64 => settings.reset,
-                    _ => 0,
-                };
-                let value = if big_endian && width <= 8 {
-                    value.swap_bytes() >> (64 - width * 8)
+            let count = optional_number(node, "dim")?.unwrap_or(1);
+            let stride = optional_number(node, "dimIncrement")?.unwrap_or(0);
+            if count > 65_536 {
+                return Err(format!("SVD dimension is too large for {name}"));
+            }
+            for index in 0..count {
+                let address = index
+                    .checked_mul(stride)
+                    .and_then(|delta| address.checked_add(delta))
+                    .ok_or("address overflow")?;
+                let name = format!("{prefix}:{}", name.replace("%s", &index.to_string()));
+                if node.has_tag_name("cluster") {
+                    self.scan(node, address, settings, big_endian, &name)?;
                 } else {
-                    value
-                };
-                let end = address
-                    .checked_add(width)
-                    .ok_or("register interval overflow")?;
-                // CMSIS-SVD reset values are at most 64 bits. Wider registers
-                // have zero reset data and are clipped to the supported width.
-                let end = end.min(address.saturating_add(8));
-                let index = self.registers.len();
-                self.registers.push(Register {
-                    address,
-                    width,
-                    value,
-                    readable: settings.readable.unwrap_or(true),
-                });
-                for byte in address..end {
-                    self.bytes.entry(byte).or_insert(index);
+                    let size = settings
+                        .size
+                        .filter(|size| *size > 0)
+                        .ok_or("missing or invalid register size")?;
+                    let width = u64::from(size.div_ceil(8));
+                    let value = match size {
+                        1..=63 => settings.reset & ((1u64 << size) - 1),
+                        64 => settings.reset,
+                        _ => 0,
+                    };
+                    let value = if big_endian && width <= 8 {
+                        value.swap_bytes() >> (64 - width * 8)
+                    } else {
+                        value
+                    };
+                    let end = address
+                        .checked_add(width)
+                        .ok_or("register interval overflow")?;
+                    // CMSIS-SVD reset values are at most 64 bits. Wider registers
+                    // have zero reset data and are clipped to the supported width.
+                    let end = end.min(address.saturating_add(8));
+                    let index = self.registers.len();
+                    self.registers.push(Register {
+                        name,
+                        address,
+                        width,
+                        value,
+                        readable: settings.readable.unwrap_or(true),
+                    });
+                    for byte in address..end {
+                        self.bytes.entry(byte).or_insert(index);
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn contains(&self, address: u32, width: usize) -> bool {
+        self.bytes
+            .range(u64::from(address)..u64::from(address) + width as u64)
+            .next()
+            .is_some()
+    }
+
+    pub(crate) fn access(&self, address: u32, width: usize, write: Option<u32>) -> Option<u32> {
+        let kind = match width {
+            1 => "Byte",
+            2 => "Word",
+            4 => "DoubleWord",
+            _ => return None,
+        };
+        let address = u64::from(address);
+        let (_, index) = self.bytes.range(address..address + width as u64).next()?;
+        let name = &self.registers[*index].name;
+        let value = self.read(address, width).unwrap_or(0) as u32;
+        let message = if let Some(value) = write {
+            format!(
+                "Write{kind} of value 0x{value:X} to an unimplemented register {name} (0x{address:X}) generated from SVD"
+            )
+        } else {
+            format!(
+                "Read{kind} from an unimplemented register {name} (0x{address:X}), returning a value from SVD: 0x{value:X}"
+            )
+        };
+        crate::monitor_log::record(2, &message);
+        Some(value)
     }
 
     pub fn read(&self, address: u64, width: usize) -> Option<u64> {

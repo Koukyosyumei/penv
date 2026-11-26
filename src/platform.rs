@@ -531,11 +531,15 @@ pub(crate) fn validate_entry_properties<'a, S>(
 }
 
 pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<Machine, String> {
-    load_platform(path, root, true, stm32f0_console)
+    load_with_assets(path, root, stm32f0_console, None)
+}
+
+pub fn load_with_assets(path: &Path, root: Option<&Path>, stm32f0_console: bool, assets: Option<&Path>) -> Result<Machine, String> {
+    load_platform(path, root, true, stm32f0_console, assets)
 }
 
 pub fn check(path: &Path) -> Result<(), String> {
-    load_platform(path, None, false, false).map(|_| ())
+    load_platform(path, None, false, false, None).map(|_| ())
 }
 
 fn load_platform(
@@ -543,6 +547,7 @@ fn load_platform(
     root: Option<&Path>,
     require_ram: bool,
     stm32f0_console: bool,
+    assets: Option<&Path>,
 ) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
@@ -627,7 +632,7 @@ fn load_platform(
     let mut litex_i2s = Vec::new();
     for entry in &entries {
         if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
-            map_sysbus_ranges(entry, &mut machine.bus)?;
+            map_sysbus_ranges(entry, &mut machine.bus, root.unwrap_or(Path::new(".")), assets)?;
             continue;
         }
         if !names.insert(&entry.name) {
@@ -3468,7 +3473,7 @@ fn multi_registration<'a>(
     }
 }
 
-fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
+fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus, root: &Path, assets: Option<&Path>) -> Result<(), String> {
     let [(_, init), ranges @ ..] = entry.body.as_slice() else {
         return Err(entry.error("expected a sysbus init block"));
     };
@@ -3481,6 +3486,11 @@ fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
         let (command, range) = text
             .split_once(char::is_whitespace)
             .ok_or_else(|| error("expected a sysbus init command"))?;
+        if command == "ApplySVD" {
+            let path = crate::monitor::Asset::new(range.trim(), &entry.source).input_path(root, assets)?;
+            bus.svd.push(crate::svd::Svd::open(&path).map_err(|e| error(&e))?);
+            continue;
+        }
         let (range, tail) = range
             .trim_start()
             .strip_prefix('<')

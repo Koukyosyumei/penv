@@ -498,6 +498,7 @@ pub struct Bus {
     stm32_dma: Option<Stm32Dma>,
     policy_tags: Vec<BusTag>,
     pub unhandled_access: Option<UnhandledAccess>,
+    pub(crate) svd: Vec<crate::svd::Svd>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
     stm32f4_rcc: Option<Stm32F4Rcc>,
@@ -4349,6 +4350,7 @@ impl Bus {
             .iter()
             .find(|tag| tag.start <= address && address <= tag.end);
         let tagged = tag.is_some() || self.stm32f0_tagged(address, width);
+        let svd_register = self.svd.iter().any(|device| device.contains(address, width));
         if tag.is_some_and(|tag| tag.throws)
             || self.unhandled_access == Some(UnhandledAccess::ThrowException)
             || (!tagged
@@ -4356,7 +4358,7 @@ impl Bus {
         {
             return Err(BusError::AddressError(address));
         }
-        if tagged || monitor || matches!(self.unhandled_access, Some(UnhandledAccess::Report | UnhandledAccess::DoNotReport)) {
+        if tagged || monitor || svd_register || matches!(self.unhandled_access, Some(UnhandledAccess::Report | UnhandledAccess::DoNotReport)) {
             let mask = u32::MAX >> (32 - width * 8);
             return Ok(tag.map_or(0, |tag| tag.default as u32 & mask));
         }
@@ -6505,6 +6507,11 @@ impl Bus {
             }
             Err(BusError::Unmapped(..)) => {
                 let value = self.unhandled_value(address, N, monitor)?;
+                if self.unhandled_access != Some(UnhandledAccess::DoNotReport) {
+                    if let Some(svd_value) = self.svd.iter().find_map(|device| device.access(address, N, None)) {
+                        return Ok(svd_value);
+                    }
+                }
                 if monitor || self.unhandled_access == Some(UnhandledAccess::Report) {
                     self.log_unmapped_monitor_access(address, N, None);
                 }
@@ -7308,6 +7315,11 @@ impl Bus {
             }
             Err(BusError::Unmapped(..)) => {
                 self.unhandled_value(address, width, monitor)?;
+                if self.unhandled_access != Some(UnhandledAccess::DoNotReport) {
+                    if self.svd.iter().find_map(|device| device.access(address, width, Some(value))).is_some() {
+                        return Ok(());
+                    }
+                }
                 if monitor {
                     self.log_unmapped_monitor_access(address, width, Some(value));
                 }
@@ -7332,6 +7344,11 @@ impl Bus {
             }
             Err(BusError::Unmapped(..)) => {
                 self.unhandled_value(address, width, false)?;
+                if self.unhandled_access != Some(UnhandledAccess::DoNotReport) {
+                    if self.svd.iter().find_map(|device| device.access(address, width, Some(value))).is_some() {
+                        return Ok(());
+                    }
+                }
                 if self.unhandled_access == Some(UnhandledAccess::Report) {
                     self.log_unmapped_monitor_access(address, width, Some(value));
                 }
