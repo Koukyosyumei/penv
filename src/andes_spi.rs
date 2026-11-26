@@ -10,6 +10,14 @@ pub(crate) struct AndesSpi {
     address_assigned: bool,
     tx_count: u64,
     rx_count: u64,
+    dma: Option<SpiDma>,
+}
+
+pub(crate) struct SpiDma {
+    pub address: u32,
+    pub tx: Option<usize>,
+    pub rx: Option<usize>,
+    command: u8,
 }
 
 impl AndesSpi {
@@ -42,6 +50,7 @@ impl AndesSpi {
             address_assigned: false,
             tx_count: 0,
             rx_count: 0,
+            dma: None,
         }
     }
 
@@ -104,7 +113,13 @@ impl AndesSpi {
         {
             self.warn("Invalid SPI mode or transfer counts");
         } else if self.registers[Self::CONTROL] & 0x18 != 0 {
-            self.warn("SPI DMA is unsupported");
+            let control = self.registers[Self::CONTROL];
+            self.dma = Some(SpiDma {
+                address: self.registers[Self::ADDRESS],
+                tx: (control & 0x10 != 0).then_some(self.registers[Self::TX_COUNT] as usize),
+                rx: (control & 0x08 != 0).then_some(self.registers[Self::RX_COUNT] as usize),
+                command: byte,
+            });
         } else if transfer & (1 << 30) != 0 {
             self.transfer(byte);
             if transfer & (1 << 29) != 0 {
@@ -117,6 +132,40 @@ impl AndesSpi {
         } else if let Some(flash) = &mut self.flash {
             flash.transfer(byte);
             self.flag(Self::TX_THRESHOLD, true);
+        }
+    }
+
+    pub(crate) fn take_dma(&mut self) -> Option<SpiDma> {
+        self.dma.take()
+    }
+
+    pub(crate) fn complete_dma(&mut self, request: &SpiDma, tx: &[u8], rx: &mut [u8]) {
+        let Some(flash) = &mut self.flash else { return };
+        if request.tx.is_some() {
+            flash.transfer(request.command);
+            for &byte in tx {
+                flash.transfer(byte);
+            }
+        }
+        if request.rx.is_some() {
+            flash.transfer(request.command);
+            for byte in rx {
+                *byte = flash.transfer(0);
+                self.receive.push_back(*byte);
+            }
+        }
+        if request.rx.is_some() {
+            self.flag(
+                Self::END,
+                self.receive.is_empty()
+                    || (self.mode() == 2
+                        && self.rx_count == u64::from(self.registers[Self::RX_COUNT]) + 1),
+            );
+        } else {
+            self.flag(
+                Self::END,
+                self.mode() == 1 && self.tx_count == u64::from(self.registers[Self::TX_COUNT]) + 1,
+            );
         }
     }
 
@@ -323,6 +372,30 @@ impl PuyaFlash {
 #[cfg(test)]
 mod tests {
     use super::AndesSpi;
+
+    #[test]
+    fn spi_dma_transfers_flash_status_to_guest_ram() {
+        let mut bus = crate::bus::Bus::default();
+        bus.map_ram(0x8000, 0x1000).unwrap();
+        bus.map_andes_spi(AndesSpi::new(0x4000, "spi".into(), None, Some(0x2000)))
+            .unwrap();
+        let mut sink = std::io::sink();
+        for (offset, value) in [
+            (0x20, 1 << 24),
+            (0x30, 0x10),
+            (0x24, 0x06),
+            (0x10, 0),
+            (0x20, (2 << 24) | (1 << 29)),
+            (0x28, 0x8000),
+            (0x1c, 1),
+            (0x30, 0x08),
+            (0x24, 0x05),
+        ] {
+            bus.write(0x4000 + offset, 4, value, &mut sink).unwrap();
+        }
+        assert_eq!(bus.read::<1>(0x8000).unwrap(), 2);
+        assert_eq!(bus.read::<4>(0x402c).unwrap(), 2);
+    }
 
     #[test]
     fn spi_command_and_fifo_drive_flash_program_status_and_erase() {

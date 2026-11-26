@@ -7783,8 +7783,29 @@ impl Bus {
             rtc.write(address, value);
             return Ok(());
         }
-        if width == 4 && let Some(spi) = self.andes_spi.iter_mut().find(|spi| spi.contains(address)) {
-            spi.write(address, value);
+        if width == 4 && let Some(index) = self.andes_spi.iter().position(|spi| spi.contains(address)) {
+            self.andes_spi[index].write(address, value);
+            if let Some(dma) = self.andes_spi[index].take_dma() {
+                let count = dma.tx.unwrap_or(0).max(dma.rx.unwrap_or(0));
+                if count == 0 {
+                    self.andes_spi[index].complete_dma(&dma, &[], &mut []);
+                    return Ok(());
+                }
+                let guest = dma.address;
+                let (region, offset) = self.ram_location64(u64::from(guest), count)
+                    .ok_or(BusError::Unmapped(guest, count))?;
+                let (tx, rx) = if let Some(count) = dma.tx {
+                    (self.regions[region].bytes[offset..offset + count].to_vec(), dma.rx.unwrap_or(0))
+                } else {
+                    (Vec::new(), dma.rx.unwrap_or(0))
+                };
+                let mut received = vec![0; rx];
+                self.andes_spi[index].complete_dma(&dma, &tx, &mut received);
+                if rx != 0 {
+                    self.memory64(u64::from(guest), rx).ok_or(BusError::Unmapped(guest, rx))?
+                        .copy_from_slice(&received);
+                }
+            }
             return Ok(());
         }
         if width == 4 && let Some(watchdog) = self.andes_watchdogs.iter_mut().find(|watchdog| watchdog.contains(address)) {
