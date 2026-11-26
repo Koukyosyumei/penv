@@ -981,7 +981,10 @@ impl Machine {
         if let Some(cpu) = &mut hart.rv64 {
             cpu.set_program_counter(u64::from(entry));
         }
-        hart.pc = entry;
+        hart.pc = match hart.thumb.as_mut() {
+            Some(thumb) => thumb.patch_monitor_pc(entry, name, &mut std::io::sink())?,
+            None => entry,
+        };
         hart.pc_written = true;
         hart.reset_pc_written |= hart.reset_held;
         Ok(())
@@ -1024,6 +1027,9 @@ impl Machine {
             return Err("VectorTableOffset requires a 128-byte-aligned address".into());
         }
         thumb.set_vector_base(address);
+        if let Some(nvic) = self.bus.nvic.as_mut() {
+            nvic.set_vector_base(address);
+        }
         Ok(())
     }
 
@@ -1076,6 +1082,8 @@ impl Machine {
             .as_mut()
             .ok_or("expected a Cortex-M CPU")?;
         self.primary.pc = thumb.patch_monitor_pc(entry, name, output)?;
+        self.primary.pc_written = true;
+        self.primary.reset_pc_written |= self.primary.reset_held;
         Ok(())
     }
 
@@ -1132,13 +1140,30 @@ impl Machine {
                 let explicit_pc = hart.pc_written.then_some(hart.pc);
                 hart.reset_cortex_m(&mut self.bus)?;
                 if let Some(pc) = explicit_pc {
-                    hart.pc = pc;
+                    hart.pc = hart.thumb.as_mut().unwrap()
+                        .patch_monitor_pc(pc, hart.name.as_deref().unwrap_or("cpu"), &mut std::io::sink())?;
                     hart.reset_pc_written = hart.reset_held;
                 }
                 continue;
             }
             hart.fetch(&mut self.bus)
                 .map_err(|error| format!("hart {}: {error}", hart.csr.hart_id))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_monitor_cortex_step(&mut self, name: &str) -> Result<(), String> {
+        self.cortex_m_cpu(name)?;
+        if self.elapsed_steps() == 0 && self.monitor_firmware.is_none() && !self.primary.pc_written {
+            self.primary.reset_cortex_m(&mut self.bus)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_monitor_bus_context(&self, name: &str) -> Result<(), String> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        if self.cpu_less || self.hart_count() != 1 || self.primary.name.as_deref() != Some(name) {
+            return Err(format!("unsupported system-bus CPU context {name:?}"));
         }
         Ok(())
     }

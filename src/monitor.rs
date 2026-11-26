@@ -541,6 +541,7 @@ enum Action {
     SetMachineCleared(bool),
     FindBytes(FindBytes),
     BusScalar(BusScalar),
+    ContextBusScalar(BusScalar, String),
     RecordTo(PathBuf),
     PlayFrom(PathBuf),
     RtcMode(RtcMode),
@@ -579,6 +580,7 @@ enum Action {
     CpuPc(String, u32),
     CpuSymbolPc(String, String),
     CpuSymbolVectorTable(String, String),
+    CpuVectorTable(String, u32),
     SymbolAddress(String),
     I2cSensorProperty(String, String, String),
     I2cAcceleration(String, usize, i32, bool),
@@ -909,6 +911,8 @@ fn run_commands<'a>(
                 apply_machine_selection(&mut session.machine_cleared, *cleared, session.machine.as_deref(), &mut session.variables);
                 Ok(None)
             }
+            Action::ContextBusScalar(access, context) => machine.validate_monitor_bus_context(context)
+                .and_then(|()| access.apply(&mut machine.bus, &mut output.reply())).map(|()| None),
             Action::BusScalar(access) => {
                 if access.value.is_none() {
                     access.apply(&mut machine.bus, &mut output.reply())
@@ -1071,7 +1075,7 @@ fn run_commands<'a>(
             }
             Action::RunToSyncPoint | Action::RunFor(_) | Action::RunUntil(_) | Action::CpuStep(..) => {
                 let valid_cpu = match &command.action {
-                    Action::CpuStep(cpu, _) => machine.cortex_m_cpu(cpu).map(|_| ()),
+                    Action::CpuStep(cpu, _) => machine.prepare_monitor_cortex_step(cpu),
                     _ => Ok(()),
                 };
                 valid_cpu.and_then(|()| {
@@ -1345,7 +1349,11 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::CpuSymbolPc(cpu, symbol) => machine.set_monitor_symbol_pc(cpu, symbol).map(|()| None),
+            Action::CpuPc(cpu, pc) if machine.is_cortex_m() => {
+                machine.set_cortex_m_monitor_pc(cpu, *pc, &mut output.reply()).map(|()| None)
+            }
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
+            Action::CpuVectorTable(cpu, address) => machine.set_named_vector_table(cpu, *address).map(|()| None),
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
             Action::MachineReset(hooks) => machine.reset_cortex_m_machine().and_then(|()| {
                 for hook in hooks {
@@ -4252,17 +4260,22 @@ fn execute(
                 2
             };
             let address = crate::parse_address64(resolve(address)?)?;
+            let (rest, context) = match rest.split_last() {
+                Some((last, before)) if last.starts_with("context=") => {
+                    (before, Some(unquote(resolve(&last["context=".len()..])?).to_owned()))
+                }
+                _ => (rest, None),
+            };
             let value = match (method.starts_with("Write"), rest) {
                 (true, [value]) => Some(crate::memory_setup::write_value(resolve(value)?, width)?),
                 (false, []) => None,
                 _ => return Err(format!("invalid sysbus {method} arguments")),
             };
-            Some(Action::BusScalar(BusScalar {
-                address,
-                width,
-                value,
-                number_mode: boot.session.number_mode,
-            }))
+            let access = BusScalar { address, width, value, number_mode: boot.session.number_mode };
+            Some(match context {
+                Some(context) => Action::ContextBusScalar(access, context),
+                None => Action::BusScalar(access),
+            })
         }
         ["sysbus", "FindBytes", ..] => Some(Action::FindBytes(FindBytes::parse(text, resolve)?)),
         ["machine", verb @ ("RecordTo" | "PlayFrom"), path, mode @ ..] => {
@@ -4653,6 +4666,10 @@ fn execute(
             Some(Action::CpuSymbolVectorTable(
                 resolve(target)?.trim_start_matches("sysbus.").into(), unquote(resolve(symbol)?).into(),
             ))
+        }
+        [target, "VectorTableOffset", value] if boot.started || !boot.runtime.is_empty() => {
+            let target = resolve(target)?.trim_start_matches("sysbus.").to_owned();
+            Some(Action::CpuVectorTable(target, crate::parse_address(resolve(value)?)?))
         }
         [target, "PC", address] if address.starts_with('`') && address.ends_with('`') => {
             let expression = &address[1..address.len() - 1];
@@ -5069,7 +5086,7 @@ fn execute(
                 && boot.binaries.is_empty()
                 && !matches!(
                     action,
-                    Action::BusScalar(_)
+                    Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)
                         | Action::AssertCpuValue(..)
