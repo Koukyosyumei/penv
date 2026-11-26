@@ -2212,8 +2212,8 @@ fn run_commands<'a>(
                 let address = machine.bus.named_word_register(target, aligned)
                     .ok_or_else(|| format!("unknown peripheral register {target} {offset:#x}"))?;
                 let value = machine.bus.read_scalar::<4>(address, true).map_err(|error| error.to_string())?;
-                writeln!(output.reply(), "0x{:01$x}", (value >> shift) & mask, (*width * 2) as usize)
-                    .map(|()| None).map_err(|error| error.to_string())
+                session.number_mode.print(u64::from((value >> shift) & mask), usize::from(*width), &mut output.reply())
+                    .map(|()| None)
             }
             Action::PeripheralWrite(target, offset, value, width) => {
                 let (aligned, shift, mask) = peripheral_word_access(*offset, *width)?;
