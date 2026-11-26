@@ -181,6 +181,28 @@ impl Stm32Timer {
         self.write(word, (retained & !mask) | ((value & 0xffff) << shift));
     }
 
+    pub(crate) fn quiet_steps(&self, limit: u64) -> u64 {
+        if self.output_changes != 0 || self.capture_levels != self.capture_next || self.dma_requests != 0 {
+            return 0;
+        }
+        if self.registers[0] & ENABLE == 0 || self.active_arr == 0 || self.frequency == 0 {
+            return limit;
+        }
+        let ticks = u64::from(self.registers[10].saturating_sub(self.prescaler)) + 1;
+        let threshold = u128::from(ticks) * u128::from(CORTEX_M_STEP_HZ);
+        let steps = threshold.saturating_sub(u128::from(self.phase)).div_ceil(u128::from(self.frequency));
+        limit.min(steps.saturating_sub(1) as u64)
+    }
+
+    pub(crate) fn advance_quiet(&mut self, steps: u64) {
+        if self.registers[0] & ENABLE != 0 && self.active_arr != 0 {
+            let total = u128::from(self.phase) + u128::from(self.frequency) * u128::from(steps);
+            let cycles = total / u128::from(CORTEX_M_STEP_HZ);
+            self.phase = (total % u128::from(CORTEX_M_STEP_HZ)) as u64;
+            self.prescaler += cycles as u32;
+        }
+    }
+
     pub fn tick(&mut self) -> u32 {
         self.advance(1)
     }

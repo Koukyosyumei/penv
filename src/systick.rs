@@ -127,6 +127,44 @@ impl SysTick {
         self.clock_gated = !clocked;
     }
 
+    pub(crate) fn quiet_steps(&self, limit: u64) -> u64 {
+        if self.clock_gated || self.control & 1 == 0 || (!self.counting && !self.zero_state_reload) {
+            return limit;
+        }
+        let ticks = if self.zero_state_reload && self.current == 0 {
+            u64::from(self.reload) + 1
+        } else if self.current != 0 {
+            u64::from(self.current)
+        } else {
+            return limit;
+        };
+        let steps = match self.frequency {
+            Some(0) => return limit,
+            Some(frequency) => (u128::from(ticks) * u128::from(self.steps_per_second))
+                .saturating_sub(u128::from(self.phase)).div_ceil(u128::from(frequency)) as u64,
+            None => ticks,
+        };
+        limit.min(steps.saturating_sub(1))
+    }
+
+    pub(crate) fn advance_quiet(&mut self, steps: u64) {
+        if self.clock_gated || self.control & 1 == 0 || (!self.counting && !self.zero_state_reload) {
+            return;
+        }
+        let cycles = if let Some(frequency) = self.frequency {
+            let total = u128::from(self.phase) + u128::from(frequency) * u128::from(steps);
+            self.phase = (total % u128::from(self.steps_per_second)) as u64;
+            (total / u128::from(self.steps_per_second)) as u32
+        } else {
+            steps as u32
+        };
+        if self.zero_state_reload {
+            self.tick_zero_state_reload(cycles);
+        } else {
+            self.current = self.current.saturating_sub(cycles);
+        }
+    }
+
     pub fn tick(&mut self) {
         if self.clock_gated || self.control & 1 == 0 || (!self.counting && !self.zero_state_reload)
         {

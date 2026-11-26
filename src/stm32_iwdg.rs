@@ -122,6 +122,10 @@ impl Iwdg {
         self.phase = 0;
     }
 
+    pub(crate) fn events_pending(&self) -> bool {
+        self.running || self.reset_requested
+    }
+
     pub fn tick(&mut self, step_hz: u32) -> bool {
         if self.reset_requested {
             return true;

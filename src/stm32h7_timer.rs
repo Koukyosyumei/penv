@@ -443,6 +443,27 @@ impl Timer {
         }
     }
 
+    pub(crate) fn quiet_steps(&self, limit: u64, step_hz: u32) -> u64 {
+        if self.registers[0] & CEN == 0 || self.active_arr == 0
+            || matches!(self.encoder_mode(), 1..=3) || self.frequency == 0
+        {
+            return limit;
+        }
+        let ticks = u64::from(self.active_psc.saturating_sub(self.divider)) + 1;
+        let threshold = u128::from(ticks) * u128::from(step_hz);
+        let steps = threshold.saturating_sub(u128::from(self.phase)).div_ceil(u128::from(self.frequency));
+        limit.min(steps.saturating_sub(1) as u64)
+    }
+
+    pub(crate) fn advance_quiet(&mut self, steps: u64, step_hz: u32) {
+        if self.registers[0] & CEN != 0 && self.active_arr != 0 && !matches!(self.encoder_mode(), 1..=3) {
+            let total = u128::from(self.phase) + u128::from(self.frequency) * u128::from(steps);
+            let cycles = total / u128::from(step_hz);
+            self.phase = (total % u128::from(step_hz)) as u64;
+            self.divider += cycles as u32;
+        }
+    }
+
     pub fn tick(&mut self, step_hz: u32) {
         self.advance(1, step_hz);
     }

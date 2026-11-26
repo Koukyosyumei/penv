@@ -51,6 +51,16 @@ impl Dwt {
         self.phase %= step_hz;
     }
 
+    pub(crate) fn advance(&mut self, steps: u64, step_hz: u32) {
+        if !self.clocked || self.words[0] & 1 == 0 {
+            return;
+        }
+        let step_hz = u128::from(step_hz);
+        let total = u128::from(self.phase) + u128::from(self.frequency) * u128::from(steps);
+        self.words[1] = self.words[1].wrapping_add((total / step_hz) as u32);
+        self.phase = (total % step_hz) as u64;
+    }
+
     pub fn read(&self, address: u32) -> Option<u32> {
         if address == DEMCR {
             return Some(self.demcr);

@@ -243,6 +243,10 @@ impl Stm32Usart {
         }
     }
 
+    pub(crate) fn has_pending_receive_timing(&self) -> bool {
+        self.receive_deadline.is_some() || !self.tester_input_before_enable.is_empty()
+    }
+
     pub fn tick(&mut self) {
         if !self.tester_input_before_enable.is_empty() && self.receiver_enabled() {
             self.queue_tester_input(std::iter::empty());

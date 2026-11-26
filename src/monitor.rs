@@ -83,6 +83,7 @@ pub struct Session {
     allow_privates: bool,
     memory_symbols: HashMap<String, std::collections::BTreeSet<(u64, u64)>>,
     named_machines: NamedMachines,
+    python: Option<crate::cpu_python_hook::Hook>,
 }
 
 #[derive(Default)]
@@ -427,6 +428,14 @@ impl Session {
         Ok(())
     }
 
+    fn execute_python(&mut self, machine: &mut Machine, source: &str) -> Result<String, String> {
+        if self.python.is_none() {
+            self.python = Some(crate::cpu_python_hook::Hook::new("", None, None)?);
+        }
+        self.python.as_mut().unwrap().execute_monitor(&mut machine.bus, source, machine.monitor_firmware.clone())
+            .map_err(|error| format!("KeywordException: {error}"))
+    }
+
     fn selected_machine(&self) -> Option<&str> {
         self.machine.as_deref().filter(|_| !self.machine_cleared)
     }
@@ -687,6 +696,7 @@ enum Action {
     DisassembleBlock(String, u64, usize),
     BusWhatIsAt(u64, Option<String>),
     ExecutePython(String),
+    PythonAssignment(String, String),
     PythonHook(String, String, Option<String>),
     RecordTo(PathBuf),
     PlayFrom(PathBuf),
@@ -978,6 +988,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_) | Action::PeripheralLog(..)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
+                    | Action::PythonAssignment(..) | Action::ExecutePython(..)
                     | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
@@ -1177,10 +1188,19 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::ExecutePython(source) => {
-                let mut handler = crate::cpu_python_hook::Hook::new(source, machine.monitor_firmware.clone(), None)?;
-                let result = handler.execute_monitor(&mut machine.bus)
-                    .map_err(|error| format!("KeywordException: {error}"))?;
+                let result = session.execute_python(machine, source)?;
                 output.reply().write_all(result.as_bytes()).map_err(|error| error.to_string())?;
+                Ok(None)
+            }
+            Action::PythonAssignment(name, source) => {
+                let result = session.execute_python(machine, source)?;
+                let result = result.trim_end();
+                if result.is_empty() {
+                    return Err("Python command substitution produced no value".into());
+                }
+                let assignment = format!("${name}={result}");
+                assign_variable(&assignment, &[], session.selected_machine().map(str::to_owned).as_deref(),
+                    &mut session.variables, None)?;
                 Ok(None)
             }
             Action::PythonHook(cpu, symbol, source) => {
@@ -2526,6 +2546,12 @@ pub fn serve(
                 included_state = Some((state.variables, state.macros, state.aliases));
                 return Ok(());
             }
+            if let Some((name, source)) = python_assignment(text, &session.variables)? {
+                boot.runtime.push(RuntimeCommand {
+                    line: 1, source: path.to_owned(), action: Action::PythonAssignment(name, source),
+                });
+                return Ok(());
+            }
             if assign_variable(text, &words, session.machine.as_deref().filter(|_| !session.machine_cleared), &mut session.variables, None)? {
                 return Ok(());
             }
@@ -3168,6 +3194,7 @@ struct ScriptState {
     visiting: HashSet<PathBuf>,
     boot: Boot,
     machine: bool,
+    deferred_variables: HashSet<String>,
 }
 
 fn describe_environment(
@@ -3728,6 +3755,22 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
             continue;
         }
         let words = command_words(text).map_err(|e| error(&e))?;
+        if let Some((name, source)) = python_assignment(text, &state.variables).map_err(|message| error(&message))? {
+            state.deferred_variables.insert(name.clone());
+            state.boot.runtime.push(RuntimeCommand {
+                line: line + 1, source: path.to_owned(), action: Action::PythonAssignment(name, source),
+            });
+            continue;
+        }
+        if words.iter().any(|word| word.trim_start_matches('@').strip_prefix('$')
+            .is_some_and(|name| state.deferred_variables.contains(name)))
+        {
+            state.boot.runtime.push(RuntimeCommand {
+                line: line + 1, source: path.to_owned(),
+                action: Action::InvokeMonitorScript(text.to_owned(), canonical.clone(), root.to_owned()),
+            });
+            continue;
+        }
         // A restore can change both machine selection and variable bindings.
         if (matches!(words.as_slice(),
                 ["mach" | "machine", "set", _]
@@ -4086,6 +4129,23 @@ fn anchored_path(
         monitor_working_directory(variables)?
     };
     Ok(Some(base.join(path_value(relative))))
+}
+
+fn python_assignment(text: &str, variables: &HashMap<String, String>) -> Result<Option<(String, String)>, String> {
+    let Some((name, value)) = text.strip_prefix('$').and_then(|text| text.split_once('=')) else {
+        return Ok(None);
+    };
+    let Some(command) = value.trim().strip_prefix('`').and_then(|command| command.strip_suffix('`')) else {
+        return Ok(None);
+    };
+    let words = command_words(command)?;
+    let ["py" | "python", source] = words.as_slice() else { return Ok(None) };
+    let name = name.trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '.')) {
+        return Err("invalid Python command substitution variable".into());
+    }
+    let source = monitor_string(resolve(variables, source)?).ok_or("expected quoted Python source")?;
+    Ok(Some((name.to_owned(), source)))
 }
 
 fn assign_variable(

@@ -2592,6 +2592,60 @@ impl Bus {
         }
     }
 
+    // Stop before the next modeled clock edge. The ordinary scheduler runs
+    // that edge, including capture wiring, DMA and NVIC sampling, in order.
+    pub(crate) fn advance_f4_quiet(&mut self, limit: u64) -> u64 {
+        if self.f4_rcc.is_none() || self.h7_network_control.is_some()
+            || !self.nrf_peripherals.is_empty() || !self.ethernet.is_empty()
+            || self.litex_uart.is_some() || self.uart.is_some() || self.stm32_rtc.is_some()
+            || self.h7_ltdc.is_some() || !self.h7_i2c.is_empty() || !self.h7_lptimers.is_empty()
+            || !self.h7_adc.is_empty() || !self.h7_bdma.is_empty() || !self.stm32_regular_adcs.is_empty()
+            || self.stm32_adc.is_some() || self.stm32_dma.as_ref().is_some_and(Stm32Dma::has_enabled_channels)
+            || self.nvic.as_ref().is_some_and(Nvic::has_wake_event)
+            || self.systick.as_ref().is_some_and(|timer| timer.pending_exceptions() != 0)
+            || self.stm32_uarts.iter().any(Stm32Usart::has_pending_receive_timing)
+            || self.iwdgs.iter().any(Iwdg::events_pending)
+        {
+            return 0;
+        }
+        let rate = self.step_hz();
+        let mut quiet = limit.min(1_000_000);
+        if let Some(systick) = &self.systick {
+            quiet = systick.quiet_steps(quiet);
+        }
+        for timer in &self.stm32_timers {
+            quiet = timer.quiet_steps(quiet);
+        }
+        let clocked = |base| f4_clocked(self.f4_rcc.as_ref(), base);
+        let timer_clocked = |base| self.f4_repl_timing || clocked(base);
+        for timer in self.h7_timers.iter().filter(|timer| timer_clocked(timer.base)) {
+            quiet = timer.quiet_steps(quiet, rate);
+        }
+        for rtc in self.h7_rtc.iter().filter(|rtc| clocked(rtc.base)) {
+            quiet = rtc.quiet_steps(quiet, rate);
+        }
+        if quiet < 2 {
+            return 0;
+        }
+        self.h7_step = self.h7_step.wrapping_add(quiet);
+        if let Some(systick) = &mut self.systick {
+            systick.advance_quiet(quiet);
+        }
+        if let Some(dwt) = &mut self.dwt {
+            dwt.advance(quiet, rate);
+        }
+        for timer in &mut self.stm32_timers {
+            timer.advance_quiet(quiet);
+        }
+        for timer in self.h7_timers.iter_mut().filter(|timer| timer_clocked(timer.base)) {
+            timer.advance_quiet(quiet, rate);
+        }
+        for rtc in self.h7_rtc.iter_mut().filter(|rtc| clocked(rtc.base)) {
+            rtc.advance_quiet(quiet);
+        }
+        quiet
+    }
+
     pub fn tick_h7_peripherals(&mut self) {
         self.h7_step = self.h7_step.wrapping_add(1);
         let step = self.h7_step;

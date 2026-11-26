@@ -169,6 +169,18 @@ impl Stm32Rtc {
         *self = reset;
     }
 
+    pub(crate) fn quiet_steps(&self, limit: u64, step_hz: u32) -> u64 {
+        if self.frequency == 0 {
+            return limit;
+        }
+        let steps = u64::from(step_hz).saturating_sub(self.phase).div_ceil(u64::from(self.frequency));
+        limit.min(steps.saturating_sub(1))
+    }
+
+    pub(crate) fn advance_quiet(&mut self, steps: u64) {
+        self.phase += u64::from(self.frequency) * steps;
+    }
+
     pub fn tick(&mut self, step_hz: u32) {
         self.phase += u64::from(self.frequency);
         if self.phase >= u64::from(step_hz) {

@@ -2249,6 +2249,20 @@ impl Machine {
         self.bus.egis_quiet_steps(self.elapsed_steps, remaining)
     }
 
+    fn f4_quiet_steps(&mut self, remaining: u64) -> u64 {
+        if remaining <= 1 || !self.secondary.is_empty()
+            || !self.primary.thumb.as_ref().is_some_and(Thumb::sleeping)
+            || self.primary.reset_held || self.primary.monitor_halted || self.cpu_halted
+            || self.profile.is_some() || self.recorder.is_some() || !self.replay.is_empty()
+            || !self.inputs.is_empty() || !self.reset_steps.is_empty() || !self.button_events.is_empty()
+            || !self.adc_events.is_empty() || !self.adxl_events.is_empty()
+            || !self.uart_device_events.is_empty() || self.frame_wait_trigger.is_some()
+        {
+            return 0;
+        }
+        self.bus.advance_f4_quiet(remaining)
+    }
+
     fn run_selected<W: Write>(
         &mut self,
         limit: u64,
@@ -2287,6 +2301,23 @@ impl Machine {
         let ethernet_link = self.bus.has_rv64_ethernet_link();
         let mut remaining = limit;
         while remaining != 0 {
+            // Give newly delivered host events a regular scheduler cycle
+            // before considering an idle span.
+            let quiet = if selected.is_none() && remaining != limit {
+                self.f4_quiet_steps(remaining)
+            } else {
+                0
+            };
+            if quiet != 0 {
+                self.elapsed_steps = self.elapsed_steps.wrapping_add(quiet);
+                self.time_source.grant_until(self.time_source.elapsed().saturating_add(quiet));
+                self.bus.uart_clock_step = self.elapsed_steps;
+                remaining -= quiet;
+                if matched(&self.bus, output) {
+                    return Ok((Stop::OutputMatch, retired));
+                }
+                continue;
+            }
             let quiet = if selected.is_none() { self.egis_quiet_steps(remaining) } else { 0 };
             if quiet != 0 {
                 let timer = self.bus.advance_egis_quiet_steps(quiet);

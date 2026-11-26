@@ -502,6 +502,11 @@ impl Nvic {
         (u16::from(priority & self.priority_mask) & (0xff_u16 << (self.priority_group + 1))) as u8
     }
 
+    pub(crate) fn has_wake_event(&self) -> bool {
+        self.pending_event || self.hardfault_pending || self.reset_requested
+            || self.enabled.iter().zip(self.pending).any(|(&enabled, pending)| enabled & pending != 0)
+    }
+
     pub fn signal_pending_event(&mut self) {
         self.pending_event |= self.send_event_on_pending();
     }

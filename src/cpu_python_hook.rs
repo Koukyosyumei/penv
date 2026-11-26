@@ -115,7 +115,11 @@ for line in sys.stdin:
     try:
         with contextlib.redirect_stdout(capture):
             # RPCs use the original stdout even when script output is redirected.
-            exec(program, scope)
+            if is_monitor:
+                code = bytes.fromhex(fields[1]).decode() if len(fields) > 1 else ''
+                exec(compile(code, '<monitor>', 'exec'), scope)
+            else:
+                exec(program, scope)
     except Exception as error:
         marker = 'monitor-exception' if is_monitor else 'exception'
         print(marker + ' ' + str(error).encode().hex(), flush=True)
@@ -203,8 +207,25 @@ impl Hook {
         self.invoke(bus, format_args!("{pc}")).map(|_| ())
     }
 
-    pub(crate) fn execute_monitor(&mut self, bus: &mut Bus) -> Result<String, String> {
-        self.invoke(bus, format_args!("monitor"))?;
+    pub(crate) fn execute_monitor(
+        &mut self, bus: &mut Bus, source: &str, symbols: Option<PathBuf>,
+    ) -> Result<String, String> {
+        self.symbols = symbols;
+        let mut compatible = String::new();
+        for line in source.lines() {
+            let body = line.trim_start();
+            if let Some(expression) = body.strip_prefix("print ").filter(|value| !value.starts_with(">>")) {
+                let indent = line.len() - body.len();
+                compatible.push_str(&line[..indent]);
+                compatible.push_str("print(");
+                compatible.push_str(expression);
+                compatible.push(')');
+            } else {
+                compatible.push_str(line);
+            }
+            compatible.push('\n');
+        }
+        self.invoke(bus, format_args!("monitor {}", encode(&compatible)))?;
         Ok(std::mem::take(&mut self.monitor_output))
     }
 
