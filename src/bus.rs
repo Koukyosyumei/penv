@@ -424,6 +424,7 @@ pub struct Bus {
     pub(crate) renode_lrsc: bool,
     trace_rcc: bool,
     pydevs: Vec<crate::pydev::Peripheral>,
+    pub(crate) memory_watch: Option<crate::memory_watch::MemoryWatch>,
     thumb_read_watchpoints: BTreeSet<(u32, usize)>,
     pub thumb_read_watchpoint_hit: bool,
     pub cpu_hooks: BTreeMap<u32, Vec<CpuHook>>,
@@ -6426,8 +6427,15 @@ impl Bus {
         Ok(())
     }
 
-    pub fn observe_rv64_store(&mut self, address: u64, low_byte: u8) {
-        if self.rv64_tohost == Some(address) && low_byte & 1 != 0 {
+    fn observe_memory_store(&mut self, address: u64, width: usize, value: u64) {
+        if let Some(watch) = &mut self.memory_watch {
+            watch.store(address, width, value);
+        }
+    }
+
+    pub fn observe_rv64_store(&mut self, address: u64, width: usize, value: u64) {
+        self.observe_memory_store(address, width, value);
+        if self.rv64_tohost == Some(address) && value & 1 != 0 {
             let bytes = self.ram64(address, 8).unwrap();
             self.rv64_test_exit = Some(u64::from_le_bytes(bytes.try_into().unwrap()) >> 1);
         }
@@ -7984,6 +7992,7 @@ impl Bus {
     ) -> Result<(), BusError> {
         match self.write_mapped(address, width, value, uart, writer) {
             Ok(()) => {
+                self.observe_memory_store(address.into(), width, value.into());
                 self.log_memory_access(true, address, width, value);
                 Ok(())
             }

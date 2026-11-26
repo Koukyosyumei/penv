@@ -781,7 +781,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             measurement["result"] = "pass"
             self.measurements.append(measurement)
         elif status == "FAIL" or status == "ERROR" and re.search(
-                r"LED .* (?:did not reach state .* \(Limit\)|changed while holding state)", value):
+                r"LED .* (?:did not reach state .* \(Limit\)|changed while holding state)|"
+                r"memory assertion did not observe a matching write", value):
             measurement["result"] = "fail"
             self.measurements.append(measurement)
         elif status not in {"OK", "UNSUPPORTED"}:

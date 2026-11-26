@@ -604,6 +604,7 @@ enum Action {
     TraceRcc,
     WriteRcc(u32, u32),
     WaitForLed(String, bool, u64, u64, bool),
+    WaitForMemory(crate::memory_watch::MemoryWatch, u64, bool),
     PwmTester(String, String),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
@@ -1530,6 +1531,25 @@ fn run_commands<'a>(
                         ))
                     }
                 })
+            }
+            Action::WaitForMemory(watch, timeout, pause) => {
+                let limit = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?.min(budget);
+                machine.bus.memory_watch = Some(watch.clone());
+                machine.set_monitor_active(true);
+                let start = machine.elapsed_steps();
+                let result = run_until_deadline(machine, limit, &mut output, |bus, _| {
+                    bus.memory_watch.as_ref().is_some_and(crate::memory_watch::MemoryWatch::matched)
+                });
+                machine.bus.memory_watch = None;
+                machine.set_monitor_active(!pause);
+                let (stop, count) = result?;
+                retired += count;
+                budget -= machine.elapsed_steps().wrapping_sub(start);
+                if stop == Stop::OutputMatch {
+                    Ok(None)
+                } else {
+                    Err(format!("memory assertion did not observe a matching write ({stop:?})"))
+                }
             }
             Action::PwmTester(target, property) => machine.bus.pwm_tester(target, property).and_then(|value| {
                 if let Some(value) = value {
@@ -4502,6 +4522,17 @@ fn execute(
                 .map_err(|_| "expected a byte for WriteChar")?;
             Some(Action::UsartWriteChar(resolve(target)?.into(), value))
         }
+        ["waitForMemory", group, comparison, width, signed, expected, timeout, pause, addresses @ ..] => {
+            let group = group.parse()?;
+            let comparison = comparison.parse()?;
+            let width = width.parse().map_err(|_| "expected a memory access width in bytes")?;
+            let signed = parse_tester_bool(signed)?;
+            let expected = crate::parse_address64(resolve(expected)?)?;
+            let addresses = addresses.iter().map(|address| crate::parse_address64(resolve(address)?))
+                .collect::<Result<Vec<_>, _>>()?;
+            let watch = crate::memory_watch::MemoryWatch::new(addresses, width, signed, comparison, expected, group)?;
+            Some(Action::WaitForMemory(watch, duration_steps(resolve(timeout)?)?, parse_tester_bool(pause)?))
+        }
         ["waitForLed", target, state, timeout, options @ ..] => {
             let state = resolve(state)?.parse().map_err(|_| "expected LED state true or false")?;
             let timeout = duration_steps(resolve(timeout)?)?;
@@ -4979,7 +5010,7 @@ fn execute(
                         | Action::UartIdle(..)
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)
-                        | Action::UsartWriteChar(..)
+                        | Action::UsartWriteChar(..) | Action::WaitForMemory(..)
                         | Action::PeripheralLog(..)
                         | Action::I2cAccelerationFeed(..) | Action::I2cAccelerationRead(..) | Action::I2cSampleRate(..) | Action::I2cAcceleration(..)
                         | Action::RunFor(_)

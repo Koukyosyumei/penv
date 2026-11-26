@@ -35,6 +35,7 @@ class MemoryKeywords:
                        "Store Assembled Code": "store_assembled_code"}
     memory_keywords.update({"Store " + " ".join(name.replace("Word", " Word").split()):
                             "store_monitor_value" for name in WIDTHS})
+    memory_keywords["All Symbols Should Independently Be Equal"] = "compare_monitor_memory"
     memory_keywords.update({f"{family} {comparison}": "compare_monitor_memory"
                             for family in FAMILIES for comparison in COMPARISONS})
 
@@ -95,7 +96,8 @@ class MemoryKeywords:
 
     def compare_monitor_memory(self, target, *args):
         family, comparison = current_keyword(self).split(" Should", 1)
-        comparison = "Should" + comparison
+        independent = comparison.startswith(" Independently ")
+        comparison = "Should" + comparison.replace(" Independently ", " ", 1)
         compare, description = COMPARISONS[comparison]
         if comparison in {"Should Be Zero", "Should Be Nonzero"}:
             expected = 0
@@ -104,7 +106,15 @@ class MemoryKeywords:
         else:
             raise Unsupported("memory comparison requires an expected value")
         positional = ("width", "signed") if family == "Memory" else ("width", "signed", "offset")
+        positional += ("timeout", "machine")
+        if family != "Memory":
+            positional += ("context",)
+        positional += ("pauseEmulation",)
         options = self.log_options(args, set(positional), positional)
+        if options.get("context"):
+            raise Unsupported("CPU-specific symbol tables are unavailable")
+        if machine := options.get("machine"):
+            self.operation(f"mach set {self.literal(machine)}")
         width = options.get("width", "DoubleWord")
         if width not in WIDTHS:
             raise Unsupported(f"unknown system bus access width {width}")
@@ -118,6 +128,18 @@ class MemoryKeywords:
             if family == "Symbol" and len(addresses) != 1:
                 raise Unsupported(f"symbol {target} is ambiguous")
 
+        addresses = [(address + offset) & ((1 << 64) - 1) for address in addresses]
+        if "timeout" in options:
+            group = "independently" if independent else "any" if family == "Any Symbol" else "all"
+            relation = {operator.eq: "eq", operator.ne: "ne", operator.lt: "lt",
+                        operator.le: "le", operator.gt: "gt", operator.ge: "ge"}[compare]
+            pause = str(self.log_bool(options.get("pauseEmulation", "false"))).lower()
+            timeout = self.duration(options["timeout"])
+            targets = " ".join(f"{address:#x}" for address in addresses)
+            self.operation(f"waitForMemory {group} {relation} {size} {str(signed).lower()} "
+                           f"{expected & ((1 << 64) - 1):#x} {timeout} {pause} {targets}", assertion=True)
+            return
+
         def normalize(value):
             bits = 8 * size
             value &= (1 << bits) - 1
@@ -127,7 +149,6 @@ class MemoryKeywords:
 
         def evaluate():
             for address in addresses:
-                address = (address + offset) & ((1 << 64) - 1)
                 raw = self.operation(f"sysbus Read{width} {address:#x}", assertion=True)
                 yield compare(normalize(integer(raw.split(maxsplit=1)[0])), normalize(expected))
 

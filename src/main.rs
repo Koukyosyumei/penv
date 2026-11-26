@@ -83,6 +83,7 @@ mod lps25hb;
 mod lis2dw12;
 mod lsm6dso;
 mod machine;
+mod memory_watch;
 mod memory_setup;
 pub mod migrant;
 pub mod multi_tree;

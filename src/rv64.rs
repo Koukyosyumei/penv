@@ -922,7 +922,7 @@ impl Rv64 {
                     bus.cpu_memory64(self.hart_id, *physical, 1).unwrap()[0] = byte;
                 }
             }
-            bus.observe_rv64_store(destinations[0], value as u8);
+            bus.observe_rv64_store(destinations[0], width, value);
             return Ok(());
         }
         let physical = self
@@ -933,7 +933,7 @@ impl Rv64 {
         }
         if let Some(bytes) = bus.cpu_memory64(self.hart_id, physical, width) {
             bytes.copy_from_slice(&value.to_le_bytes()[..width]);
-            bus.observe_rv64_store(physical, value as u8);
+            bus.observe_rv64_store(physical, width, value);
             return Ok(());
         }
         if let Ok(low) = u32::try_from(physical) {
