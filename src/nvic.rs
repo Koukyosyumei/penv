@@ -448,6 +448,10 @@ impl Nvic {
         self.bus_fault_status |= 1 << 11;
     }
 
+    pub fn record_invalid_exception_return(&mut self) {
+        self.bus_fault_status |= 1 << 18; // INVPC
+    }
+
     pub fn record_lazy_fault(&mut self) {
         self.bus_fault_status |= 1 << 13;
     }
@@ -469,6 +473,12 @@ impl Nvic {
         if let Some(fpccr) = &mut self.fpccr {
             *fpccr = (*fpccr & (3 << 30)) | (u32::from(hardfault_ready) << 4) | 1;
         }
+    }
+
+    pub fn pending_lazy_fp(&self) -> Option<(u32, bool)> {
+        self.fpccr
+            .filter(|value| value & 1 != 0)
+            .map(|value| (self.fpcar, value & (1 << 4) != 0))
     }
 
     pub fn clear_lazy_fp(&mut self) {
@@ -563,7 +573,7 @@ impl Nvic {
             if address == BASE + 0xd24 {
                 let active = [(4, 0), (5, 1), (3, 2), (6, 3), (2, 5),
                     (11, 7), (12, 8), (14, 10), (15, 11)];
-                return Some(active.into_iter().fold(self.fault_enables, |value, (exception, bit)| {
+                return Some(active.into_iter().fold(self.fault_enables | (u32::from(self.hardfault_pending) << 21), |value, (exception, bit)| {
                     let set = self.active.contains(exception) || self.active_system & (1 << exception) != 0;
                     value | (u32::from(set) << bit)
                 }));
@@ -653,7 +663,7 @@ impl Nvic {
             && offset == 0xf34
             && let Some(fpccr) = &mut self.fpccr
         {
-            *fpccr = value & (3 << 30);
+            *fpccr = (*fpccr & !(3 << 30)) | (value & (3 << 30));
             return true;
         }
         if width == 4 && address == AIRCR {

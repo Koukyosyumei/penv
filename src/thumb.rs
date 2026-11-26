@@ -785,24 +785,31 @@ impl Thumb {
             | u32::from(self.active_exception);
         let mut frame = [0; 26];
         frame[..8].copy_from_slice(&[r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr]);
-        if self.fp_active {
+        let lazy = self.fp_active && bus.nvic.as_ref().is_some_and(Nvic::lazy_fp_enabled);
+        if self.fp_active && !lazy {
             frame[8..24].copy_from_slice(&self.fp[..16]);
             frame[24] = self.fpscr;
         }
-        if let Err(error) = bus.write_cortex_m_exception_stack(stack, &frame[..frame_size / 4]) {
+        let stored_words = if lazy { 8 } else { frame_size / 4 };
+        if let Err(error) = bus.write_cortex_m_exception_stack(stack, &frame[..stored_words]) {
             if !matches!(error, BusError::SlaveFault(_) | BusError::Unmapped(..)) || bus.nvic.is_none() {
                 return Err(error.to_string());
             }
             let nvic = bus.nvic.as_mut().unwrap();
-            nvic.record_stacking_fault();
+            if !(sp == 0 && self.invalid_thumb_state && self.active_exception == 0) {
+                nvic.record_stacking_fault();
+            }
             if !locked {
                 const BUSFAULT: u8 = 5;
+                let hardfault_blocked = self.faultmask || matches!(self.active_exception, NMI | HARDFAULT);
                 let derived = if nvic.fault_enabled(BUSFAULT) && self.can_take_sync_exception(BUSFAULT, nvic) {
                     BUSFAULT
+                } else if hardfault_blocked {
+                    HARDFAULT
                 } else {
                     nvic.force_hard_fault()
                 };
-                if derived == HARDFAULT && (self.faultmask || matches!(self.active_exception, NMI | HARDFAULT)) {
+                if derived == HARDFAULT && hardfault_blocked {
                     locked = true;
                 } else if self.thumb2_exception_priority(bus, derived) < self.thumb2_exception_priority(bus, exception) {
                     exception = derived;
@@ -820,6 +827,11 @@ impl Thumb {
                 }
             }
         }
+        if lazy && !locked {
+            let nvic = bus.nvic.as_mut().unwrap();
+            let hardfault_ready = !self.faultmask && !matches!(self.active_exception, NMI | HARDFAULT);
+            nvic.reserve_lazy_fp(stack.wrapping_add(32), hardfault_ready);
+        }
         if self.uses_psp() {
             self.psp = stack;
             r[13] = self.msp;
@@ -835,6 +847,10 @@ impl Thumb {
         if self.fp_active {
             r[14] &= !0x10;
         }
+        if self.cortex_m55 {
+            // Without the Security Extension, S and ES read as zero in EXC_RETURN.
+            r[14] &= !0x41;
+        }
         self.fp_active = false;
         bus.clear_reservation(0);
         self.active_exceptions.insert(exception);
@@ -849,23 +865,37 @@ impl Thumb {
         Ok(handler & !1)
     }
 
-    fn unstack_m4_fault(
-        &mut self, token: u32, remaining: ActiveExceptions, r: &mut [u32; 32], bus: &mut Bus,
+    fn exception_return_fault(
+        &mut self,
+        token: u32,
+        remaining: ActiveExceptions,
+        fault: u8,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
     ) -> Result<u32, String> {
-        const BUSFAULT: u8 = 5;
         self.active_exceptions = remaining;
         self.active_exception = (2..=u8::MAX).filter(|&number| remaining.contains(number))
             .min_by_key(|&number| self.thumb2_exception_priority(bus, number)).unwrap_or(0);
-        let nvic = bus.nvic.as_mut().ok_or("BusFault requires NVIC")?;
+        let nvic = bus.nvic.as_mut().ok_or("exception return requires NVIC")?;
         nvic.set_active(remaining);
-        nvic.record_unstacking_fault();
+        if fault == 5 {
+            nvic.record_unstacking_fault();
+        } else {
+            nvic.record_invalid_exception_return();
+        }
         self.branch_exception = true;
         if self.faultmask || matches!(self.active_exception, NMI | HARDFAULT) {
+            let frame_size = if token & 0x10 == 0 { 104 } else { 32 };
+            if token & 4 == 0 {
+                r[13] = r[13].wrapping_add(frame_size);
+            } else {
+                self.psp = self.psp.wrapping_add(frame_size);
+            }
             nvic.enter_lockup();
             return Ok(self.lockup());
         }
-        let mut exception = if nvic.fault_enabled(BUSFAULT) && self.can_take_sync_exception(BUSFAULT, nvic) {
-            BUSFAULT
+        let mut exception = if nvic.fault_enabled(fault) && self.can_take_sync_exception(fault, nvic) {
+            fault
         } else {
             nvic.force_hard_fault()
         };
@@ -898,7 +928,13 @@ impl Thumb {
     }
 
     fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
-        let basic_target = if self.thumb2 { target | 0x10 } else { target };
+        let basic_target = if self.cortex_m55 && target & 0xffff_ffa1 == 0xffff_ffa0 {
+            target | 0x51
+        } else if self.thumb2 {
+            target | 0x10
+        } else {
+            target
+        };
         if self.active_exception != 0
             && matches!(basic_target, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd)
         {
@@ -914,7 +950,7 @@ impl Thumb {
                 match bus.read_cortex_m_ram_or_mock_word(stack.wrapping_add(index as u32 * 4)) {
                     Ok(value) => *word = value,
                     Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
-                        return self.unstack_m4_fault(target, remaining, r, bus);
+                        return self.exception_return_fault(target, remaining, 5, r, bus);
                     }
                     Err(error) => return Err(error.to_string()),
                 }
@@ -927,12 +963,18 @@ impl Thumb {
                 previous != 0
                     && u8::try_from(previous).is_ok_and(|exception| remaining.contains(exception))
             };
+            if !valid_mode && self.thumb2 {
+                return self.exception_return_fault(target, remaining, 6, r, bus);
+            }
             if xpsr & (1 << 24) == 0 || !valid_mode {
                 return Err(format!(
                     "invalid Cortex-M exception return frame: pc={pc:#x} xpsr={xpsr:#x} target={target:#x}"
                 ));
             }
-            if extended {
+            let lazy_address = bus.nvic.as_ref().and_then(Nvic::pending_lazy_fp);
+            if extended && lazy_address.is_some_and(|(address, _)| address == stack.wrapping_add(32)) {
+                bus.nvic.as_mut().unwrap().clear_lazy_fp();
+            } else if extended {
                 let saved = bus
                     .memory_slice(stack.wrapping_add(32), 68)
                     .map_err(|e| e.to_string())?;
@@ -1763,19 +1805,6 @@ impl Thumb {
                 }
             }
             0xe800..=0xefff | 0xf800..=0xffff if self.thumb2 => {
-                let low = bus.read_ram::<2>(next)?;
-                next = architectural_pc;
-                if matches!(inst, 0xe92d | 0xe8bd)
-                    && low.count_ones() >= 2
-                    && low & (1 << 13) == 0
-                    && (low & (1 << 15) == 0 || (inst == 0xe8bd && low & (1 << 14) == 0))
-                {
-                    self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
-                } else {
-                    self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
-                }
-            }
-            0xe800..=0xefff | 0xf800..=0xffff if self.thumb2 => {
                 let low = bus.thumb_fetch(next)?;
                 next = architectural_pc;
                 if matches!(inst, 0xe92d | 0xe8bd)
@@ -1784,8 +1813,35 @@ impl Thumb {
                     && (low & (1 << 15) == 0 || (inst == 0xe8bd && low & (1 << 14) == 0))
                 {
                     self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
-                } else if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {
-                    self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
+                } else {
+                    if Self::is_fpu_instruction(inst, low)
+                        && let Some((address, hardfault_ready)) = bus.nvic.as_ref().and_then(Nvic::pending_lazy_fp)
+                    {
+                        let mut state = [0; 18];
+                        state[..16].copy_from_slice(&self.fp[..16]);
+                        state[16] = self.fpscr;
+                        match bus.write_cortex_m_exception_stack(address, &state) {
+                            Ok(()) => bus.nvic.as_mut().unwrap().clear_lazy_fp(),
+                            Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
+                                let nvic = bus.nvic.as_mut().unwrap();
+                                nvic.record_lazy_fault();
+                                if hardfault_ready {
+                                    nvic.force_hard_fault();
+                                    nvic.set_hard_fault_pending(true);
+                                    nvic.clear_lazy_fp();
+                                } else {
+                                    nvic.enter_lockup();
+                                    *pc = self.lockup();
+                                    self.branch_exception = true;
+                                    return Ok(false);
+                                }
+                            }
+                            Err(error) => return Err(error.to_string().into()),
+                        }
+                    }
+                    if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {
+                        self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
+                    }
                 }
             }
             _ => return Err(unsupported().into()),

@@ -875,7 +875,7 @@ impl Machine {
         let hart = self.named_hart(name)?;
         if let Some(thumb) = &hart.thumb {
             let (triple, features) = if thumb.cortex_m55 {
-                ("thumbv8.1m.main-none-eabi", "+fp-armv8d16sp")
+                ("thumbv8.1m.main-none-eabi", "+mve.fp")
             } else if thumb.thumb2 {
                 ("thumbv7em-none-eabi", "+vfp4d16sp")
             } else {
@@ -4083,7 +4083,9 @@ mod tests {
     fn check_lazy_fp_fault(original_hard_fault: bool) {
         let mut machine = exception_vector_fault_machine(None);
         let mut out = std::io::sink();
-        machine.bus.nvic.as_mut().unwrap().set_vector_base(0);
+        let nvic = machine.bus.nvic.as_mut().unwrap();
+        nvic.set_vector_base(0);
+        nvic.enable_fpu();
         for (address, value) in [(8, 0x381), (12, 0x341), (0xe000_ed88, 0xf00000)] {
             machine.bus.write(address, 4, value, &mut out).unwrap();
         }
@@ -4122,6 +4124,7 @@ mod tests {
         }
         assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 1));
         machine.bus.set_mock_fault_offset(0x100000, 0x20);
+        machine.bus.set_mock_fault_on_writes(0x100000, true);
         machine.primary.registers[13] = 0x100068;
         machine
             .bus

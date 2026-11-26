@@ -408,7 +408,9 @@ fn normalize_vector_memory_operand(line: &str) -> String {
 fn inline_encoding(text: &str) -> Result<Option<Vec<u8>>, String> {
     let mut image = Vec::new();
     for line in text.lines() {
-        let Some((_, encoding)) = line.split_once("# encoding: [") else {
+        let Some((_, encoding)) = line.split_once("# encoding: [")
+            .or_else(|| line.split_once("@ encoding: ["))
+        else {
             continue;
         };
         let encoding = encoding

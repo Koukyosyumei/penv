@@ -1411,7 +1411,11 @@ fn run_commands<'a>(
                 machine.set_cortex_m_monitor_pc(cpu, *pc, &mut output.reply()).map(|()| None)
             }
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
-            Action::CpuVectorTable(cpu, address) => machine.set_named_vector_table(cpu, *address).map(|()| None),
+            Action::CpuVectorTable(cpu, address) => {
+                machine.set_named_vector_table(cpu, *address)?;
+                machine.prepare_monitor_cortex_step(cpu)?;
+                Ok(None)
+            }
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
             Action::MachineReset(hooks) => machine.reset_cortex_m_machine().and_then(|()| {
                 for hook in hooks {
