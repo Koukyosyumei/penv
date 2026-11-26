@@ -3858,7 +3858,7 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
             is_monitor_snapshot_action(&command.action) || matches!(command.action, Action::MonitorLog(_))))
         && boot.runtime.iter().all(|command|
             is_console_action(&command.action) || is_monitor_snapshot_action(&command.action)
-                || matches!(command.action, Action::MonitorLog(_) | Action::EmulationIsStarted))
+                || matches!(command.action, Action::MonitorLog(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_)))
     {
         boot.empty_machine = true;
         return Ok(boot);
@@ -6268,7 +6268,7 @@ fn execute(
         let empty_machine_command = *machine && !boot.has_platform() && is_empty_machine_action(&action);
         if !empty_machine_command && !is_console_action(&action) && !is_monitor_snapshot_action(&action)
             && !matches!(action, Action::MonitorLog(_) | Action::EmulationIsStarted
-                | Action::AllowPrivates(_) | Action::SetCrashOnAbort(_))
+                | Action::AllowPrivates(_) | Action::SetCrashOnAbort(_) | Action::SingleStepBlocking(_))
             && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
