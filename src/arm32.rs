@@ -1436,6 +1436,10 @@ impl Cpu {
                     }
                     self.set_cpsr(status, registers)?;
                 }
+            } else if matches!(instruction & 0xff70_f000, 0xf450_f000 | 0xf510_f000 | 0xf550_f000)
+                || matches!(instruction & 0xff70_f010, 0xf650_f000 | 0xf710_f000 | 0xf750_f000)
+            {
+                // Prefetch hints have no architectural effect on coherent backing memory.
             } else if !matches!(
                 instruction & 0xffff_fff0,
                 0xf57f_f040 | 0xf57f_f050 | 0xf57f_f060
