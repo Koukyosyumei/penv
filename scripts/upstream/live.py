@@ -779,7 +779,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             measurement["result"] = "pass"
             self.measurements.append(measurement)
         elif status == "FAIL" or status == "ERROR" and re.search(
-                r"LED .* did not reach state .* \(Limit\)", value):
+                r"LED .* (?:did not reach state .* \(Limit\)|changed while holding state)", value):
             measurement["result"] = "fail"
             self.measurements.append(measurement)
         elif status not in {"OK", "UNSUPPORTED"}:
@@ -1102,15 +1102,25 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.led = led
         return 0
 
-    def hold_led(self, state, timeout, hold):
-        self.assert_led(state, timeout, self.duration(hold))
+    def hold_led(self, state, *args):
+        fields = ("timeoutAssert", "timeoutHold", "pauseEmulation")
+        options = self.log_options(args, set(fields), fields)
+        if "timeoutAssert" not in options or "timeoutHold" not in options:
+            raise Unsupported("Assert And Hold LED State requires both timeouts")
+        self.wait_for_led(state, options["timeoutAssert"], options["timeoutHold"],
+                          options.get("pauseEmulation"))
 
-    def assert_led(self, state, timeout=None, hold=None):
+    def assert_led(self, state, *args):
+        fields = ("timeout", "pauseEmulation")
+        options = self.log_options(args, set(fields), fields)
+        self.wait_for_led(state, options.get("timeout", self.led_timeout),
+                          pause=options.get("pauseEmulation"))
+
+    def wait_for_led(self, state, timeout, hold=None, pause=None):
         state = state.lower()
-        if not self.started or not self.led or state not in {"true", "false"}:
-            raise Unsupported("LED state needs a running machine and attached tester")
-        if timeout is not None and "=" in timeout:
-            timeout = self.option(timeout, "timeout")
-        deadline = self.duration(timeout if timeout is not None else self.led_timeout)
-        interval = "" if hold is None else f" {hold}"
-        self.operation(f"waitForLed {self.led} {state} {deadline}{interval}", assertion=True)
+        if not self.led or state not in {"true", "false"} or not (self.started or self.rust_monitor):
+            raise Unsupported("LED state needs an attached tester on a running machine")
+        deadline = self.duration(timeout)
+        interval = "" if hold is None else f" {self.duration(hold)}"
+        pause_arg = "" if pause is None else f" pauseEmulation={str(self.log_bool(pause)).lower()}"
+        self.operation(f"waitForLed {self.led} {state} {deadline}{interval}{pause_arg}", assertion=True)

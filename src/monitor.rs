@@ -596,7 +596,7 @@ enum Action {
     TimerProperty(String, bool),
     TraceRcc,
     WriteRcc(u32, u32),
-    WaitForLed(String, bool, u64, u64),
+    WaitForLed(String, bool, u64, u64, bool),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
     CreateUartTester(String, Option<String>, bool, Option<u64>, Option<bool>, bool, bool, bool),
@@ -1492,15 +1492,16 @@ fn run_commands<'a>(
                     }
                 })
             }
-            Action::WaitForLed(target, state, timeout, hold) => {
+            Action::WaitForLed(target, state, timeout, hold, pause) => {
                 let rate = machine.bus.monitor_step_hz();
                 let timeout = duration_cycles(*timeout, CORTEX_M_STEP_HZ, rate)?;
                 let hold = duration_cycles(*hold, CORTEX_M_STEP_HZ, rate)?;
-                wait_for_led(machine, target, *state, timeout, hold, &mut budget, &mut output)
-                    .map(|count| {
-                        retired += count;
-                        None
-                    })
+                let count = wait_for_led(machine, target, *state, timeout, hold, &mut budget, &mut output)?;
+                if *pause {
+                    machine.set_monitor_active(false);
+                }
+                retired += count;
+                Ok(None)
             }
             Action::WriteTesterUart(id, text, ending, echo, pause) => {
                 let target = machine.bus.uart_tester_target(*id)?.to_owned();
@@ -4424,22 +4425,25 @@ fn execute(
                 ending,
             ))
         }
-        ["waitForLed", target, state, timeout, hold @ ..] if hold.len() <= 1 => {
-            let state = resolve(state)?
-                .parse()
-                .map_err(|_| "expected LED state true or false")?;
+        ["waitForLed", target, state, timeout, options @ ..] => {
+            let state = resolve(state)?.parse().map_err(|_| "expected LED state true or false")?;
             let timeout = duration_steps(resolve(timeout)?)?;
-            let hold = hold
-                .first()
-                .map(|value| duration_steps(resolve(value)?))
-                .transpose()?
-                .unwrap_or(0);
-            Some(Action::WaitForLed(
-                resolve(target)?.to_owned(),
-                state,
-                timeout,
-                hold,
-            ))
+            let mut options = options;
+            let hold = if let Some((duration, remaining)) = options.split_first()
+                && !duration.contains('=')
+            {
+                options = remaining;
+                duration_steps(resolve(duration)?)?
+            } else {
+                0
+            };
+            let pause = match options {
+                [] => false,
+                [option] => parse_tester_bool(option.strip_prefix("pauseEmulation=")
+                    .ok_or("expected LED pauseEmulation option")?)?,
+                _ => return Err("invalid LED wait options".into()),
+            };
+            Some(Action::WaitForLed(resolve(target)?.to_owned(), state, timeout, hold, pause))
         }
         [target, property @ ("Temperature" | "Humidity" | "Pressure" | "SerialNumber"), value]
             if target.trim_start_matches("sysbus.").contains('.') =>
