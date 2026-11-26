@@ -2385,6 +2385,12 @@ impl Machine {
         self.bus.monitor_time_ns(self.elapsed_steps())
     }
 
+    pub(crate) fn renode_default_mips(&self, include_rv64: bool) -> Option<u32> {
+        (self.is_cortex_m() || self.is_egis_platform() || self.bus.is_miv()
+            || include_rv64 && self.primary.rv64.is_some())
+            .then_some((crate::bus::CORTEX_M_STEP_HZ / 1_000_000) as u32)
+    }
+
     pub(crate) fn set_monitor_cpu_rate(&mut self, mips: u32) -> Result<(), String> {
         if self.cpu_less {
             return Err("the platform has no CPU".into());

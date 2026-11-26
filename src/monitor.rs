@@ -407,6 +407,9 @@ impl Session {
         next.monitor_asset_dir.clone_from(&machine.monitor_asset_dir);
         next.bus.use_renode_unmapped_data();
         next.initialize_monitor_reset_pcs();
+        if let Some(mips) = next.renode_default_mips(true) {
+            next.set_monitor_cpu_rate(mips)?;
+        }
         self.named_machines.generated.extend(boot.generated_repl);
         *draft = boot.inline_repl;
         *machine = next;

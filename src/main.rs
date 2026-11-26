@@ -1826,10 +1826,8 @@ fn run() -> Result<ExitCode, String> {
         machine.bus.f4_monitor_timer_clocks = monitor_stdio && script.is_some();
         // The pinned Renode BaseCPU starts at 100 MIPS unless the script
         // overrides it. Configure the CPU budget and SysTick from one rate.
-        let renode_default_mips = (script.is_some()
-            && (machine.is_cortex_m() || machine.is_egis_platform() || machine.bus.is_miv()
-                || monitor_stdio && machine.primary.rv64.is_some()))
-            .then_some((bus::CORTEX_M_STEP_HZ / 1_000_000) as u32);
+        let renode_default_mips = script.as_ref()
+            .and_then(|_| machine.renode_default_mips(monitor_stdio));
         if cli_mips.is_some() && !machine.is_cortex_m() {
             return Err("--virtual-mips requires Cortex-M".into());
         }
