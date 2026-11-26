@@ -226,6 +226,16 @@ struct UartTester {
     timeout: u64,
 }
 
+pub(crate) struct UartTestersSnapshot {
+    testers: Vec<UartTester>,
+    selected: Option<usize>,
+    timeout: Option<u64>,
+    echo: Option<bool>,
+    next_line: bool,
+    pause: bool,
+}
+
+
 impl TesterHistory {
     fn receive(&mut self, byte: u8, timestamp: u128) {
         match self {
@@ -7044,7 +7054,7 @@ impl Bus {
         Ok(())
     }
 
-    fn save_uart_testers(&self, output: &mut impl Write) -> io::Result<()> {
+    pub(crate) fn save_uart_testers(&self, output: &mut impl Write) -> io::Result<()> {
         use crate::snapshot::{write_text, write_words};
         write_words(output, &[self.uart_testers.len() as u64,
             self.default_uart_tester.map_or(u64::MAX, |index| index as u64),
@@ -7060,6 +7070,43 @@ impl Bus {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn read_uart_testers_snapshot(
+        &self, input: &mut impl Read, maximum: u64,
+    ) -> io::Result<UartTestersSnapshot> {
+        use crate::snapshot::{invalid, read_bool, read_text, read_words};
+        let [count, selected, has_timeout, timeout, echo, next_line, pause] = read_words(input)?;
+        if count > maximum || selected != u64::MAX && selected >= count {
+            return Err(invalid("invalid snapshot UART tester count or selection"));
+        }
+        let mut testers = Vec::new();
+        for _ in 0..count {
+            let target = read_text(input)?;
+            let port = self.tester_port(&target).map_err(io::Error::other)?;
+            let [timeout, binary] = read_words(input)?;
+            let history = if read_bool(binary)? {
+                TesterHistory::Binary(BinaryUartHistory::load_snapshot(input)?)
+            } else {
+                TesterHistory::Text(UartHistory::load_snapshot(input)?)
+            };
+            testers.push(UartTester { target, port, history, timeout });
+        }
+        Ok(UartTestersSnapshot {
+            testers, selected: (selected != u64::MAX).then_some(selected as usize),
+            timeout: read_bool(has_timeout)?.then_some(timeout),
+            echo: if echo == 2 { None } else { Some(read_bool(echo)?) },
+            next_line: read_bool(next_line)?, pause: read_bool(pause)?,
+        })
+    }
+
+    pub(crate) fn restore_uart_testers_snapshot(&mut self, snapshot: UartTestersSnapshot) {
+        self.uart_testers = snapshot.testers;
+        self.default_uart_tester = snapshot.selected;
+        self.default_uart_timeout = snapshot.timeout;
+        self.default_uart_echo = snapshot.echo;
+        self.default_uart_next_line = snapshot.next_line;
+        self.default_uart_pause = snapshot.pause;
     }
 
     pub(crate) fn supports_arm_snapshot(&self) -> bool {
@@ -7096,29 +7143,9 @@ impl Bus {
         if uart_count != self.pl011_uarts.len() as u64 {
             return Err(invalid("snapshot PL011 count differs from the platform"));
         }
-        let mut testers = Vec::new();
-        let mut defaults = None;
-        if version >= 2 {
-            let [count, selected, has_timeout, timeout, echo, next_line, pause] = read_words(input)?;
-            if count > uart_count || selected != u64::MAX && selected >= count {
-                return Err(invalid("invalid snapshot UART tester count or selection"));
-            }
-            let selected = (selected != u64::MAX).then_some(selected as usize);
-            let timeout = read_bool(has_timeout)?.then_some(timeout);
-            let echo = if echo == 2 { None } else { Some(read_bool(echo)?) };
-            defaults = Some((selected, timeout, echo, read_bool(next_line)?, read_bool(pause)?));
-            for _ in 0..count {
-                let target = read_text(input)?;
-                let port = self.tester_port(&target).map_err(io::Error::other)?;
-                let [timeout, binary] = read_words(input)?;
-                let history = if read_bool(binary)? {
-                    TesterHistory::Binary(BinaryUartHistory::load_snapshot(input)?)
-                } else {
-                    TesterHistory::Text(UartHistory::load_snapshot(input)?)
-                };
-                testers.push(UartTester { target, port, history, timeout });
-            }
-        }
+        let testers = (version >= 2)
+            .then(|| self.read_uart_testers_snapshot(input, uart_count))
+            .transpose()?;
         let mut gic = self.arm_gic.as_ref().unwrap().clone();
         gic.load_snapshot(input, version)?;
         let mut uarts = self.pl011_uarts.clone();
@@ -7158,13 +7185,8 @@ impl Bus {
         for (region, contents) in self.regions.iter_mut().zip(contents) {
             region.bytes = contents;
         }
-        if let Some((selected, timeout, echo, next_line, pause)) = defaults {
-            self.uart_testers = testers;
-            self.default_uart_tester = selected;
-            self.default_uart_timeout = timeout;
-            self.default_uart_echo = echo;
-            self.default_uart_next_line = next_line;
-            self.default_uart_pause = pause;
+        if let Some(testers) = testers {
+            self.restore_uart_testers_snapshot(testers);
         }
         self.arm_events = events;
         self.arm_gic = Some(gic);

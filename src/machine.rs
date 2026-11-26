@@ -1652,6 +1652,7 @@ impl Machine {
             for ethernet in &self.bus.rv64_devices.ethernet {
                 ethernet.save_snapshot(output)?;
             }
+            self.bus.save_uart_testers(output)?;
             self.bus.save_rv64_memory_snapshot(output)
         };
         write().map_err(|error| error.to_string())
@@ -1725,7 +1726,12 @@ impl Machine {
             }
             let ethernet = self.bus.rv64_devices.ethernet.iter()
                 .map(|device| device.read_snapshot(input)).collect::<std::io::Result<Vec<_>>>()?;
+            let testers = (version >= 8).then(|| self.bus.read_uart_testers_snapshot(input, 4096))
+                .transpose()?;
             self.bus.load_rv64_memory_snapshot(input)?;
+            if let Some(testers) = testers {
+                self.bus.restore_uart_testers_snapshot(testers);
+            }
             self.bus.rv64_devices.ethernet = ethernet;
             self.bus.rv64_devices.starlight_reset_pin = reset_pin;
             self.bus.clint = clint;

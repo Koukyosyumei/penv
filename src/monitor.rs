@@ -5,7 +5,7 @@ use crate::csr::TrapVector;
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{self, BufRead, Read, Write},
+    io::{self, BufRead, Read, Seek, Write},
     net::Ipv4Addr,
     path::{Path, PathBuf},
     time::Duration,
@@ -126,6 +126,7 @@ const SESSION_SNAPSHOT_V5: &[u8; 9] = b"PENVSESS\x05";
 const SESSION_SNAPSHOT_V6: &[u8; 9] = b"PENVSESS\x06";
 const SESSION_SNAPSHOT_V7: &[u8; 9] = b"PENVSESS\x07";
 const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x08";
+const MULTI_SNAPSHOT: &[u8; 9] = b"PENVMULT\x01";
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
 fn write_snapshot(
@@ -295,6 +296,10 @@ enum SnapshotPlatform {
 fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<SnapshotPlatform>), String> {
     let mut input = open_snapshot_input(path)?;
     let metadata = read_snapshot_metadata(&mut input)?;
+    if input.fill_buf().map_err(|error| error.to_string())?.starts_with(MULTI_SNAPSHOT) {
+        input.consume(MULTI_SNAPSHOT.len());
+        crate::snapshot::read_words::<1>(&mut input).map_err(|error| error.to_string())?;
+    }
     let header = input.fill_buf().map_err(|error| error.to_string())?;
     if header.starts_with(crate::snapshot::CORTEX_MAGIC) {
         let metadata = metadata.ok_or("Cortex-M snapshot requires monitor metadata")?;
@@ -408,7 +413,7 @@ impl Session {
         let Some(draft) = self.named_machines.draft.as_mut() else {
             return match parse_live_overlay(source, root)? {
                 Action::ExternalPmpOverlay(cpu, name, entries) =>
-                    machine.attach_monitor_external_pmp(&cpu, &name, entries),
+                    self.attach_external_pmp(machine, &cpu, &name, entries),
                 _ => Err("inline platform requires a new machine".into()),
             };
         };
@@ -428,6 +433,27 @@ impl Session {
         self.named_machines.generated.extend(boot.generated_repl);
         *draft = boot.inline_repl;
         *machine = next;
+        Ok(())
+    }
+
+    fn attach_external_pmp(
+        &mut self, machine: &mut Machine, cpu: &str, name: &str, entries: usize,
+    ) -> Result<(), String> {
+        let mut boot = Boot::default();
+        if let Some(path) = &machine.monitor_platform {
+            let original = fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            let parent = path.parent().unwrap_or(Path::new("."));
+            boot.inline_repl.push((parent.to_owned(), original));
+            boot.inline_repl.push((parent.to_owned(), format!(
+                "{name}: Miscellaneous.RiscVExternalPMP @ {cpu}\n    numberOfPMPEntries: {entries}\n"
+            )));
+            boot.materialize_platform()?;
+        }
+        machine.attach_monitor_external_pmp(cpu, name, entries)?;
+        if let Some(path) = boot.platform {
+            machine.monitor_platform = Some(path);
+            self.named_machines.generated.extend(boot.generated_repl);
+        }
         Ok(())
     }
 
@@ -513,9 +539,6 @@ impl Session {
     }
 
     fn save(&self, machine: &Machine, path: &Path) -> Result<(), String> {
-        if self.named_machines.order.len() > 1 {
-            return Err("unsupported snapshot platform with multiple machines".into());
-        }
         let mut data = Vec::new();
         let mut entries: Vec<_> = self.variables.iter()
             .filter(|(key, _)| !matches!(key.as_str(), "global.CWD" | "global.ORIGIN"))
@@ -601,8 +624,120 @@ impl Session {
             file.write_all(&mips.to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&(data.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&data).map_err(|e| e.to_string())?;
-            machine.write_boot_snapshot(file)
+            if self.named_machines.order.len() > 1 {
+                self.save_named_machines(machine, file)
+            } else {
+                machine.write_boot_snapshot(file)
+            }
         })
+    }
+
+    fn save_named_machines(&self, active: &Machine, file: &mut fs::File) -> Result<(), String> {
+        use crate::snapshot::{write_text, write_words};
+        fn write_machine(machine: &Machine, file: &mut fs::File) -> Result<(), String> {
+            let header = file.stream_position().map_err(|error| error.to_string())?;
+            write_words(file, &[0]).map_err(|error| error.to_string())?;
+            machine.write_boot_snapshot(file)?;
+            let end = file.stream_position().map_err(|error| error.to_string())?;
+            file.seek(io::SeekFrom::Start(header)).map_err(|error| error.to_string())?;
+            write_words(file, &[end - header - 8]).map_err(|error| error.to_string())?;
+            file.seek(io::SeekFrom::Start(end)).map_err(|error| error.to_string())?;
+            Ok(())
+        }
+        let selected = self.machine.as_deref().ok_or("multi-machine snapshot needs a selected machine")?;
+        active.rv64_snapshot_platform()?;
+        for machine in self.named_machines.detached.values() {
+            machine.rv64_snapshot_platform()?;
+        }
+        file.write_all(MULTI_SNAPSHOT).map_err(|error| error.to_string())?;
+        write_machine(active, file)?;
+        write_words(file, &[self.named_machines.order.len() as u64]).map_err(|error| error.to_string())?;
+        for name in &self.named_machines.order {
+            write_text(file, name).map_err(|error| error.to_string())?;
+            if name == selected {
+                continue;
+            }
+            let machine = self.named_machines.detached.get(name).ok_or("missing detached snapshot machine")?;
+            let platform = fs::read_to_string(machine.rv64_snapshot_platform()?).map_err(|error| error.to_string())?;
+            write_text(file, &platform).map_err(|error| error.to_string())?;
+            let mips = machine.bus.monitor_step_hz() / 1_000_000 / u64::from(machine.monitor_cpu_rate_divisor());
+            write_words(file, &[mips, machine.monitor_quantum]).map_err(|error| error.to_string())?;
+            write_machine(machine, file)?;
+        }
+        write_words(file, &[self.uart_testers.len() as u64]).map_err(|error| error.to_string())?;
+        for (owner, local) in &self.uart_testers {
+            write_text(file, owner.as_deref().unwrap_or(selected)).map_err(|error| error.to_string())?;
+            write_words(file, &[*local as u64]).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn load_named_machines(
+        &mut self, active: &mut Machine, input: &mut impl Read, selected: &str, root: &Path,
+    ) -> Result<(), String> {
+        use crate::snapshot::{read_text, read_words};
+        fn read_machine(machine: &mut Machine, input: &mut impl Read) -> Result<(), String> {
+            let [length] = read_words(input).map_err(|error| error.to_string())?;
+            let mut frame = input.take(length);
+            machine.read_boot_snapshot(&mut frame)?;
+            if frame.limit() != 0 {
+                return Err("incomplete machine snapshot frame".into());
+            }
+            Ok(())
+        }
+        read_machine(active, input)?;
+        let [count] = read_words(input).map_err(|error| error.to_string())?;
+        if !(2..=64).contains(&count) {
+            return Err("invalid snapshot machine count".into());
+        }
+        let mut machines = NamedMachines::default();
+        for _ in 0..count {
+            let name = read_text(input).map_err(|error| error.to_string())?;
+            if name.is_empty() || machines.order.contains(&name) {
+                return Err("invalid snapshot machine name".into());
+            }
+            machines.order.push(name.clone());
+            if name == selected {
+                continue;
+            }
+            let platform = read_text(input).map_err(|error| error.to_string())?;
+            let [mips, quantum] = read_words(input).map_err(|error| error.to_string())?;
+            let mut boot = Boot::default();
+            boot.inline_repl.push((root.to_owned(), platform));
+            boot.materialize_platform()?;
+            let path = boot.platform.as_ref().expect("materialized snapshot platform");
+            let mut machine = crate::platform::load_monitor_configuration(path, root, active.monitor_asset_dir.as_deref())?;
+            machine.monitor_platform = boot.platform;
+            machine.monitor_asset_dir.clone_from(&active.monitor_asset_dir);
+            machine.bus.use_renode_unmapped_data();
+            read_machine(&mut machine, input)?;
+            machine.set_monitor_cpu_rate(u32::try_from(mips).map_err(|error| error.to_string())?)?;
+            machine.monitor_quantum = quantum;
+            machines.detached.insert(name, machine);
+            machines.generated.extend(boot.generated_repl);
+        }
+        if !machines.order.iter().any(|name| name == selected) {
+            return Err("snapshot selected machine is missing".into());
+        }
+        let [count] = read_words(input).map_err(|error| error.to_string())?;
+        if count > 4096 {
+            return Err("invalid snapshot UART tester count".into());
+        }
+        let mut testers = Vec::new();
+        for _ in 0..count {
+            let owner = read_text(input).map_err(|error| error.to_string())?;
+            if !machines.order.contains(&owner) {
+                return Err("snapshot UART tester machine is missing".into());
+            }
+            let [local] = read_words(input).map_err(|error| error.to_string())?;
+            testers.push((Some(owner), usize::try_from(local).map_err(|error| error.to_string())?));
+        }
+        if input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {
+            return Err("trailing multi-machine snapshot data".into());
+        }
+        self.named_machines = machines;
+        self.uart_testers = testers;
+        Ok(())
     }
 
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
@@ -629,7 +764,12 @@ impl Session {
                     variables.insert(key.into(), value.clone());
                 }
             }
-            machine.read_boot_snapshot(&mut input)?;
+            if input.fill_buf().map_err(|error| error.to_string())?.starts_with(MULTI_SNAPSHOT) {
+                input.consume(MULTI_SNAPSHOT.len());
+                self.load_named_machines(machine, &mut input, &selected, path.parent().unwrap_or(Path::new(".")))?;
+            } else {
+                machine.read_boot_snapshot(&mut input)?;
+            }
             if let Some(mips) = cpu_mips {
                 machine.set_monitor_cpu_rate(mips)?;
             }
@@ -1795,7 +1935,7 @@ fn run_commands<'a>(
                 }
             }
             Action::ExternalPmpOverlay(cpu, name, entries) =>
-                machine.attach_monitor_external_pmp(cpu, name, *entries).map(|()| None),
+                session.attach_external_pmp(machine, cpu, name, *entries).map(|()| None),
             Action::RamOverlay(name, cpu, address, size) => {
                 let hart = cpu.as_deref().map(|cpu| machine.monitor_bus_hart(cpu)).transpose()?;
                 machine.bus.map_named_monitor_ram(name, hart, *address, *size)
