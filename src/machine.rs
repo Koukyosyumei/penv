@@ -716,6 +716,25 @@ impl Machine {
             };
             return result.map(Some).ok_or_else(|| format!("unsupported monitor register {register}"));
         }
+        if matches!(register.as_str(), "fflags" | "frm" | "fcsr") {
+            let fcsr = if let Some(cpu) = &mut hart.rv64 {
+                cpu.monitor_register("fflags").map(|_| &mut cpu.privilege.fcsr)
+            } else if hart.csr.f_extension {
+                Some(&mut hart.csr.fcsr)
+            } else {
+                None
+            }.ok_or("floating-point control registers require the F extension")?;
+            let (mask, shift) = match register.as_str() {
+                "fflags" => (0x1f, 0),
+                "frm" => (0xe0, 5),
+                _ => (0xff, 0),
+            };
+            if let Some(value) = value {
+                *fcsr = (*fcsr & !mask) | (((value as u8) << shift) & mask);
+                return Ok(None);
+            }
+            return Ok(Some(u64::from((*fcsr & mask) >> shift)));
+        }
         if let Some(cpu) = &mut hart.rv64 {
             if let Some(index) = register.strip_prefix('f').and_then(|index| index.parse::<usize>().ok()) {
                 return match value {
@@ -724,7 +743,7 @@ impl Machine {
                         .ok_or_else(|| format!("unsupported monitor register {register}")),
                 };
             }
-            if register == "fflags" && value.is_none() {
+            if register == "vstart" && value.is_none() {
                 return cpu.monitor_register(&register).map(Some)
                     .ok_or_else(|| format!("unsupported monitor register {register}"));
             }
