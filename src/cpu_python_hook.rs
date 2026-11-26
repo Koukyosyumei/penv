@@ -28,6 +28,8 @@ class Credential:
     @property
     def Size(self):
         return int(rpc('size ' + self.path.encode().hex()))
+    def ReadDoubleWord(self, offset):
+        return int(rpc(f'peripheral-word {self.path.encode().hex()} {offset}'))
     def Read(self, count):
         return bytes.fromhex(rpc('peripheral-read ' + self.path.encode().hex() + ' ' + str(count)))
 
@@ -121,6 +123,8 @@ class CPU(Credential):
     @property
     def PC(self):
         return HexValue(scope['pc'])
+    def DisassembleBlock(self, address, length):
+        return bytes.fromhex(rpc(f'disassemble {address} {length}')).decode()
     def GetItState(self):
         state = scope.get('itstate', 0)
         if state == 0:
@@ -201,6 +205,7 @@ pub(crate) struct Hook {
     output: BufReader<ChildStdout>,
     symbols: Option<PathBuf>,
     logger: Option<String>,
+    disassembler: Option<(Option<usize>, &'static str, String)>,
     monitor_output: String,
 }
 
@@ -272,12 +277,17 @@ impl Hook {
             output,
             symbols,
             logger,
+            disassembler: None,
             monitor_output: String::new(),
         };
         if hook.reply()? != "ready" {
             return Err("CPU Python hook failed to initialize".into());
         }
         Ok(hook)
+    }
+
+    pub(crate) fn set_disassembler(&mut self, target: (Option<usize>, &'static str, String)) {
+        self.disassembler = Some(target);
     }
 
     fn reply(&mut self) -> Result<String, String> {
@@ -423,6 +433,24 @@ impl Hook {
                     let file = File::open(&path).map_err(|error| format!("{path}: {error}"))?;
                     crate::image::load_binary_into_bus(bus, file, address, None)?;
                     Ok(String::new())
+                })(),
+                "peripheral-word" => (|| {
+                    let (path, offset) = argument.split_once(' ').ok_or("invalid peripheral word")?;
+                    let path = decode(path)?;
+                    let offset = offset.parse().map_err(|_| "invalid peripheral register offset")?;
+                    let address = bus.named_word_register(&path, offset).ok_or("unknown peripheral register")?;
+                    bus.read_scalar::<4>(address, true).map(|word| word.to_string()).map_err(|error| error.to_string())
+                })(),
+                "disassemble" => (|| {
+                    let (address, length) = argument.split_once(' ').ok_or("invalid disassembly range")?;
+                    let address = address.parse().map_err(|_| "invalid disassembly address")?;
+                    let length = length.parse().map_err(|_| "invalid disassembly length")?;
+                    if !(1..=65536).contains(&length) {
+                        return Err("disassembly length outside supported range".into());
+                    }
+                    let (hart, triple, features) = self.disassembler.as_ref().ok_or("no disassembler for this CPU")?;
+                    crate::monitor_asm::disassemble_bus(bus, *hart, triple, features, address, length)
+                        .map(|text| encode(&text))
                 })(),
                 "peripheral-read" => (|| {
                     let (path, count) = argument.split_once(' ').ok_or("invalid peripheral read")?;

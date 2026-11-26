@@ -477,27 +477,34 @@ fn normalize_vector_memory_operand(line: &str) -> String {
 pub(crate) fn disassemble_source(
     machine: &mut Machine, cpu: &str, address: u64, length: usize, requested_triple: &str,
 ) -> Result<String, String> {
-    use std::fmt::Write;
-
     let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
     if !matches_triple(requested_triple, triple)
     {
         return Err(format!("disassembler triple {requested_triple} is unavailable for {triple}"));
     }
+    disassemble_bus(&mut machine.bus, hart, triple, &features, address, length)
+}
+
+pub(crate) fn disassemble_bus(
+    bus: &mut crate::bus::Bus, hart: Option<usize>, triple: &str, features: &str,
+    address: u64, length: usize,
+) -> Result<String, String> {
+    use std::fmt::Write;
+
     let mut input = String::with_capacity(5 * length + 1);
     let mut bytes = Vec::with_capacity(length);
     if let Some(bytes_in_ram) = match hart {
-        Some(hart) => machine.bus.cpu_ram64(hart, address, length),
-        None => machine.bus.ram64(address, length),
+        Some(hart) => bus.cpu_ram64(hart, address, length),
+        None => bus.ram64(address, length),
     } {
         bytes.extend_from_slice(bytes_in_ram);
     } else if hart.is_none() && let Ok(address) = u32::try_from(address) {
-        bytes = machine.bus.read_bytes(address, length).map_err(|error| error.to_string())?
+        bytes = bus.read_bytes(address, length).map_err(|error| error.to_string())?
             .collect::<Result<_, _>>().map_err(|error| error.to_string())?;
     } else if let Some(hart) = hart {
         for offset in 0..length {
             let address = address.checked_add(offset as u64).ok_or("disassembly address overflow")?;
-            bytes.push(machine.bus.cpu_ram64(hart, address, 1).map_or(0, |byte| byte[0]));
+            bytes.push(bus.cpu_ram64(hart, address, 1).map_or(0, |byte| byte[0]));
         }
     } else {
         return Err(format!("disassembly address out of range: {address:#x}"));
@@ -506,7 +513,7 @@ pub(crate) fn disassemble_source(
         write!(input, "0x{byte:02x} ").unwrap();
     }
     input.push('\n');
-    let result = crate::llvm_mc_with_args(triple, &features, &["--disassemble", "--show-encoding"], &input)?;
+    let result = crate::llvm_mc_with_args(triple, features, &["--disassemble", "--show-encoding"], &input)?;
     if !result.status.success() {
         return Err(String::from_utf8_lossy(&result.stderr).trim().to_owned());
     }

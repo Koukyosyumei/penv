@@ -661,7 +661,10 @@ impl Machine {
         let index = std::iter::once(&self.primary).chain(&self.secondary)
             .position(|hart| hart.name.as_deref() == Some(cpu))
             .ok_or_else(|| format!("unknown hook CPU {cpu:?}"))?;
-        let hook = crate::cpu_python_hook::Hook::with_cpu(source, self.monitor_firmware.clone(), None, cpu)?;
+        let mut hook = crate::cpu_python_hook::Hook::with_cpu(source, self.monitor_firmware.clone(), None, cpu)?;
+        if let Ok(target) = self.monitor_assembly_target(cpu) {
+            hook.set_disassembler(target);
+        }
         self.python_hooks.push((index, pc, hook));
         Ok(())
     }
