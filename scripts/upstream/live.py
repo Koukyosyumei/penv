@@ -383,6 +383,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 or re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
                 or re.match(r"(?:sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)|[\w.]+\s+GetRegister)\s", command)
                 or re.fullmatch(r"sysbus IsPeripheralEnabled [\w.]+", command)
+                or re.fullmatch(r"[\w.]+ (?:Config|Address)CSRRead \S+", command)
                 or re.fullmatch(r"[\w.]+\s+(?:PC|SP|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency|PerformanceInMips|CSRValidation)", command)
             )
             if self.proc is None:
