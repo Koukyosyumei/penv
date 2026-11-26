@@ -147,6 +147,7 @@ pub struct Privilege {
 
 impl Privilege {
     pub(crate) fn initialize_renode_reset_status(&mut self, floating_point: bool) {
+        self.renode_menvcfg = self.levels != Levels::Machine;
         self.machine.vector.get_or_insert(u64::from(crate::csr::DEFAULT_MTVEC));
         const FS_INITIAL: u64 = 1 << 13;
         const XS_INITIAL: u64 = 1 << 15;
