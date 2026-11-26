@@ -295,6 +295,7 @@ pub(crate) struct Cpu {
     hvbar: u32,
     hcr: u32,
     cpacr: u32,
+    thread_ids: [u32; 3],
     fpexc: u32,
     vfp_high_words: [u32; 32],
     affinity: u32,
@@ -331,6 +332,7 @@ impl Cpu {
             hvbar: 0,
             hcr: 0,
             cpacr: 0,
+            thread_ids: [0; 3],
             fpexc: 0x700,
             vfp_high_words: [0; 32],
             affinity: 0,
@@ -475,6 +477,9 @@ impl Cpu {
             "dfar" => 0x0006_0000,
             "id_mmfr0" => 0x0000_0081,
             "mpidr" => 0x0000_00a0,
+            "tpidrurw" => 0x000d_0040,
+            "tpidruro" => 0x000d_0060,
+            "tpidrprw" => 0x000d_0080,
             "ifar" => 0x0006_0040,
             "hdfar" => 0x0086_0000,
             "hifar" => 0x0086_0040,
@@ -529,6 +534,9 @@ impl Cpu {
         let (register, mask) = match key {
             0x0001_0000 => (&mut self.sctlr, u32::MAX),
             0x000c_0000 => (&mut self.vbar, !31),
+            0x000d_0040 => (&mut self.thread_ids[0], u32::MAX),
+            0x000d_0060 => (&mut self.thread_ids[1], u32::MAX),
+            0x000d_0080 => (&mut self.thread_ids[2], u32::MAX),
             0x0001_0040 => (&mut self.cpacr, 0xf0_0000),
             0x0081_0000 if v8r => (&mut self.hsctlr, u32::MAX),
             0x0081_0020 if v8r => (&mut self.hactlr, u32::MAX),
@@ -1621,8 +1629,10 @@ impl Cpu {
                 _ if instruction & 0x0f00_0f10 == 0x0e00_0f10 => {
                     let key = instruction & 0x00ef_00ef;
                     let write = instruction & (1 << 20) == 0;
+                    let user_thread_id_access = key == 0x000d_0040
+                        || key == 0x000d_0060 && !write;
                     let permitted = rd != 15
-                        && self.cpsr & 31 != 0x10
+                        && (self.cpsr & 31 != 0x10 || user_thread_id_access)
                         && (key & (1 << 23) == 0 || self.cpsr & 31 == 0x1a);
                     if permitted
                         && let Some(reply) = self
