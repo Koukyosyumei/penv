@@ -587,8 +587,10 @@ impl Gic {
         match offset {
             0 => self.distributor | if self.version == Version::V3 { 1 << 6 } else { 0 },
             4 => {
-                (self.shared.len().div_ceil(32).min(31) as u32)
-                    | (self.cpus.len().saturating_sub(1) as u32) << 5
+                (self.shared.len() / 32) as u32
+                    | ((self.cpus.len() - 1) as u32) << 5
+                    | 9 << 19
+                    | 31 << 27
             }
             8 => 0x43b,
             0xfe8 if self.version == Version::V2 => 0x20,
