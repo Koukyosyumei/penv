@@ -121,6 +121,14 @@ impl Lps25hb {
         self.increment = false;
     }
 
+    pub(crate) fn set_register_pointer(&mut self, pointer: u8) {
+        self.pointer = Some(pointer);
+    }
+
+    pub(crate) fn set_auto_increment(&mut self, increment: bool) {
+        self.increment = increment;
+    }
+
     fn next_register(&mut self) -> Option<usize> {
         let register = self.pointer?;
         if self.increment {

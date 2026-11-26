@@ -27,6 +27,8 @@ class Credential:
     @property
     def Size(self):
         return int(rpc('size ' + self.path.encode().hex()))
+    def Read(self, count):
+        return bytes.fromhex(rpc('peripheral-read ' + self.path.encode().hex() + ' ' + str(count)))
 
 class BusRangeRegistration:
     def __init__(self, address, size, cpu=None):
@@ -333,6 +335,13 @@ impl Hook {
                             .map_err(|e| e.to_string())
                     })
                     .map(|value| value.to_string()),
+                "peripheral-read" => (|| {
+                    let (path, count) = argument.split_once(' ').ok_or("invalid peripheral read")?;
+                    let path = decode(path)?;
+                    let count = count.parse().map_err(|_| "invalid peripheral read count")?;
+                    Ok(bus.read_i2c_sensor_bytes(&path, count)?
+                        .into_iter().map(|byte| format!("{byte:02x}")).collect())
+                })(),
                 "get" => Ok(encode(&bus.monitor_user_state)),
                 "set" => decode(argument).map(|value| {
                     bus.monitor_user_state = value;

@@ -405,7 +405,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 or re.fullmatch(r"[\w.]+\s+(?:APBClockFrequency|RootClockFrequency|IRQ\s+IsSet)", command)
                 or re.fullmatch(r"sysbus IsPeripheralEnabled [\w.]+", command)
                 or re.match(r"sysbus\s+GetSymbolAddress\s+", command)
-                or re.fullmatch(r"[\w.]+\s+(?:AccelerationX|AccelerationY|AccelerationZ|HighPercentage|LowPercentage)", command)
+                or re.fullmatch(r"[\w.]+\s+(?:AccelerationX|AccelerationY|AccelerationZ|HighPercentage|LowPercentage|Pressure)", command)
                 or re.fullmatch(r"[\w.]+ (?:Config|Address)CSRRead \S+", command)
                 or re.fullmatch(r"[\w.]+\s+(?:PC|SP|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency|PerformanceInMips|CSRValidation)", command)
             )

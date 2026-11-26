@@ -671,6 +671,11 @@ enum Action {
     MagneticFeed(String, PathBuf),
     PressureFeed(String, PathBuf, bool),
     VoltageFeed(String, PathBuf, usize, u16),
+    PressureValue(String),
+    PressurePointer(String, u8),
+    PressureIncrement(String, bool),
+    FinishI2cSensorTransfer(String),
+    EnableZephyrMode(String, Vec<String>),
     RunRemaining,
     TimeSourceInfo,
     EmulationIsStarted,
@@ -1687,6 +1692,37 @@ fn run_commands<'a>(
             Action::MagneticFeed(sensor, path) => machine.bus.feed_magnetic(sensor, path).map(|()| None),
             Action::PressureFeed(sensor, path, temperature) => machine.bus.feed_pressure(sensor, path, *temperature).map(|()| None),
             Action::VoltageFeed(sensor, path, input, channel) => machine.bus.feed_ina228(sensor, path, *input, *channel).map(|()| None),
+            Action::PressureValue(sensor) => {
+                let pressure = machine.bus.find_pressure(sensor)?.pressure();
+                writeln!(output.reply(), "{pressure}").map_err(|error| error.to_string())?;
+                Ok(None)
+            }
+            Action::PressurePointer(sensor, register) => {
+                if !session.allow_privates {
+                    return Err("setting I²C subaddress requires allowPrivates".into());
+                }
+                machine.bus.find_pressure(sensor)?.set_register_pointer(*register);
+                Ok(None)
+            }
+            Action::PressureIncrement(sensor, enabled) => {
+                if !session.allow_privates {
+                    return Err("setting I²C auto-increment requires allowPrivates".into());
+                }
+                machine.bus.find_pressure(sensor)?.set_auto_increment(*enabled);
+                Ok(None)
+            }
+            Action::FinishI2cSensorTransfer(sensor) => {
+                machine.bus.find_pressure(sensor)?.stop();
+                Ok(None)
+            }
+            Action::EnableZephyrMode(cpu, excluded) => {
+                let config = crate::zephyr_boot::BootOptions {
+                    busy_wait: Some((cpu.clone(), excluded.clone())),
+                    ..Default::default()
+                };
+                let firmware = machine.monitor_firmware.clone();
+                crate::zephyr_boot::configure(machine, &config, firmware.as_deref()).map(|()| None)
+            }
             Action::Echo(message) => writeln!(output.reply(), "{message}")
                 .map(|()| None).map_err(|error| error.to_string()),
             Action::UserState(value) => {
@@ -5582,6 +5618,27 @@ fn execute(
         {
             Some(Action::I2cSensorProperty(resolve(target)?.into(), (*property).into(), resolve(value)?.into()))
         }
+        [target, "Pressure"] if target.starts_with("sysbus.") => {
+            Some(Action::PressureValue(resolve(target)?.into()))
+        }
+        [target, "currentAddress", value] if target.starts_with("sysbus.") => {
+            let address = u8::try_from(crate::parse_address(resolve(value)?)?)
+                .map_err(|_| "I²C subaddress exceeds 8 bits")?;
+            Some(Action::PressurePointer(resolve(target)?.into(), address))
+        }
+        [target, "autoIncrement", value] if target.starts_with("sysbus.") => {
+            Some(Action::PressureIncrement(resolve(target)?.into(), parse_tester_bool(resolve(value)?)?))
+        }
+        [target, "FinishTransmission"] if target.starts_with("sysbus.") => {
+            Some(Action::FinishI2cSensorTransfer(resolve(target)?.into()))
+        }
+        [cpu, "EnableZephyrMode", excluded @ ..] => {
+            let cpu = resolve(cpu)?.trim_start_matches("sysbus.");
+            let excluded = excluded.iter().map(|symbol| {
+                monitor_string(resolve(symbol)?).ok_or_else(|| "expected a quoted ELF symbol name".to_owned())
+            }).collect::<Result<_, _>>()?;
+            Some(Action::EnableZephyrMode(cpu.into(), excluded))
+        }
         ["sysbus", "GetSymbolAddress", symbol, index @ ..] if index.len() <= 1 => {
             let index = index.first().map(|value| resolve(value)?.parse()
                 .map_err(|_| "invalid symbol index".to_owned())).transpose()?;
@@ -6115,6 +6172,8 @@ fn execute(
                         | Action::PeripheralLog(..)
                         | Action::I2cAccelerationFeed(..) | Action::I2cAccelerationRead(..) | Action::I2cSampleRate(..) | Action::I2cAcceleration(..)
                         | Action::I2cSensorProperty(..)
+                        | Action::PressureValue(..) | Action::PressurePointer(..) | Action::PressureIncrement(..)
+                        | Action::FinishI2cSensorTransfer(..) | Action::EnableZephyrMode(..)
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint

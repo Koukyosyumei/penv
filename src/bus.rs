@@ -2452,6 +2452,16 @@ impl Bus {
             .ok_or_else(|| format!("unknown pressure sensor {name:?}"))
     }
 
+    pub(crate) fn read_i2c_sensor_bytes(&mut self, name: &str, count: usize) -> Result<Vec<u8>, String> {
+        if count > 65_536 {
+            return Err("I²C read exceeds 65536 bytes".into());
+        }
+        let time = self.h7_sensor_time_us().saturating_mul(1000);
+        let sensor = self.find_pressure(name)?;
+        sensor.start_read(time);
+        Ok((0..count).map(|_| sensor.read_byte()).collect())
+    }
+
     pub fn feed_illuminance(&mut self, name: &str, path: &std::path::Path) -> Result<(), String> {
         self.h7_i2c
             .iter_mut()
@@ -5350,6 +5360,17 @@ impl Bus {
     }
 
     pub(crate) fn set_i2c_sensor_property(&mut self, target: &str, property: &str, value: &str) -> Result<(), String> {
+        if matches!(property, "Temperature" | "Pressure")
+            && let Ok(sensor) = self.find_pressure(target)
+        {
+            let value = value.parse::<f64>().map_err(|_| format!("invalid {property} value"))?;
+            if property == "Temperature" {
+                sensor.set_temperature(value);
+            } else {
+                sensor.set_pressure(value);
+            }
+            return Ok(());
+        }
         let path = target.strip_prefix("sysbus.").unwrap_or(target);
         let (bus_name, name) = path.split_once('.').ok_or("expected I²C controller and sensor name")?;
         if let Some(bus) = self.nrf_peripherals.iter_mut().find(|bus| bus.name == bus_name) {
