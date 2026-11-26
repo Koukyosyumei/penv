@@ -521,6 +521,7 @@ pub struct Bus {
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     renesas_ra_icu: Option<crate::renesas_ra_icu::Icu>,
+    renesas_ra_gpt: Vec<crate::renesas_ra_gpt::Gpt>,
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
@@ -1865,6 +1866,9 @@ impl Bus {
         if let Some(device) = &mut self.dwt {
             device.reset();
         }
+        for timer in &mut self.renesas_ra_gpt {
+            timer.reset();
+        }
         if let Some(device) = &mut self.renesas_ra_icu {
             device.reset();
         }
@@ -2770,6 +2774,7 @@ impl Bus {
             || !self.gpio_pwm_leds.is_empty()
             || !self.stm32_regular_adcs.is_empty()
             || self.stm32_adc.is_some() || self.stm32_dma.as_ref().is_some_and(Stm32Dma::has_enabled_channels)
+            || self.renesas_ra_gpt.iter().any(crate::renesas_ra_gpt::Gpt::running)
             || self.renesas_ra_icu.as_ref().is_some_and(crate::renesas_ra_icu::Icu::has_pending)
             || self.nvic.as_ref().is_some_and(Nvic::has_wake_event)
             || self.systick.as_ref().is_some_and(|timer| timer.pending_exceptions() != 0)
@@ -3680,6 +3685,9 @@ impl Bus {
                 let other = u64::from(rcc.base);
                 start < other + u64::from(Stm32F4Rcc::SIZE) && other < end
             })
+            || self.renesas_ra_gpt.iter().any(|timer| {
+                start < u64::from(timer.base) + u64::from(timer.size) && end > u64::from(timer.base)
+            })
             || self.renesas_ra_icu.as_ref().is_some_and(|icu| {
                 start < u64::from(icu.base) + u64::from(crate::renesas_ra_icu::Icu::SIZE)
                     && end > u64::from(icu.base)
@@ -4565,6 +4573,16 @@ impl Bus {
         }
     }
 
+    pub(crate) fn map_renesas_ra_gpt(&mut self, timer: crate::renesas_ra_gpt::Gpt) -> Result<(), String> {
+        let start = u64::from(timer.base);
+        let end = start + u64::from(timer.size);
+        if end > 1 << 32 || self.overlaps(start, end) {
+            return Err("invalid or overlapping Renesas RA GPT registration".into());
+        }
+        self.renesas_ra_gpt.push(timer);
+        Ok(())
+    }
+
     pub(crate) fn map_renesas_ra_icu(&mut self, icu: crate::renesas_ra_icu::Icu) -> Result<(), String> {
         let start = u64::from(icu.base);
         let end = start + u64::from(crate::renesas_ra_icu::Icu::SIZE);
@@ -4597,6 +4615,15 @@ impl Bus {
         let nrf_ticks = self.nrf_clock_ticks();
         let (timer_irqs, timer_dma) = self.tick_stm32_timers();
         let adc_step_rate = self.step_hz();
+        let icu = &mut self.renesas_ra_icu;
+        for timer in &mut self.renesas_ra_gpt {
+            timer.tick(adc_step_rate, |event| {
+                if let Some(icu) = icu {
+                    icu.set_event(event, true);
+                    icu.set_event(event, false);
+                }
+            });
+        }
         if let Some(nvic) = self.nvic.as_mut() {
             if let Some(icu) = &self.renesas_ra_icu {
                 icu.sample(nvic, active);
@@ -8353,6 +8380,11 @@ impl Bus {
         {
             return Ok(exti.read(address));
         }
+        if N == 4 && address & 3 == 0
+            && let Some(timer) = self.renesas_ra_gpt.iter().find(|timer| timer.contains(address))
+        {
+            return Ok(timer.read(address));
+        }
         if matches!(N, 1 | 2 | 4) && address as usize & (N - 1) == 0
             && let Some(icu) = self.renesas_ra_icu.as_ref()
             && icu.contains(address)
@@ -9431,6 +9463,15 @@ impl Bus {
             && exti.contains(address)
         {
             exti.write(address, value);
+            return Ok(());
+        }
+        if width == 4 && address & 3 == 0
+            && let Some(timer) = self.renesas_ra_gpt.iter_mut().find(|timer| timer.contains(address))
+        {
+            if let Some(event) = timer.write(address, value) && let Some(icu) = &mut self.renesas_ra_icu {
+                icu.set_event(event, true);
+                icu.set_event(event, false);
+            }
             return Ok(());
         }
         if matches!(width, 1 | 2 | 4) && address as usize & (width - 1) == 0

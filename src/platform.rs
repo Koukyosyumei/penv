@@ -1029,6 +1029,7 @@ fn load_platform(
                     return Err(entry.error("only one UART is currently supported"));
                 }
             }
+            "Timers.RenesasRA_GPT" => map_renesas_ra_gpt(entry, &entries, &mut machine.bus)?,
             "IRQControllers.RenesasRA_ICU" => {
                 let mut external = 16;
                 let mut highest_event = 0x1da;
@@ -4303,6 +4304,60 @@ fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
     Ok(indices)
 }
 
+fn map_renesas_ra_gpt(entry: &Entry, entries: &[Entry], bus: &mut crate::bus::Bus) -> Result<(), String> {
+    use crate::repl_parser::{IrqEnd, irq_connection};
+
+    let (wires, properties): (Vec<_>, Vec<_>) = entry.body.iter().cloned()
+        .partition(|(_, text)| text.contains("->"));
+    let fields = keys_in(entry, &properties, &[
+        "numberOf32BitChannels", "numberOf16BitChannels", "commonRegistersOffset",
+        "peripheralClockDFrequency",
+    ])?;
+    let read = |name| {
+        let (_, value) = fields.iter().find(|(key, _)| *key == name)
+            .ok_or_else(|| entry.error(&format!("missing GPT property {name}")))?;
+        number(value).map_err(|error| entry.error(&error))
+    };
+    let mut timer = crate::renesas_ra_gpt::Gpt::new(
+        entry.address()?, read("numberOf32BitChannels")?, read("numberOf16BitChannels")?,
+        read("commonRegistersOffset")?, read("peripheralClockDFrequency")?,
+    ).map_err(|error| entry.error(&error))?;
+
+    let expand = |ends: &[IrqEnd<'_>]| -> Result<Vec<usize>, String> {
+        let mut lines = Vec::new();
+        for end in ends {
+            match *end {
+                IrqEnd::Number(index) if index < 512 => lines.push(index as usize),
+                IrqEnd::Range(start, end) if start <= end && end < 512 => {
+                    lines.extend((start..=end).map(|line| line as usize));
+                }
+                _ => return Err(entry.error("invalid numbered GPT connection")),
+            }
+        }
+        Ok(lines)
+    };
+    for (_, wire) in &wires {
+        let wiring = irq_connection(wire).map_err(|error| entry.error(&error))?;
+        let [target] = wiring.destinations.as_slice() else {
+            return Err(entry.error("expected one GPT IRQ destination"));
+        };
+        if target.local.is_some() || !entries.iter().any(|device| {
+            device.name == target.name && device.model == "IRQControllers.RenesasRA_ICU"
+        }) {
+            return Err(entry.error("GPT IRQ destination must be a Renesas ICU"));
+        }
+        let outputs = expand(wiring.sources.as_deref().ok_or_else(|| entry.error("missing GPT IRQ source"))?)?;
+        let events = expand(&target.groups)?;
+        if outputs.len() != events.len() {
+            return Err(entry.error("GPT IRQ ranges have different lengths"));
+        }
+        for (output, event) in outputs.into_iter().zip(events) {
+            timer.connect(output, event).map_err(|error| entry.error(&error))?;
+        }
+    }
+    bus.map_renesas_ra_gpt(timer).map_err(|error| entry.error(&error))
+}
+
 fn direct_irq(entry: &Entry, cpu: &str, line: u32) -> Result<bool, String> {
     let expected = format!("IRQ->{cpu}@{line}");
     match entry.body.as_slice() {
@@ -4357,6 +4412,40 @@ fn keys_in<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renesas_ra_gpt_pulses_the_wired_icu_event() {
+        let path = std::env::temp_dir().join(format!("penv-ra-gpt-{}.repl", std::process::id()));
+        fs::write(&path, r#"
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000 { -> cpu@0 }
+cpu: CPU.CortexM @ sysbus { cpuType: "cortex-m4"; nvic: nvic }
+icu: IRQControllers.RenesasRA_ICU @ sysbus 0x4000c000 { nvic: nvic }
+gpt: Timers.RenesasRA_GPT @ sysbus 0x40322000
+    numberOf32BitChannels: 1
+    numberOf16BitChannels: 0
+    commonRegistersOffset: 0x100
+    peripheralClockDFrequency: 48000000
+    [6-7] -> icu@[0x10D-0x10E]
+"#).unwrap();
+        let machine = load(&path, None, false);
+        fs::remove_file(path).unwrap();
+        let mut bus = machine.unwrap().bus;
+        let mut output = std::io::sink();
+        for (address, value) in [
+            (0x4000_c300, 0x10d),
+            (0x4032_2030, 1),
+            (0x4032_2064, 1),
+            (0x4032_2048, 0),
+            (0x4032_2004, 1),
+        ] {
+            bus.write(address, 4, value, &mut output).unwrap();
+        }
+        for _ in 0..100 {
+            bus.sample_nvic(&crate::nvic::ActiveExceptions::default(), false);
+        }
+        assert_eq!(bus.read::<4>(0x4000_c300).unwrap(), 0x1010d);
+        assert_eq!(bus.read::<4>(0xe000_e200).unwrap() & 1, 1);
+    }
 
     #[test]
     fn unregistered_cortex_m_nvic_does_not_reserve_mmio() {

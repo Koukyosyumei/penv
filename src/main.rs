@@ -107,6 +107,7 @@ mod plic;
 mod pl011;
 mod pmp;
 mod pydev;
+mod renesas_ra_gpt;
 mod renesas_ra_icu;
 mod repl_parser;
 mod repl_syntax;
