@@ -730,7 +730,7 @@ impl Csr {
                     .andes
                     .as_ref()
                     .and_then(|andes| andes.read(address))
-                    .or_else(|| self.pmp.as_ref()?.csrs.read(address));
+                    .or_else(|| self.pmp.as_ref()?.read(address));
             }
         })
     }
@@ -742,7 +742,7 @@ impl Csr {
                     && self
                         .vector_bootstrap
                         .as_mut()
-                        .is_some_and(|state| state.write(address, value)) =>
+                        .is_some_and(|state| state.csrs.write(address, value)) =>
             {
                 self.status |= VS;
             }
