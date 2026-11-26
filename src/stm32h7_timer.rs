@@ -449,10 +449,31 @@ impl Timer {
         {
             return limit;
         }
-        let ticks = u64::from(self.active_psc.saturating_sub(self.divider)) + 1;
-        let threshold = u128::from(ticks) * u128::from(step_hz);
+        let down = self.registers[0] & DIR != 0;
+        let mut counts = if down { self.counter } else { self.active_arr.saturating_sub(self.counter) };
+        for channel in 0..4 {
+            let mode = self.channel_mode(channel);
+            if mode & 3 != 0 {
+                continue;
+            }
+            let compare = self.registers[13 + channel];
+            let distance = if down {
+                if matches!((mode >> 4) & 7, 6 | 7) && self.counter == compare {
+                    return 0;
+                }
+                self.counter.checked_sub(compare)
+            } else {
+                compare.checked_sub(self.counter)
+            };
+            if let Some(distance) = distance.filter(|distance| *distance != 0) {
+                counts = counts.min(distance - 1);
+            }
+        }
+        let first = u128::from(self.active_psc.saturating_sub(self.divider)) + 1;
+        let ticks = first + u128::from(counts) * (u128::from(self.active_psc) + 1);
+        let threshold = ticks * u128::from(step_hz);
         let steps = threshold.saturating_sub(u128::from(self.phase)).div_ceil(u128::from(self.frequency));
-        limit.min(steps.saturating_sub(1) as u64)
+        u128::from(limit).min(steps.saturating_sub(1)) as u64
     }
 
     pub(crate) fn advance_quiet(&mut self, steps: u64, step_hz: u32) {
@@ -460,7 +481,20 @@ impl Timer {
             let total = u128::from(self.phase) + u128::from(self.frequency) * u128::from(steps);
             let cycles = total / u128::from(step_hz);
             self.phase = (total % u128::from(step_hz)) as u64;
-            self.divider += cycles as u32;
+            let first = u128::from(self.active_psc.saturating_sub(self.divider)) + 1;
+            if cycles < first {
+                self.divider += cycles as u32;
+                return;
+            }
+            let period = u128::from(self.active_psc) + 1;
+            let remaining = cycles - first;
+            self.divider = (remaining % period) as u32;
+            let counts = 1 + (remaining / period) as u32;
+            if self.registers[0] & DIR != 0 {
+                self.counter -= counts;
+            } else {
+                self.counter += counts;
+            }
         }
     }
 

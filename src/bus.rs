@@ -2614,7 +2614,7 @@ impl Bus {
     // that edge, including capture wiring, DMA and NVIC sampling, in order.
     pub(crate) fn advance_f4_quiet(&mut self, limit: u64) -> u64 {
         if self.f4_rcc.is_none() || self.h7_network_control.is_some()
-            || !self.nrf_peripherals.is_empty() || !self.ethernet.is_empty()
+            || !self.nrf_peripherals.is_empty() || self.has_rv64_ethernet_link()
             || self.litex_uart.is_some() || self.uart.is_some() || self.stm32_rtc.is_some()
             || self.h7_ltdc.is_some() || !self.h7_i2c.is_empty() || !self.h7_lptimers.is_empty()
             || !self.h7_adc.is_empty() || !self.h7_bdma.is_empty() || !self.stm32_regular_adcs.is_empty()
