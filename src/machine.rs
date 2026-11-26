@@ -2299,7 +2299,8 @@ impl Hart {
         self.bitmanip = extensions;
         self.csr.andes = (extensions.xandesperf || extensions.xandesbfhcvt || extensions.xandesvbfhcvt || extensions.xandesvqmac).then(|| {
             let mut csrs = crate::andes_csr::AndesCsrs::default();
-            csrs.bfloat16 = extensions.xandesbfhcvt || extensions.xandesvbfhcvt;
+            csrs.bfloat16 = extensions.xandesbfhcvt;
+            csrs.vector_bfloat16 = extensions.xandesvbfhcvt;
             csrs.quad_mac = extensions.xandesvqmac;
             csrs
         });
