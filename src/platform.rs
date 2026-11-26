@@ -4609,6 +4609,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn samd5_platform_routes_uart_irq_and_preserves_dwt_gate_on_reset() {
+        let path = std::env::temp_dir().join(format!("penv-samd5-{}.repl", std::process::id()));
+        fs::write(&path, r#"
+cpu0: CPU.CortexM @ sysbus { cpuType: "cortex-m4f"; nvic: nvic }
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000 { -> cpu0@0 }
+ram: Memory.MappedMemory @ sysbus 0 { size: 0x1000 }
+sercom3: UART.SAMD5_UART @ sysbus 0x41014000
+    -> nvic@58
+dwt: Miscellaneous.DWT @ sysbus 0xe0001000 { frequency: 72000000 }
+"#).unwrap();
+        let machine = load(&path, None, false);
+        fs::remove_file(path).unwrap();
+        let mut bus = machine.unwrap().bus;
+        let mut output = std::io::sink();
+
+        bus.write(0x4101_4016, 1, 4, &mut output).unwrap();
+        bus.queue_uart_input(vec![b'A']).unwrap();
+        bus.sample_nvic(&crate::nvic::ActiveExceptions::default(), false);
+        assert_eq!(bus.read::<4>(0xe000_e204).unwrap(), 1 << (58 - 32));
+        assert_eq!(bus.read::<1>(0x4101_4028).unwrap(), u32::from(b'A'));
+
+        let counter = bus.named_word_register("dwt", 4).unwrap();
+        bus.set_nvic_clocked("dwt", false).unwrap();
+        assert!(bus.reset_named_cortex_peripheral("dwt"));
+        let dwt = bus.dwt.as_mut().unwrap();
+        dwt.write(counter - 4, 1);
+        dwt.advance(100, 72_000_000);
+        assert_eq!(dwt.read(counter), Some(0));
+        dwt.set_clocked(true);
+        dwt.advance(100, 72_000_000);
+        assert_eq!(dwt.read(counter), Some(100));
+    }
+
+    #[test]
     fn cortex_m85_platform_preserves_cpuid_on_reset() {
         let path = std::env::temp_dir().join(format!("penv-cortex-m85-{}.repl", std::process::id()));
         fs::write(&path, r#"
