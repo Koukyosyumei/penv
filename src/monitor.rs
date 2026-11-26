@@ -444,6 +444,42 @@ impl Session {
         self.machine.as_deref().filter(|_| !self.machine_cleared)
     }
 
+    fn execute_named_python(
+        &mut self, machine: &mut Machine, command: &str, script: &Path, root: &Path,
+    ) -> Result<Option<String>, String> {
+        let words = command_words(command)?;
+        let Some((&name, tokens)) = words.split_first() else { return Ok(None) };
+        if !name.bytes().enumerate().all(|(index, byte)| {
+            byte == b'_' || byte.is_ascii_alphabetic() || index != 0 && byte.is_ascii_digit()
+        }) {
+            return Ok(None);
+        }
+        let lookup = format!("print(callable(globals().get('mc_{name}')))");
+        if self.execute_python(machine, &lookup)?.trim() != "True" {
+            return Ok(None);
+        }
+        let literal = crate::cpu_python_hook::python_string_literal;
+        let mut arguments = Vec::new();
+        for token in tokens {
+            let value = resolve(&self.variables, token)?;
+            let argument = if let Some(file) = monitor_path_token(value) {
+                let asset = Asset::new(file, script).input_path(root, machine.monitor_asset_dir.as_deref())?;
+                literal(&asset.to_string_lossy())
+            } else if let Some(quoted) = monitor_string(value) {
+                literal(&quoted)
+            } else if let Ok(integer) = crate::parse_address64(value) {
+                integer.to_string()
+            } else if let Ok(integer) = value.parse::<i64>() {
+                integer.to_string()
+            } else {
+                literal(value)
+            };
+            arguments.push(argument);
+        }
+        let call = format!("_monitor_return = mc_{name}({})\nif _monitor_return is not None:\n    print(_monitor_return)", arguments.join(", "));
+        self.execute_python(machine, &call).map(Some)
+    }
+
     fn save(&self, machine: &Machine, path: &Path) -> Result<(), String> {
         if self.named_machines.order.len() > 1 {
             return Err("unsupported snapshot platform with multiple machines".into());
@@ -705,6 +741,7 @@ enum Action {
     ContextBusScalar(BusScalar, String),
     LoadScopedHex(Asset, String, PathBuf),
     LoadMonitorElf(Asset, bool, PathBuf),
+    LoadMonitorBinary(Asset, u64, PathBuf),
     DisassembleBlock(String, u64, usize),
     BusWhatIsAt(u64, Option<String>),
     ExecutePython(String),
@@ -1178,6 +1215,11 @@ fn run_commands<'a>(
             Action::LoadMonitorElf(asset, virtual_addresses, root) => {
                 let path = asset.input_path(root, machine.monitor_asset_dir.as_deref())?;
                 load_monitor_elf(machine, path, *virtual_addresses).map(|()| None)
+            }
+            Action::LoadMonitorBinary(asset, address, root) => {
+                let path = asset.input_path(root, machine.monitor_asset_dir.as_deref())?;
+                let file = fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+                crate::image::load_binary(machine, file, *address).map(|()| None)
             }
             Action::LoadScopedHex(asset, context, root) => {
                 let path = asset.input_path(root, machine.monitor_asset_dir.as_deref())?;
@@ -2940,6 +2982,16 @@ pub fn serve(
                     Err(error) => {
                         frame(&mut output, "ERROR", error.as_bytes())
                     }
+                }
+            }
+            (Err(error), _) if session.python.is_some() && error.starts_with("unsupported monitor command ") => {
+                match session.execute_named_python(machine, text, path, root) {
+                    Ok(Some(reply)) => frame(&mut output, "OK", reply.as_bytes()),
+                    Ok(None) => frame(&mut output, "UNSUPPORTED", error.as_bytes()),
+                    Err(error) if error.starts_with("KeywordException: ") => {
+                        frame(&mut output, "REJECTED", error.as_bytes())
+                    }
+                    Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
             }
             (Err(error), _) if missing_include(&error) || invalid_command_parameters(&error) => {
@@ -5184,6 +5236,12 @@ fn execute(
             let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             Some(Action::LoadMonitorElf(Asset::new(file, script), load_elf_address_mode(options)?, root.to_owned()))
         }
+        ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.started => {
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
+            Some(Action::LoadMonitorBinary(
+                Asset::new(file, script), crate::parse_address64(resolve(address)?)?, root.to_owned(),
+            ))
+        }
         ["sysbus", "LoadHEX", value, context] => {
             let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             let context = resolve(context)?;
@@ -6215,7 +6273,7 @@ fn execute(
                         | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
                         | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..)
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
-                        | Action::RamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
+                        | Action::RamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..) | Action::LoadMonitorBinary(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuFpuEnabled(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::CpuMpuBackground(..) | Action::CpuTranslateAddress(..)
                         | Action::AssembleBlock(..)

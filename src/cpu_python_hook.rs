@@ -437,6 +437,10 @@ fn emit(bus: &Bus, level: i8, message: &str) {
     }
 }
 
+pub(crate) fn python_string_literal(text: &str) -> String {
+    format!("bytes.fromhex('{}').decode()", encode(text))
+}
+
 fn encode(text: &str) -> String {
     text.bytes().map(|byte| format!("{byte:02x}")).collect()
 }
