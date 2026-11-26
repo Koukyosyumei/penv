@@ -3697,15 +3697,19 @@ fn drive_networked_tester_watch(
         return drive_tester_watch(machine, watch, budget, pause, output);
     }
     let start = machine.elapsed_steps();
+    let start_ns = machine.monitor_elapsed_ns();
+    let peer_starts: Vec<_> = peers.iter().map(|peer| peer.monitor_elapsed_ns()).collect();
     let quantum = (machine.bus.monitor_step_hz() / 1_000).max(1);
     let mut retired = 0;
     loop {
         let remaining = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
         let (stop, count) = drive_tester_watch(machine, watch, remaining.min(quantum), pause, output)?;
         retired += count;
-        let deadline = machine.monitor_elapsed_ns();
-        for peer in peers.iter_mut() {
-            let nanos = deadline.saturating_sub(peer.monitor_elapsed_ns());
+        let elapsed = machine.monitor_elapsed_ns().saturating_sub(start_ns);
+        for (peer, &peer_start) in peers.iter_mut().zip(&peer_starts) {
+            // Restored machines may have been booted independently before
+            // connecting them. Advance peers by the same elapsed interval.
+            let nanos = peer_start.saturating_add(elapsed).saturating_sub(peer.monitor_elapsed_ns());
             let steps = nanos.saturating_mul(u128::from(peer.bus.monitor_step_hz())) / 1_000_000_000;
             if steps != 0 {
                 peer.set_monitor_active(true);
