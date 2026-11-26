@@ -272,10 +272,10 @@ impl Timer {
         previous != high && (ccer & 0xa == 0xa || high != (ccer & 2 != 0))
     }
 
-    pub fn sample_inputs(&mut self, levels: [bool; 4]) {
+    pub fn sample_inputs(&mut self, levels: [bool; 4]) -> bool {
         let previous = std::mem::replace(&mut self.input, levels);
         if self.registers[0] & CEN == 0 || previous == levels {
-            return;
+            return false;
         }
 
         for channel in 0..4 {
@@ -308,7 +308,7 @@ impl Timer {
                 let input = match (self.registers[2] >> 4) & 7 {
                     5 => 0,
                     6 => 1,
-                    _ => return,
+                    _ => return true,
                 };
                 if self.active_edge(input, previous[input], levels[input]) {
                     self.counter = 0;
@@ -322,6 +322,7 @@ impl Timer {
             }
             _ => {}
         }
+        true
     }
 
     fn sample_encoder(&mut self, mode: u32, previous: [bool; 4], levels: [bool; 4]) {

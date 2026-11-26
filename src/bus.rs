@@ -2554,9 +2554,9 @@ impl Bus {
         self.gpio_wires = wires;
     }
 
-    fn sample_timer_pins(&mut self) {
+    fn sample_timer_pins(&mut self) -> bool {
         if self.timer_pins.is_empty() && self.gpio_wires.is_empty() {
-            return;
+            return false;
         }
         for gpio in &mut self.h7_gpio {
             gpio.clear_timer_output();
@@ -2591,6 +2591,7 @@ impl Bus {
                 gpio.set_wired_input(pin);
             }
         }
+        let mut input_changed = false;
         for timer in self.h7_timers.iter_mut().filter(|timer| clocked(timer)) {
             let levels = std::array::from_fn(|channel| {
                 self.timer_pins
@@ -2606,8 +2607,9 @@ impl Bus {
                         })
                     })
             });
-            timer.sample_inputs(levels);
+            input_changed |= timer.sample_inputs(levels);
         }
+        input_changed
     }
 
     // Stop before the next modeled clock edge. The ordinary scheduler runs
@@ -2624,6 +2626,12 @@ impl Bus {
             || self.stm32_uarts.iter().any(Stm32Usart::has_pending_receive_timing)
             || self.iwdgs.iter().any(Iwdg::events_pending)
         {
+            return 0;
+        }
+        // The preceding timer clock can change a pin. Sample that edge
+        // before skipping cycles, and deliver a regular cycle to the CPU
+        // when capture or encoder inputs change.
+        if self.sample_timer_pins() {
             return 0;
         }
         let rate = self.step_hz();
