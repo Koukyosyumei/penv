@@ -1902,6 +1902,12 @@ pub fn serve(
                         || error.starts_with("<monitor>:1: Register ")) && error.contains(" value assertion failed,") => {
                         frame(&mut output, "FAIL", error.as_bytes())
                     }
+                    Err(error) if matches!(commands,
+                        [RuntimeCommand { action: Action::CpuRegister(_, _, Some(_)), .. }])
+                        && error.ends_with("register is read-only.") =>
+                    {
+                        frame(&mut output, "REJECTED", error.as_bytes())
+                    }
                     Err(error) if error.starts_with("<monitor>:1: Terminal tester failed!") => {
                         frame(&mut output, "FAIL", error.as_bytes())
                     }
