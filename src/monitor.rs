@@ -305,18 +305,26 @@ fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<Snap
         let repl = crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?;
         return Ok(((!metadata.selected.is_empty()).then_some(metadata.selected), Some(SnapshotPlatform::Inline(repl))));
     }
-    if crate::snapshot::rv64_version(header).is_some() || crate::snapshot::arm32_version(header).is_some()
-    {
+    let rv64_version = crate::snapshot::rv64_version(header);
+    if rv64_version.is_some() || crate::snapshot::arm32_version(header).is_some() {
+
         let metadata = metadata.ok_or("native CPU snapshot requires monitor metadata")?;
         if metadata.cpu_mips.is_none_or(|mips| mips == 0) {
             return Err("invalid RV64 snapshot rate".into());
         }
         input.consume(crate::snapshot::RV64_MAGIC.len());
         let repl = PathBuf::from(crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?);
-        if !repl.is_absolute() || repl.extension().is_none_or(|extension| extension != "repl") || !repl.is_file() {
+        if !repl.is_absolute() || repl.extension().is_none_or(|extension| extension != "repl") {
             return Err("unsupported snapshot platform path".into());
         }
-        return Ok(((!metadata.selected.is_empty()).then_some(metadata.selected), Some(SnapshotPlatform::File(repl))));
+        let platform = if repl.is_file() {
+            SnapshotPlatform::File(repl)
+        } else if rv64_version.is_some_and(|version| version >= 7) {
+            SnapshotPlatform::Inline(crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?)
+        } else {
+            return Err("unsupported snapshot platform path".into());
+        };
+        return Ok(((!metadata.selected.is_empty()).then_some(metadata.selected), Some(platform)));
     }
     let selected = match metadata {
         Some(metadata) if metadata.cpu_mips == Some(0) => {
@@ -7505,6 +7513,37 @@ emulation GetTimeSourceInfo
                 "Elapsed Virtual Time: 00:00:00.001000000\nQuantum: 00:00:00.001000000\n",
             ).as_bytes());
         }
+    }
+
+    #[test]
+    fn rv64_snapshot_rebuilds_a_deleted_generated_platform() {
+        let directory = std::env::temp_dir().join(format!("penv-rv64-platform-snapshot-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let dir = GeneratedRepl(directory);
+        let snapshot = dir.0.join("state.save");
+        let script = dir.0.join("restore.resc");
+        fs::write(&script, "RestoreMonitorSnapshot @state.save\n").unwrap();
+
+        let mut original = Boot::default();
+        original.inline_repl.push((dir.0.clone(), concat!(
+            "cpu: CPU.RiscV64 @ sysbus { cpuType: \"rv64gc\"; timeProvider: empty }\n",
+            "ram: Memory.MappedMemory @ sysbus 0x80000000 { size: 0x1000 }\n",
+        ).into()));
+        original.materialize_platform().unwrap();
+        let path = original.platform.as_ref().unwrap();
+        let mut source = crate::platform::load_monitor_configuration(path, &dir.0, None).unwrap();
+        source.monitor_platform = Some(path.clone());
+        source.set_monitor_cpu_rate(100).unwrap();
+        source.bus.memory64(0x8000_0000, 1).unwrap()[0] = 42;
+        Session::default().save(&source, &snapshot).unwrap();
+        drop(original);
+
+        let mut boot = load_for_session(&script, &dir.0).unwrap();
+        let path = boot.platform.as_ref().unwrap();
+        let mut restored = crate::platform::load_monitor_configuration(path, &dir.0, None).unwrap();
+        restored.monitor_platform = Some(path.clone());
+        run(&mut restored, &mut boot.session, &boot.runtime, u64::MAX, &mut io::sink()).unwrap();
+        assert_eq!(restored.bus.memory64(0x8000_0000, 1).unwrap(), [42]);
     }
 
     #[test]

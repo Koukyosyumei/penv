@@ -1619,6 +1619,7 @@ impl Machine {
         let mut write = || -> std::io::Result<()> {
             output.write_all(RV64_MAGIC)?;
             write_text(output, &platform.to_string_lossy())?;
+            write_text(output, &std::fs::read_to_string(platform)?)?;
             write_text(output, &self.monitor_firmware.as_deref().map_or_else(
                 std::borrow::Cow::default, std::path::Path::to_string_lossy,
             ))?;
@@ -1663,7 +1664,14 @@ impl Machine {
             let mut header = [0; 9];
             input.read_exact(&mut header)?;
             let version = rv64_version(&header).ok_or_else(|| invalid("invalid RV64 snapshot version"))?;
-            if std::path::Path::new(&read_text(input)?) != platform {
+            let original_platform = read_text(input)?;
+            let matches = if version >= 7 {
+                let embedded = read_text(input)?;
+                std::fs::read_to_string(&platform)? == embedded
+            } else {
+                std::path::Path::new(&original_platform) == platform
+            };
+            if !matches {
                 return Err(invalid("RV64 snapshot was created for a different platform"));
             }
             let firmware = read_text(input)?;
