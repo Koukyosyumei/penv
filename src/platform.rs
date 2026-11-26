@@ -647,6 +647,7 @@ fn load_platform(
     let mut spi_shifts = Vec::new();
     let mut stm32_gpios = Vec::new();
     let mut gpio_leds = Vec::new();
+    let mut gpio_pwm_testers = Vec::new();
     let mut gpio_buttons = Vec::new();
     let mut stm32_i2cs = Vec::new();
     let mut stm32_cans = Vec::new();
@@ -890,6 +891,7 @@ fn load_platform(
             "IRQControllers.PlatformLevelInterruptController" | "IRQControllers.AndesNCEPLIC100" => plic.push(entry),
             "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
             "Miscellaneous.LED" => gpio_leds.push(entry),
+            "PWMTester" => gpio_pwm_testers.push(entry),
             "Miscellaneous.Button" => gpio_buttons.push(entry),
             "CRC.STM32_CRC" => {
                 let mut series = None;
@@ -1477,6 +1479,7 @@ fn load_platform(
         };
         let mut gpio_ports = HashMap::new();
         let mut led_inputs = HashMap::new();
+        let mut pwm_inputs = HashMap::new();
         for &entry in &stm32_gpios {
             let mut port = make_stm32_gpio(entry)?;
             for (_, text) in &entry.body {
@@ -1529,6 +1532,15 @@ fn load_platform(
                             return Err(entry.error("FRAM write protection requires GPIO input zero"));
                         }
                         machine.bus.wire_fram_write_protect(port.base, *pin, Rc::clone(fram));
+                    } else if gpio_pwm_testers.iter().any(|tester| tester.name == target) {
+                        let [pin] = outputs.as_slice() else {
+                            return Err(entry.error("expected one PWM tester output source"));
+                        };
+                        if irq_index(inputs, 1).is_err()
+                            || pwm_inputs.insert(target, (entry.name.as_str(), port.base, *pin)).is_some()
+                        {
+                            return Err(entry.error("invalid or duplicate PWM tester wiring"));
+                        }
                     } else if gpio_leds.iter().any(|led| led.name == target) {
                         if inputs.trim() != "0"
                             || outputs.len() != 1
@@ -1548,6 +1560,18 @@ fn load_platform(
                 .bus
                 .map_stm32_gpio(port)
                 .map_err(|e| entry.error(&e))?;
+        }
+        for tester in gpio_pwm_testers {
+            keys(tester, &[])?;
+            let (parent, _) = tester.registration.as_deref()
+                .and_then(|registration| registration.split_once(char::is_whitespace))
+                .ok_or_else(|| tester.error("expected PWM tester attached to a GPIO port"))?;
+            let (source, port, pin) = pwm_inputs.remove(tester.name.as_str())
+                .ok_or_else(|| tester.error("missing PWM tester input wiring"))?;
+            if parent != source {
+                return Err(tester.error("PWM tester input source differs from its parent"));
+            }
+            machine.bus.map_pwm_tester(format!("{parent}.{}", tester.name), port, pin);
         }
         let mut shift_targets = HashMap::new();
         for shift in spi_shifts {

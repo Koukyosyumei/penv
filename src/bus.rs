@@ -489,6 +489,7 @@ pub struct Bus {
     nrf_leds: Vec<Option<Rc<RefCell<GpioLed>>>>,
     gpio_buttons: Vec<Option<GpioButton>>,
     gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
+    gpio_pwm_testers: Vec<GpioPwmTester>,
     gpio_fram_write_protect: Vec<(u32, u8, Rc<RefCell<crate::stm32_i2c::Fram>>)>,
     gpio_links: Vec<(u32, u8, u32, u8)>,
     led_events: bool,
@@ -580,6 +581,14 @@ pub struct Bus {
     pub(crate) clic: Option<crate::clic::Clic>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
+}
+
+struct GpioPwmTester {
+    path: String,
+    source: (u32, u8),
+    high: bool,
+    last_edge: Option<u128>,
+    ticks: [u128; 2],
 }
 
 pub struct GpioWire {
@@ -4893,6 +4902,30 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn map_pwm_tester(&mut self, path: String, port: u32, pin: u8) {
+        let high = self.stm32_gpios.iter().any(|gpio| gpio.base == port && gpio.pins() & (1 << pin) != 0);
+        self.gpio_pwm_testers.push(GpioPwmTester {
+            path, source: (port, pin), high, last_edge: None, ticks: [0; 2],
+        });
+    }
+
+    pub(crate) fn pwm_tester(&mut self, target: &str, property: &str) -> Result<Option<f64>, String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        let tester = self.gpio_pwm_testers.iter_mut().find(|tester| tester.path == name)
+            .ok_or_else(|| format!("unknown PWM tester {target:?}"))?;
+        let sum = (tester.ticks[0] + tester.ticks[1]) as f64;
+        match property {
+            "Reset" => {
+                tester.last_edge = None;
+                tester.ticks = [0; 2];
+                Ok(None)
+            }
+            "LowPercentage" => Ok(Some(tester.ticks[0] as f64 * 100.0 / sum)),
+            "HighPercentage" => Ok(Some(tester.ticks[1] as f64 * 100.0 / sum)),
+            _ => Err(format!("unknown PWM tester property {property:?}")),
+        }
+    }
+
     pub fn gpio_led_index(&self, target: &str) -> Result<usize, String> {
         let path = target.strip_prefix("sysbus.").unwrap_or(target);
         self.gpio_leds
@@ -5003,6 +5036,21 @@ impl Bus {
             });
             fram.borrow_mut().set_write_protected(high);
         }
+        if !self.gpio_pwm_testers.is_empty() {
+            let now = self.monitor_time_ns(self.h7_step);
+            for tester in &mut self.gpio_pwm_testers {
+                let (port, pin) = tester.source;
+                let high = self.stm32_gpios.iter().any(|gpio| {
+                    gpio.base == port && gpio.pins() & (1 << pin) != 0
+                });
+                if high != tester.high {
+                    if let Some(previous) = tester.last_edge.replace(now) {
+                        tester.ticks[usize::from(tester.high)] += now.saturating_sub(previous);
+                    }
+                    tester.high = high;
+                }
+            }
+        }
         let previous = self.gpio_exti_levels;
         self.gpio_exti_levels = self
             .stm32_gpios
@@ -5060,6 +5108,7 @@ impl Bus {
             .ok_or_else(|| format!("unknown STM32 GPIO port {target:?}"))?;
         let base = self.stm32_gpios.remove(index).base;
         self.gpio_leds.retain(|(port, _)| *port != base);
+        self.gpio_pwm_testers.retain(|tester| tester.source.0 != base);
         for slot in &mut self.gpio_buttons {
             if let Some(button) = slot {
                 if button.parent.as_deref() == Some(name) {

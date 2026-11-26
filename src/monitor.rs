@@ -597,6 +597,7 @@ enum Action {
     TraceRcc,
     WriteRcc(u32, u32),
     WaitForLed(String, bool, u64, u64, bool),
+    PwmTester(String, String),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
     CreateUartTester(String, Option<String>, bool, Option<u64>, Option<bool>, bool, bool, bool),
@@ -1492,6 +1493,12 @@ fn run_commands<'a>(
                     }
                 })
             }
+            Action::PwmTester(target, property) => machine.bus.pwm_tester(target, property).and_then(|value| {
+                if let Some(value) = value {
+                    writeln!(output.reply(), "{value}").map_err(|error| error.to_string())?;
+                }
+                Ok(None)
+            }),
             Action::WaitForLed(target, state, timeout, hold, pause) => {
                 let rate = machine.bus.monitor_step_hz();
                 let timeout = duration_cycles(*timeout, CORTEX_M_STEP_HZ, rate)?;
@@ -4789,6 +4796,11 @@ fn execute(
         }
         ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunToSyncPoint),
         ["machine" | "mach", "Reset"] => Some(Action::MachineReset(Vec::new())),
+        [target, property @ ("Reset" | "LowPercentage" | "HighPercentage")]
+            if target.trim_start_matches("sysbus.").contains('.') =>
+        {
+            Some(Action::PwmTester(resolve(target)?.into(), (*property).into()))
+        }
         [target, "Reset"] => {
             let cpu = resolve(target)?;
             Some(Action::CpuReset(
