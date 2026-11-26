@@ -621,6 +621,7 @@ fn load_platform(
     let mut stm32l0_rcc = None;
     let mut stm32l0_power = None;
     let mut low_power_timers = Vec::new();
+    let mut stm32_rngs = Vec::new();
     let mut flash_controller = None;
     let mut flash_chip = None;
     let mut uart = None;
@@ -943,6 +944,7 @@ fn load_platform(
                 }
             }
             crate::stm32h7_lptim::LpTimer::MODEL => low_power_timers.push(entry),
+            crate::stm32h7_rng::Rng::MODEL => stm32_rngs.push(entry),
             "Analog.STM32_ADC" => stm32_regular_adcs.push(entry),
             "Analog.STM32F0_ADC" => {
                 if stm32_adc.replace(entry).is_some() {
@@ -998,6 +1000,31 @@ fn load_platform(
             _ => return Err(entry.error("unsupported power controller property")),
         };
         machine.bus.map_stm32l0_power(crate::stm32l0_power::Stm32l0Power::new(entry.address()?, line))
+            .map_err(|error| entry.error(&error))?;
+    }
+    for entry in stm32_rngs {
+        let mut irq = None;
+        let mut series = false;
+        for (_, text) in &entry.body {
+            if !series && text.split_once(':').is_some_and(|(key, value)| {
+                key.trim() == "series" && matches!(value.trim(), "STM32Series.L0" | "STM32Series.F4" | "STM32Series.H7")
+            }) {
+                series = true;
+                continue;
+            }
+            let (pin, target, line) = crate::stm32h7_board_platform::wire(text)
+                .map_err(|error| entry.error(error))?;
+            if irq.is_some() || !matches!(pin, "" | "IRQ")
+                || !nvic.is_some_and(|controller| controller.name == target)
+            {
+                return Err(entry.error("expected at most one STM32 RNG IRQ connected to NVIC"));
+            }
+            irq = Some(irq_index(line, 240).map_err(|error| entry.error(&error))?);
+        }
+        if !series {
+            return Err(entry.error("expected STM32Series.L0, F4 or H7 RNG"));
+        }
+        machine.bus.map_h7_rng(crate::stm32h7_rng::Rng::new(entry.address()?, false, irq))
             .map_err(|error| entry.error(&error))?;
     }
     for entry in &low_power_timers {

@@ -574,6 +574,7 @@ enum Action {
     CpuReset(String),
     CpuPc(String, u32),
     CpuSymbolPc(String, String),
+    SymbolAddress(String),
     MachineReset(Vec<ResetHook>),
     ReadScalar(u64, ScalarWidth),
     WriteScalar(u64, ScalarWidth, u32),
@@ -752,7 +753,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
                     | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..) | Action::BusScalar(_)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                    | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
+                    | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
@@ -1282,6 +1283,10 @@ fn run_commands<'a>(
             Action::CpuWait(cpu, asserted) => {
                 machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
             }
+            Action::SymbolAddress(symbol) => machine.monitor_symbol_address(symbol).and_then(|address| {
+                writeln!(output.reply(), "0x{address:x}").map_err(|error| error.to_string())?;
+                Ok(None)
+            }),
             Action::CpuSymbolPc(cpu, symbol) => machine.set_monitor_symbol_pc(cpu, symbol).map(|()| None),
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
@@ -4403,6 +4408,9 @@ fn execute(
                 timeout,
                 hold,
             ))
+        }
+        ["sysbus", "GetSymbolAddress", symbol] => {
+            Some(Action::SymbolAddress(unquote(resolve(symbol)?).to_owned()))
         }
         [target, "PC", address] if address.starts_with('`') && address.ends_with('`') => {
             let expression = &address[1..address.len() - 1];

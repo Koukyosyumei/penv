@@ -913,9 +913,13 @@ impl Machine {
         self.run_selected(steps, Some(index), output, |_, _| false)
     }
 
-    pub(crate) fn set_monitor_symbol_pc(&mut self, cpu: &str, symbol: &str) -> Result<(), String> {
+    pub(crate) fn monitor_symbol_address(&self, symbol: &str) -> Result<u64, String> {
         let path = self.monitor_firmware.as_deref().ok_or("no firmware ELF for symbol lookup")?;
-        let address = crate::cpu_python_hook::symbol(path, symbol)?;
+        crate::cpu_python_hook::symbol(path, symbol)
+    }
+
+    pub(crate) fn set_monitor_symbol_pc(&mut self, cpu: &str, symbol: &str) -> Result<(), String> {
+        let address = self.monitor_symbol_address(symbol)?;
         if let Some(rv64) = &mut self.named_hart(cpu)?.rv64 {
             rv64.set_program_counter(address);
             Ok(())
