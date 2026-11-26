@@ -340,6 +340,17 @@ impl Csr {
             }
     }
 
+    pub(crate) fn monitor_sepc(&mut self, value: Option<u64>) -> Result<Option<u64>, String> {
+        let alignment = self.epc_mask();
+        let supervisor = self.supervisor.as_mut().ok_or("SEPC requires supervisor mode")?;
+        if let Some(value) = value {
+            supervisor.epc = u32::try_from(value).map_err(|_| "SEPC exceeds RV32 width")? & alignment;
+            Ok(None)
+        } else {
+            Ok(Some(u64::from(supervisor.epc)))
+        }
+    }
+
     pub(crate) fn monitor_privilege(&mut self, value: Option<u64>) -> Result<Option<u64>, String> {
         let Some(value) = value else { return Ok(Some(self.privilege as u64)); };
         self.privilege = match value {

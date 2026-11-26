@@ -625,6 +625,12 @@ impl Machine {
                 None => Ok(Some(hart.program_counter())),
             };
         }
+        if register == "sepc" {
+            return match &mut hart.rv64 {
+                Some(cpu) => cpu.monitor_sepc(value),
+                None => hart.csr.monitor_sepc(value),
+            };
+        }
         if register == "priv" {
             return match &mut hart.rv64 {
                 Some(cpu) => cpu.privilege.monitor_privilege(value),

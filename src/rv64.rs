@@ -246,6 +246,11 @@ impl Rv64 {
         }
     }
 
+    pub(crate) fn monitor_sepc(&mut self, value: Option<u64>) -> Result<Option<u64>, String> {
+        let alignment = if self.isa.compressed { !1 } else { !3 };
+        self.privilege.monitor_sepc(value, alignment)
+    }
+
     pub(crate) fn initialize_monitor_reset_pc(&mut self) {
         self.privilege.initialize_renode_reset_status(self.isa.single || self.isa.double);
         // Renode's vector configuration and memory helpers check the ISA

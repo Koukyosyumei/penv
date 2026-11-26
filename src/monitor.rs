@@ -4386,8 +4386,8 @@ fn execute(
                 resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(), value,
             ))
         }
-        [target, register @ ("MSTATUS" | "MEPC" | "MCAUSE" | "MTVAL"), value @ ..]
-            if value.is_empty() || (*register == "MTVAL" && value.len() == 1) =>
+        [target, register @ ("MSTATUS" | "MEPC" | "MCAUSE" | "MTVAL" | "SEPC"), value @ ..]
+            if value.is_empty() || (matches!(*register, "MTVAL" | "SEPC") && value.len() == 1) =>
         {
             let value = value.first().map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
             Some(Action::CpuRegister(

@@ -321,6 +321,18 @@ impl Privilege {
         self.machine.value = value;
     }
 
+    pub(crate) fn monitor_sepc(&mut self, value: Option<u64>, alignment: u64) -> Result<Option<u64>, String> {
+        if self.levels != Levels::MachineSupervisorUser {
+            return Err("SEPC requires supervisor mode".into());
+        }
+        if let Some(value) = value {
+            self.supervisor.write(0x41, value);
+            Ok(None)
+        } else {
+            Ok(self.supervisor.read(0x41, alignment))
+        }
+    }
+
     pub(crate) fn monitor_privilege(&mut self, value: Option<u64>) -> Result<Option<u64>, String> {
         let Some(value) = value else { return Ok(Some(self.mode as u64)); };
         self.mode = match (value, self.levels) {
