@@ -247,6 +247,65 @@ impl Gic {
         }
     }
 
+    pub(crate) fn access_aarch32(
+        &mut self,
+        cpu: usize,
+        register: u32,
+        value: Option<u32>,
+    ) -> Option<Option<u32>> {
+        if self.version != Version::V3 {
+            return None;
+        }
+        let interface = self.cpus.get_mut(cpu)?;
+        let reply = match (register, value) {
+            (0x0004_0006, None) => u32::from(interface.priority_mask), // ICC_PMR
+            (0x0004_0006, Some(value)) => {
+                return Some({
+                    interface.priority_mask = value as u8;
+                    None
+                });
+            }
+            (0x000c_0008 | 0x000c_000c, None) => {
+                let group = usize::from(register & 4 != 0);
+                u32::from(self.acknowledge(cpu, Some(group))) // ICC_IAR0/1
+            }
+            (0x000c_0028 | 0x000c_002c, Some(value)) => {
+                self.end_interrupt(cpu, (value & 0x3ff) as u16); // ICC_EOIR0/1
+                return Some(None);
+            }
+            (0x000c_0048 | 0x000c_004c, None) => {
+                let group = usize::from(register & 4 != 0);
+                u32::from(self.highest_pending(cpu, Some(group))) // ICC_HPPIR0/1
+            }
+            (0x000c_0068 | 0x000c_006c, value) => {
+                // ICC_BPR0/1
+                let group = usize::from(register & 4 != 0);
+                if let Some(value) = value {
+                    interface.binary_point[group] = value as u8 & 7;
+                    return Some(None);
+                }
+                u32::from(interface.binary_point[group])
+            }
+            (0x000c_006b, None) => interface
+                .active
+                .last()
+                .map_or(0xff, |(_, priority)| u32::from(*priority)), // ICC_RPR
+            (0x000c_00cc | 0x000c_00ec, value) => {
+                // ICC_IGRPEN0/1
+                let group = u32::from(register & 0x20 != 0);
+                if let Some(value) = value {
+                    interface.enabled_groups =
+                        (interface.enabled_groups & !(1 << group)) | (((value & 1) as u8) << group);
+                    return Some(None);
+                }
+                u32::from(interface.enabled_groups >> group) & 1
+            }
+            (0x000c_00ac | 0x008c_00a9, value) => return Some(value.is_none().then_some(1)), // ICC_SRE
+            _ => return None,
+        };
+        Some(Some(reply))
+    }
+
     pub(crate) fn read_window(&mut self, cpu: usize, kind: WindowKind, offset: u32) -> u32 {
         match kind {
             WindowKind::Distributor => self.read_distributor(cpu, offset),

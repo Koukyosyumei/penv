@@ -400,14 +400,14 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 or re.match(r"(?:py|python)\s", command)
                 or re.fullmatch(r"(?:peripherals|logLevel|printenv|lastLog(?:\s+\S+)?|emulation\s+IsStarted)", command)
                 or re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
-                or re.match(r"(?:sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)|[\w.]+\s+GetRegister)\s", command)
+                or re.match(r"(?:sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)|[\w.]+\s+Get(?:SystemRegisterValue|Register))\s", command)
                 or re.fullmatch(r"[\w.]+\s+Read(?:DoubleWord|QuadWord|ByteUsingDoubleWord|WordUsingDoubleWord)\s+\S+", command)
                 or re.fullmatch(r"[\w.]+\s+(?:APBClockFrequency|RootClockFrequency|IRQ\s+IsSet)", command)
                 or re.fullmatch(r"sysbus IsPeripheralEnabled [\w.]+", command)
                 or re.match(r"sysbus\s+GetSymbolAddress\s+", command)
                 or re.fullmatch(r"[\w.]+\s+(?:AccelerationX|AccelerationY|AccelerationZ|HighPercentage|LowPercentage|Pressure)", command)
                 or re.fullmatch(r"[\w.]+ (?:Config|Address)CSRRead \S+", command)
-                or re.fullmatch(r"[\w.]+\s+(?:PC|SP|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency|PerformanceInMips|CSRValidation)", command)
+                or re.fullmatch(r"[\w.]+\s+(?:PC|SP|CPSR|ExceptionLevel|SecurityState|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency|PerformanceInMips|CSRValidation)", command)
             )
             if self.proc is None:
                 if select:
@@ -421,7 +421,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                         self.commands.append(command)
                         return value
                 # Preserve immediate command results and register write rejections.
-                if re.match(r"[\w.]+\s+(?:AssembleBlock|SetRegister)(?:\s|$)", command):
+                if (re.match(r"[\w.]+\s+(?:AssembleBlock|SetRegister)(?:\s|$)", command)
+                        or re.fullmatch(r"(?:sysbus\.)?cpu[\w]* Reset", command)):
                     return self.operation(command, assertion=" AssembleBlock " in command)
                 # Rust parses and evaluates these read-only startup queries.
                 if (re.match(r"(?:echo|lastLog|printenv)(?:\s|$)", command)

@@ -28,6 +28,22 @@ mod tests {
     use crate::arm_gic::{Gic, Version, Window, WindowKind};
 
     #[test]
+    fn arm_generic_timer_distinguishes_count_offset_compare_and_mask() {
+        let mut timer = GenericTimer::new(100_000_000, 100_000_000, [Some(30), Some(27), Some(26)]);
+        assert_eq!(timer.read32(0x000e_0000, 0), Some(100_000_000));
+        assert!(timer.write64(4, 10));
+        assert_eq!(timer.read64(0, 200), Some(20));
+        assert_eq!(timer.read64(1, 200), Some(10));
+        assert!(timer.write32(0x000e_0003, 200, 5));
+        assert!(timer.write32(0x000e_0023, 200, 1));
+        assert_eq!(timer.read64(3, 200), Some(15));
+        assert_eq!(timer.read32(0x000e_0023, 240), Some(1));
+        assert_eq!(timer.read32(0x000e_0023, 250), Some(5));
+        assert!(timer.write32(0x000e_0023, 250, 3));
+        assert_eq!(timer.read32(0x000e_0023, 250), Some(7));
+    }
+
+    #[test]
     fn arm_gic_irq_uses_vector_base_and_banked_return_address() {
         let mut cpu = Cpu::new(Profile::Application);
         let mut bus = Bus::default();
@@ -232,6 +248,7 @@ pub(crate) struct Cpu {
     hsctlr: u32,
     hvbar: u32,
     hcr: u32,
+    elr_hyp: u32,
     pub(crate) timer: Option<GenericTimer>,
 }
 
@@ -255,6 +272,7 @@ impl Cpu {
             hsctlr: 0,
             hvbar: 0,
             hcr: 0,
+            elr_hyp: 0,
             timer: None,
         }
     }
@@ -735,6 +753,38 @@ impl Cpu {
             let rn = ((instruction >> 16) & 15) as usize;
             let rd = ((instruction >> 12) & 15) as usize;
             match instruction {
+                0xe160_006e if self.is_v8r() && self.cpsr & 31 == 0x1a => {
+                    let status = self.banks[6].spsr;
+                    self.set_cpsr(status, registers)?;
+                    next = self.elr_hyp & if status & T != 0 { !1 } else { !3 };
+                }
+                _ if self.is_v8r()
+                    && matches!(instruction & 0x0fff_0fff, 0x010e_0300 | 0x014e_0300) =>
+                {
+                    if self.cpsr & 31 == 0x1a && rd != 15 {
+                        registers[rd] = if instruction & (1 << 22) != 0 {
+                            self.banks[6].spsr
+                        } else {
+                            self.elr_hyp
+                        };
+                    } else {
+                        next = self.undefined(address.wrapping_add(4), registers);
+                    }
+                }
+                _ if self.is_v8r()
+                    && matches!(instruction & 0x0fff_fff0, 0x012e_f300 | 0x016e_f300) =>
+                {
+                    let source = (instruction & 15) as usize;
+                    if self.cpsr & 31 == 0x1a && source != 15 {
+                        if instruction & (1 << 22) != 0 {
+                            self.banks[6].spsr = registers[source];
+                        } else {
+                            self.elr_hyp = registers[source];
+                        }
+                    } else {
+                        next = self.undefined(address.wrapping_add(4), registers);
+                    }
+                }
                 _ if instruction & 0x0fe0_0f0f == 0x0c40_0f0e => {
                     let operation = (instruction >> 4) & 15;
                     let handled = if self.cpsr & 31 == 0x10 || rd == 15 || rn == 15 || rd == rn {
@@ -766,7 +816,15 @@ impl Cpu {
                         && self.cpsr & 31 != 0x10
                         && (key & (1 << 23) == 0 || self.cpsr & 31 == 0x1a);
                     if permitted
-                        && let Some(reply) = self.access_cp15(key, write.then_some(registers[rd]))
+                        && let Some(reply) = self
+                            .access_cp15(key, write.then_some(registers[rd]))
+                            .or_else(|| {
+                                bus.arm_gic.as_mut()?.access_aarch32(
+                                    slot,
+                                    key,
+                                    write.then_some(registers[rd]),
+                                )
+                            })
                     {
                         if let Some(value) = reply {
                             registers[rd] = value;
@@ -808,6 +866,9 @@ impl Cpu {
                         }
                     }
                     if instruction & (1 << 22) == 0 {
+                        if self.cpsr & 31 == 0x10 {
+                            fields &= 0xf80f_0000;
+                        }
                         let updated = (self.cpsr & !fields) | (value & fields);
                         if self.set_cpsr(updated, registers).is_err() {
                             next = self.undefined(address.wrapping_add(4), registers);
