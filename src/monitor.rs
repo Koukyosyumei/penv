@@ -698,6 +698,8 @@ enum Action {
     DisassembleBlock(String, u64, usize),
     BusWhatIsAt(u64, Option<String>),
     ExecutePython(String),
+    InvalidPythonSource(String),
+    RegisterPyDev(String, u32, u32, bool),
     PythonAssignment(String, String),
     PythonHook(String, String, Option<String>),
     RecordTo(PathBuf),
@@ -998,6 +1000,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_) | Action::PeripheralLog(..)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
                     | Action::PythonAssignment(..) | Action::ExecutePython(..)
+                    | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
                     | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..)
                     | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
@@ -1202,6 +1205,12 @@ fn run_commands<'a>(
                 output.reply().write_all(result.as_bytes()).map_err(|error| error.to_string())?;
                 Ok(None)
             }
+            Action::InvalidPythonSource(command) => Err(format!(
+                "KeywordException: There was an error when executing command '{command}': Variable type has to be a string."
+            )),
+            Action::RegisterPyDev(source, address, size, initable) => machine.bus
+                .map_pydev(source, *address, *size, *initable)
+                .map(|()| None),
             Action::PythonAssignment(name, source) => {
                 let result = session.execute_python(machine, source)?;
                 let result = result.trim_end();
@@ -3555,7 +3564,8 @@ fn is_empty_machine_action(action: &Action) -> bool {
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
         | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::RunFor(_) | Action::RunUntil(_)
         | Action::RunToSyncPoint | Action::SetEmulationPaused(_)
-        | Action::ClearMemory | Action::DescribeSnapshotPlatform)
+        | Action::ClearMemory | Action::DescribeSnapshotPlatform | Action::InvalidPythonSource(..)
+        | Action::RegisterPyDev(..))
 }
 
 pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), String> {
@@ -4899,9 +4909,17 @@ fn execute(
         )),
         ["peripherals"] => Some(Action::PeripheralList),
         ["py" | "python", source] => {
-            let source = monitor_string(resolve(source)?).ok_or("Variable type has to be a string.")?;
-            Some(Action::ExecutePython(source))
+            Some(match monitor_string(resolve(source)?) {
+                Some(source) => Action::ExecutePython(source),
+                None => Action::InvalidPythonSource(text.to_owned()),
+            })
         }
+        ["machine", "PyDevFromString", source, address, size, initable] => Some(Action::RegisterPyDev(
+            monitor_string(resolve(source)?).ok_or("expected quoted PyDev source")?,
+            crate::parse_address(resolve(address)?)?,
+            crate::parse_address(resolve(size)?)?,
+            parse_tester_bool(resolve(initable)?)?,
+        )),
         [target, method @ ("AddHook" | "RemoveHooksAt"), ..]
             if text.contains("`sysbus GetSymbolAddress ")
                 && (*method == "RemoveHooksAt" || text.rsplit_once('`').is_some_and(|(_, body)| body.trim_start().starts_with('"'))) =>
@@ -5902,6 +5920,7 @@ fn execute(
                     action,
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
                         | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
+                        | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
                         | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuFpuEnabled(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
