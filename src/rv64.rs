@@ -307,6 +307,9 @@ impl Rv64 {
         // Renode's vector configuration and memory helpers check the ISA
         // extensions directly. Its vector CSR handlers still check mstatus.VS.
         self.privilege.renode_vector_memory = true;
+        if let Some(vector) = &mut self.privilege.vector {
+            vector.initialize_renode_type();
+        }
         // A platform can override the Renode RISC-V default with resetVector.
         if !self.reset_vector_configured {
             self.reset_vector = 0x1000;

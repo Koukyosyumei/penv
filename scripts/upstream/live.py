@@ -414,6 +414,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 or re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
                 or re.match(r"(?:sysbus\s+Read(?:Byte|Bytes|Word|DoubleWord|QuadWord)|[\w.]+\s+Get(?:SystemRegisterValue|Register))\s", command)
                 or re.fullmatch(r"[\w.]+\s+Read(?:DoubleWord|QuadWord|ByteUsingDoubleWord|WordUsingDoubleWord)\s+\S+", command)
+                or re.fullmatch(r"[\w.]+\s+(?:GetRiscvOpcodesEmbeddedResourceNames|GetAllOpcodesCounters|FaultStatus)", command)
+                or re.match(r"[\w.]+\s+GetOpcodeCounter\s", command)
                 or re.fullmatch(r"[\w.]+\s+(?:APBClockFrequency|RootClockFrequency|IRQ\s+IsSet)", command)
                 or command == "sysbus Endianess"
                 or re.fullmatch(r"sysbus IsPeripheralEnabled [\w.]+", command)

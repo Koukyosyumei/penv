@@ -38,6 +38,10 @@ impl VectorState {
         Ok(state)
     }
 
+    pub(super) fn initialize_renode_type(&mut self) {
+        self.kind = 0;
+    }
+
     pub(crate) fn new(bits: u64) -> Result<Self, &'static str> {
         Self::validate_length(bits)?;
         Ok(Self {
@@ -340,6 +344,40 @@ impl Rv64 {
         Ok(())
     }
 
+    fn vector_mask_memory(
+        &mut self, inst: Instruction, base: u64, bus: &mut Bus, output: &mut impl Write,
+    ) -> Result<(), Fault> {
+        let vector = self.privilege.vector.as_ref().expect("vector memory already validated");
+        let start = vector.start as usize;
+        let bytes = vector.length.div_ceil(8) as usize;
+        let register_bytes = vector.bits as usize / 8;
+        let target = inst.rd();
+        let store = inst.opcode() == 0x27;
+        for offset in start..bytes {
+            let address = base.wrapping_add(offset as u64);
+            self.trace_stack_access(bus, inst, address, 1, store);
+            self.privilege.vector.as_mut().unwrap().start = offset as u64;
+            if store {
+                let value = self.privilege.vector.as_ref().unwrap().element(target, offset, 1);
+                self.store(bus, address, 1, value as u64, output)?;
+            } else {
+                let value = self.load(bus, address, 1)?;
+                self.privilege.vector.as_mut().unwrap().set_element(target, offset, 1, value);
+            }
+        }
+        let vector = self.privilege.vector.as_mut().unwrap();
+        if !store && start < bytes {
+            for offset in bytes..register_bytes {
+                vector.set_element(target, offset, 1, 0xff);
+            }
+        }
+        vector.start = 0;
+        if !self.privilege.renode_vector_memory {
+            self.privilege.status |= VS;
+        }
+        Ok(())
+    }
+
     pub(super) fn vector_memory(
         &mut self,
         inst: Instruction,
@@ -355,6 +393,9 @@ impl Rv64 {
         let vector = self.privilege.vector.as_ref().ok_or_else(illegal)?;
         if vector.kind == VILL {
             return Err(illegal());
+        }
+        if inst.0 >> 25 == 1 && inst.rs2() == 11 && inst.funct3() == 0 {
+            return self.vector_mask_memory(inst, base, bus, output);
         }
         let log_width: u32 = match inst.funct3() {
             0 => 0,

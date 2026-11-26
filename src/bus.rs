@@ -7274,7 +7274,8 @@ impl Bus {
     }
 
     pub(crate) fn supports_rv64_snapshot(&self) -> bool {
-        self.miv_uart.is_none() && self.pl011_uarts.is_empty()
+        self.rv64_instruction_hooks.is_empty() && self.rv64_opcode_counters.is_empty()
+            && self.miv_uart.is_none() && self.pl011_uarts.is_empty()
             && self.rv64_devices.supports_snapshot()
             && self.rv64_tohost.is_none() && self.robot_tohost.is_none()
             && self.policy_tags.is_empty() && self.pydevs.is_empty()
