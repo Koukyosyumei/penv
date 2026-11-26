@@ -824,6 +824,10 @@ impl Machine {
             ("+zbb", hart.bitmanip.zbb), ("+zbc", hart.bitmanip.zbc),
             ("+zbs", hart.bitmanip.zbs), ("+zicond", hart.zicond),
             ("+zacas", hart.zacas),
+            ("+zbkb", hart.bitmanip.zbkb), ("+zbkx", hart.bitmanip.zbkx),
+            ("+zbkc", hart.bitmanip.zbkc), ("+zknh", hart.bitmanip.zknh),
+            ("+zkne", hart.bitmanip.zkne), ("+zknd", hart.bitmanip.zknd),
+            ("+zksed", hart.bitmanip.zksed), ("+zksh", hart.bitmanip.zksh),
         ];
         let features = available.into_iter().filter_map(|(name, enabled)| enabled.then_some(name))
             .collect::<Vec<_>>().join(",");

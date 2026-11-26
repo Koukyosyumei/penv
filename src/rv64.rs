@@ -134,6 +134,13 @@ impl Isa {
             (self.double, "+d"),
             (self.half, "+zfh"),
             (self.vector, "+v"),
+            (self.bitmanip.zba, "+zba"),
+            (self.bitmanip.zbb, "+zbb"),
+            (self.bitmanip.zbc, "+zbc"),
+            (self.bitmanip.zbs, "+zbs"),
+            (self.bitmanip.zicond, "+zicond"),
+            (self.bitmanip.zbkb, "+zbkb"),
+            (self.bitmanip.zbkx, "+zbkx"),
         ]
         .into_iter()
         .filter_map(|(enabled, feature)| enabled.then_some(feature))

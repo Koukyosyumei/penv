@@ -4,11 +4,11 @@ use super::{Instruction, Isa, sign};
 pub(super) struct Extensions {
     pub(super) zba: bool,
     pub(super) zbb: bool,
-    zbc: bool,
+    pub(super) zbc: bool,
     pub(super) zbs: bool,
-    zicond: bool,
-    zbkb: bool,
-    zbkx: bool,
+    pub(super) zicond: bool,
+    pub(super) zbkb: bool,
+    pub(super) zbkx: bool,
 }
 
 impl Extensions {
