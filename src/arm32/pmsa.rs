@@ -2,7 +2,7 @@
 
 #[derive(Clone, Copy)]
 pub(super) enum Register {
-    Type,
+    Type { hyp: bool },
     Selector,
     Enable,
     Base(Option<usize>),
@@ -14,7 +14,7 @@ impl Register {
     pub(super) fn named(name: &str) -> Option<(usize, Self)> {
         let (bank, name) = name.strip_prefix('h').map_or((0, name), |name| (1, name));
         let register = match name {
-            "mpuir" => Self::Type,
+            "mpuir" => Self::Type { hyp: bank == 1 },
             "prselr" => Self::Selector,
             "prenr" => Self::Enable,
             "mair0" => Self::Attribute(0),
@@ -39,7 +39,7 @@ impl Register {
         let crm = key & 15;
         let op2 = (key >> 5) & 7;
         let register = match (crn, op1 & 3, crm, op2) {
-            (0, 0, 0, 4) => Self::Type,
+            (0, 0, 0, 4) => Self::Type { hyp: bank == 1 },
             (6, 0, 2, 1) => Self::Selector,
             (6, 0, 1, 1) => Self::Enable,
             (6, 0, 3, 0) => Self::Base(None),
@@ -190,10 +190,10 @@ impl Pmsa {
 
     pub(super) fn access(&mut self, register: Register, value: Option<u32>) -> Option<Option<u32>> {
         let reply = match register {
-            Register::Type => {
+            Register::Type { hyp } => {
                 return value
                     .is_none()
-                    .then_some(Some((self.implemented as u32) << 8));
+                    .then_some(Some((self.implemented as u32) << if hyp { 0 } else { 8 }));
             }
             Register::Selector => {
                 if let Some(value) = value {
