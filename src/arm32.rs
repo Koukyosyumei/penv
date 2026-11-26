@@ -108,6 +108,29 @@ mod tests {
     }
 
     #[test]
+    fn arm_doubleword_store_uses_word_alignment_in_hyp_mode() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        cpu.hsctlr = (1 << 17) | 3;
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        let mut output = Vec::new();
+        bus.write(0, 4, 0xe16d_41fc, &mut output).unwrap(); // STRD r4, r5, [sp, #-28]!
+        let mut registers = [0; 32];
+        registers[4] = 0x1020_3040;
+        registers[5] = 0x5060_7080;
+        registers[13] = 0x838;
+        let mut pc = 0;
+        cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output).unwrap();
+        assert_eq!((pc, registers[13]), (4, 0x81c));
+        assert_eq!(bus.read::<4>(0x81c).unwrap(), 0x1020_3040);
+        assert_eq!(bus.read::<4>(0x820).unwrap(), 0x5060_7080);
+        registers[13] = 0x83a;
+        pc = 0;
+        cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output).unwrap();
+        assert_eq!((pc, registers[13], cpu.fault_address[2]), (0x10, 0x83a, 0x81e));
+    }
+
+    #[test]
     fn arm_sleep_fast_forward_leaves_the_timer_boundary_to_the_scheduler() {
         let mut cpu = Cpu::new(Profile::RealTimeV8);
         let mut bus = Bus::default();
@@ -722,6 +745,19 @@ impl Cpu {
             None
         };
         let (hyp, reason) = fault?;
+        Some(self.memory_fault(address, access, pc, hyp, reason, registers))
+    }
+
+    fn memory_fault(
+        &mut self,
+        address: u32,
+        access: pmsa::Access,
+        pc: u32,
+        hyp: bool,
+        reason: pmsa::Fault,
+        registers: &mut [u32; 32],
+    ) -> u32 {
+        let hyp_mode = self.is_v8r() && self.cpsr & 31 == 0x1a;
         let instruction = access == pmsa::Access::Fetch;
         let write = access == pmsa::Access::Write;
         let offset = if instruction { 0x0c } else { 0x10 };
@@ -733,17 +769,17 @@ impl Cpu {
                 | reason as u32;
             self.fault_address[2 + usize::from(instruction)] = address;
             let vector = if hyp_mode { offset } else { 0x14 };
-            Some(self.exception(0x1a, vector, pc, registers))
+            self.exception(0x1a, vector, pc, registers)
         } else {
             let index = usize::from(instruction);
             self.fault_status[index] = (1 << 9) | (u32::from(write) << 11) | reason as u32;
             self.fault_address[index] = address;
-            Some(self.exception(
+            self.exception(
                 0x17,
                 offset,
                 pc.wrapping_add(if instruction { 4 } else { 8 }),
                 registers,
-            ))
+            )
         }
     }
 
@@ -1947,48 +1983,32 @@ impl Cpu {
                     };
                     let pre = instruction & (1 << 24) != 0;
                     let target = if pre { updated } else { base };
-                    let width = if pair {
-                        8
-                    } else if kind == 2 {
-                        1
-                    } else {
-                        2
-                    };
-                    let access = if load {
-                        pmsa::Access::Read
-                    } else {
-                        pmsa::Access::Write
-                    };
-                    if let Some(vector) =
-                        self.check_protection(target, width, access, address, registers)
-                    {
-                        *pc = vector;
+                    let width = if pair { 4 } else if kind == 2 { 1 } else { 2 };
+                    let access = if load { pmsa::Access::Read } else { pmsa::Access::Write };
+                    if pair && !target.is_multiple_of(4) {
+                        let hyp = self.is_v8r() && self.cpsr & 31 == 0x1a;
+                        *pc = self.memory_fault(target, access, address, hyp, pmsa::Fault::Alignment, registers);
                         return Ok(Step::Trap);
                     }
-                    if pair {
-                        if load {
-                            registers[rd] = self.load(bus, slot, target, 4)?;
-                            registers[rd + 1] = self.load(bus, slot, target.wrapping_add(4), 4)?;
-                        } else {
-                            self.store(bus, slot, target, 4, registers[rd], output)?;
-                            self.store(
-                                bus,
-                                slot,
-                                target.wrapping_add(4),
-                                4,
-                                registers[rd + 1],
-                                output,
-                            )?;
+                    let count = if pair { 2 } else { 1 };
+                    for index in 0..count {
+                        let transfer = target.wrapping_add(index as u32 * 4);
+                        if let Some(vector) =
+                            self.check_protection(transfer, width, access, address, registers)
+                        {
+                            *pc = vector;
+                            return Ok(Step::Trap);
                         }
-                    } else if load {
-                        let value = self.load(bus, slot, target, width)?;
-                        registers[rd] = match kind {
-                            2 => value as i8 as i32 as u32,
-                            3 => value as i16 as i32 as u32,
-                            _ => value,
-                        };
-                    } else {
-                        self.store(bus, slot, target, width, registers[rd], output)?;
+                        if load {
+                            let value = self.load(bus, slot, transfer, width)?;
+                            registers[rd + index] = match (pair, kind) {
+                                (false, 2) => value as i8 as i32 as u32,
+                                (false, 3) => value as i16 as i32 as u32,
+                                _ => value,
+                            };
+                        } else {
+                            self.store(bus, slot, transfer, width, registers[rd + index], output)?;
+                        }
                     }
                     if rn != 15 && (!pre || instruction & (1 << 21) != 0) {
                         registers[rn] = updated;
