@@ -1221,7 +1221,13 @@ impl Machine {
 
     pub(crate) fn prepare_monitor_cortex_step(&mut self, name: &str) -> Result<(), String> {
         self.cortex_m_cpu(name)?;
-        if self.elapsed_steps() == 0 && self.monitor_firmware.is_none() && !self.primary.pc_written {
+        self.prepare_monitor_cortex_run()
+    }
+
+    pub(crate) fn prepare_monitor_cortex_run(&mut self) -> Result<(), String> {
+        if self.is_cortex_m() && self.elapsed_steps() == 0 && self.monitor_firmware.is_none()
+            && !self.primary.pc_written
+        {
             self.primary.reset_cortex_m(&mut self.bus)?;
         }
         Ok(())

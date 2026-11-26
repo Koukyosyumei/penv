@@ -248,7 +248,7 @@ impl Nvic {
     }
 
     pub(crate) fn supports_snapshot(&self) -> bool {
-        self.security.is_none() && self.nrf_mpu.is_none()
+        self.security.is_none()
     }
 
     pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
@@ -262,7 +262,7 @@ impl Nvic {
             u64::from(self.lazy_fp_full_frame), u64::from(self.bus_fault_status),
             u64::from(self.bus_fault_address), u64::from(self.ccr), u64::from(self.cpacr),
             u64::from(self.fault_enables), u64::from(self.cfsr), u64::from(self.hfsr),
-            u64::from(self.cache_selector), u64::from(self.demcr), u64::from(self.mpu.is_some()),
+            u64::from(self.cache_selector), u64::from(self.demcr), u64::from(self.mpu.is_some()), u64::from(self.nrf_mpu.is_some()),
         ])?;
         write_words(output, &self.enabled.map(u64::from))?;
         write_words(output, &self.pending.map(u64::from))?;
@@ -275,6 +275,9 @@ impl Nvic {
                 write_words(output, &region.map(u64::from))?;
             }
         }
+        if let Some(mpu) = &self.nrf_mpu {
+            mpu.save_snapshot(output)?;
+        }
         Ok(())
     }
 
@@ -282,11 +285,11 @@ impl Nvic {
         use crate::snapshot::{invalid, read_bool, read_words};
         let [vtor, lines, mask, group, event, hard_pending, fpccr, scr, reset,
             lockup, active_system, debug, fpcar, full_fp, fault_status, fault_address,
-            ccr, cpacr, fault_enable, cfsr, hfsr, cache, demcr, mpu] = read_words(input)?;
+            ccr, cpacr, fault_enable, cfsr, hfsr, cache, demcr, mpu, nrf_mpu] = read_words(input)?;
         let word = |value| u32::try_from(value).map_err(std::io::Error::other);
         let optional_word = |value| if value == 1 << 32 { Ok(None) } else { word(value).map(Some) };
         if lines != self.external_lines as u64 || mask != u64::from(self.priority_mask)
-            || group > 7 || read_bool(mpu)? != self.mpu.is_some()
+            || group > 7 || read_bool(mpu)? != self.mpu.is_some() || read_bool(nrf_mpu)? != self.nrf_mpu.is_some()
         {
             return Err(invalid("NVIC configuration differs from the snapshot"));
         }
@@ -330,6 +333,9 @@ impl Nvic {
                 let [base, limit] = read_words(input)?;
                 *region = [word(base)?, word(limit)?];
             }
+        }
+        if let Some(mpu) = &mut self.nrf_mpu {
+            mpu.load_snapshot(input)?;
         }
         Ok(())
     }

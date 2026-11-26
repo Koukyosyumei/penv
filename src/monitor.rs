@@ -1302,7 +1302,7 @@ fn run_commands<'a>(
             Action::RunToSyncPoint | Action::RunFor(_) | Action::RunUntil(_) | Action::CpuStep(..) => {
                 let valid_cpu = match &command.action {
                     Action::CpuStep(cpu, _) => machine.prepare_monitor_cortex_step(cpu),
-                    _ => Ok(()),
+                    _ => machine.prepare_monitor_cortex_run(),
                 };
                 valid_cpu.and_then(|()| {
                     let was_paused = machine.primary.monitor_paused;

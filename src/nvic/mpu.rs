@@ -6,6 +6,29 @@ pub(super) struct Mpu {
 }
 
 impl Mpu {
+    pub(super) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        crate::snapshot::write_words(output, &[u64::from(self.control), self.selected as u64])?;
+        for (base, attrs) in self.regions {
+            crate::snapshot::write_words(output, &[u64::from(base), u64::from(attrs)])?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        let [control, selected] = crate::snapshot::read_words(input)?;
+        if selected >= self.regions.len() as u64 {
+            return Err(crate::snapshot::invalid("invalid MPU snapshot selector"));
+        }
+        let word = |value| u32::try_from(value).map_err(std::io::Error::other);
+        self.control = word(control)?;
+        self.selected = selected as usize;
+        for region in &mut self.regions {
+            let [base, attrs] = crate::snapshot::read_words(input)?;
+            *region = (word(base)?, word(attrs)?);
+        }
+        Ok(())
+    }
+
     pub(super) fn read(&self, offset: u32) -> Option<u32> {
         let (base, attrs) = self.regions[self.selected];
         Some(match offset {
