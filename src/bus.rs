@@ -9151,6 +9151,33 @@ impl Bus {
         }
     }
 
+    fn has_scoped_ram(&self, hart: usize, address: u64, width: usize) -> bool {
+        let Some(end) = address.checked_add(width as u64) else { return false; };
+        self.aliases.iter().any(|alias| alias.harts & (1 << hart) != 0
+            && alias.base <= address && end <= alias.base + alias.length as u64)
+    }
+
+    pub(crate) fn scoped_cpu_ram64(&self, hart: usize, address: u64, width: usize) -> Option<&[u8]> {
+        self.has_scoped_ram(hart, address, width).then(|| self.cpu_ram64(hart, address, width)).flatten()
+    }
+
+    pub(crate) fn scoped_cpu_memory64(&mut self, hart: usize, address: u64, width: usize) -> Option<&mut [u8]> {
+        self.has_scoped_ram(hart, address, width).then(|| self.cpu_memory64(hart, address, width)).flatten()
+    }
+
+    pub(crate) fn read_cpu_ram<const N: usize>(&self, hart: usize, address: u32) -> Result<u32, BusError> {
+        if let Some(bytes) = self.scoped_cpu_ram64(hart, u64::from(address), N) {
+            if address as usize & (N - 1) != 0 {
+                return Err(BusError::Misaligned(address, N));
+            }
+            let mut value = [0; 4];
+            value[..N].copy_from_slice(bytes);
+            Ok(u32::from_le_bytes(value))
+        } else {
+            self.read_ram::<N>(address)
+        }
+    }
+
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
         let mut bytes = [0; 4];
         bytes[..N].copy_from_slice(&self.read_ram_bytes::<N>(address)?);

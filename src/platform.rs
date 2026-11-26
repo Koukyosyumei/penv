@@ -629,6 +629,7 @@ fn load_platform(
     let cortex_m = entries.iter().any(|entry| entry.model == "CPU.CortexM");
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
+    let mut scoped_memory = Vec::new();
     let mut external_pmps = HashMap::new();
     let mut clint = None;
     let mut riscv_machine_timer = None;
@@ -755,6 +756,27 @@ fn load_platform(
                     continue;
                 }
                 let length = number(size).map_err(|e| entry.error(&e))?;
+                if !cortex_m
+                    && let Some(fields) = entry.registration.as_deref()
+                        .and_then(|value| value.strip_prefix("sysbus new Bus.BusPointRegistration"))
+                        .and_then(|value| value.trim().strip_prefix('{'))
+                        .and_then(|value| value.strip_suffix('}'))
+                {
+                    let mut cpu = None;
+                    let mut address = None;
+                    for (key, value) in object_fields(fields).map_err(|error| entry.error(error))? {
+                        match key {
+                            "address" if address.is_none() => address = Some(number(value).map_err(|error| entry.error(&error))?),
+                            "cpu" if cpu.is_none() => cpu = Some(value),
+                            _ => return Err(entry.error("invalid or duplicate scoped RAM registration field")),
+                        }
+                    }
+                    let cpu = cpu.ok_or_else(|| entry.error("scoped RAM registration requires CPU name"))?;
+                    let address = address.ok_or_else(|| entry.error("scoped RAM registration requires an address"))?;
+                    scoped_memory.push((entry, cpu, address, length));
+                    ram = true;
+                    continue;
+                }
                 let registrations = memory_registrations(entry, length)?;
                 let (first_address, first_size, _) = registrations[0];
                 let addresses: Vec<_> = registrations.iter().map(|&(address, _, _)| address).collect();
@@ -2626,6 +2648,12 @@ fn load_platform(
     for (slot, config) in configs.iter().enumerate() {
         configure_rv32_cpu(machine.hart_mut(slot), config, default_vector_mapped,
             external_pmps.get(config.1.name.as_str()).copied())?;
+    }
+    for (entry, cpu, address, length) in scoped_memory {
+        let slot = configs.iter().position(|config| config.1.name == cpu)
+            .ok_or_else(|| entry.error(&format!("unknown scoped RAM CPU {cpu:?}")))?;
+        machine.bus.map_named_monitor_ram(&entry.name, Some(slot), u64::from(address), length)
+            .map_err(|error| entry.error(&error))?;
     }
     let cpu = configs[0].1;
     if configs.iter().all(|config| config.1.model == "CPU.RiscV32") {

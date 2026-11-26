@@ -1125,7 +1125,7 @@ enum Action {
     EgisSysconProperty(String, String),
     SynchroniseQuantum,
     CpuReset(String),
-    CpuPc(String, u32),
+    CpuPc(String, u64),
     CpuSymbolPc(String, String),
     CpuSymbolVectorTable(String, String),
     CpuVectorTable(String, u32),
@@ -1594,7 +1594,12 @@ fn run_commands<'a>(
                 let readback = if machine.is_cortex_m() {
                     machine.validate_monitor_bus_context(context)?;
                     access.apply_cortex_context(&mut machine.bus, &mut output.reply())
-                } else if let Ok(hart) = machine.monitor_bus_hart(context) {
+                } else if let Ok(hart) = machine.monitor_bus_hart(context)
+                    .or_else(|_| machine.bus.scoped_cpu_index(context).and_then(|hart| {
+                        machine.bus.cpu_ram64(hart, access.address, access.width)
+                            .map(|_| hart).ok_or_else(|| "address not mapped in CPU context".into())
+                    }))
+                {
                     access.apply_rv64_context(&mut machine.bus, hart, &mut output.reply())
                 } else {
                     machine.validate_monitor_bus_context(context)?;
@@ -2431,9 +2436,10 @@ fn run_commands<'a>(
             }
             Action::CpuSymbolPc(cpu, symbol) => machine.set_monitor_symbol_pc(cpu, symbol).map(|()| None),
             Action::CpuPc(cpu, pc) if machine.is_cortex_m() => {
-                machine.set_cortex_m_monitor_pc(cpu, *pc, &mut output.reply()).map(|()| None)
+                let pc = u32::try_from(*pc).map_err(|_| "PC exceeds Cortex-M address width")?;
+                machine.set_cortex_m_monitor_pc(cpu, pc, &mut output.reply()).map(|()| None)
             }
-            Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
+            Action::CpuPc(cpu, pc) => machine.monitor_named_register(cpu, "pc", Some(*pc)).map(|_| None),
             Action::CpuVectorTable(cpu, address) => {
                 machine.set_named_vector_table(cpu, *address)?;
                 machine.prepare_monitor_cortex_step(cpu)?;
@@ -6551,11 +6557,12 @@ fn execute(
                 resolve(target)?.trim_start_matches("sysbus.").into(), unquote(resolve(symbol)?).into(),
             ))
         }
-        [target, "PC", address] if boot.started || !boot.runtime.is_empty() => {
-            let cpu = resolve(target)?;
+        [target, "PC", address] if boot.started || !boot.runtime.is_empty()
+            || crate::parse_address64(resolve(address)?).is_ok_and(|pc| pc > u64::from(u32::MAX)) =>
+        {
             Some(Action::CpuPc(
-                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
-                crate::parse_address(resolve(address)?)?,
+                resolve(target)?.trim_start_matches("sysbus.").into(),
+                crate::parse_address64(resolve(address)?)?,
             ))
         }
         ["sysbus", "UnhandledAccessBehaviour", policy] => {

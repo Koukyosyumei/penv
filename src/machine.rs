@@ -3531,8 +3531,13 @@ impl Hart {
         }
         self.translate(bus, address, N, crate::pmp::READ)
             .and_then(|physical| {
-                bus.read::<N>(physical)
-                    .map_err(|error| error.at_virtual(address))
+                if let Some(bytes) = bus.scoped_cpu_ram64(self.slot, u64::from(physical), N) {
+                    let mut value = [0; 4];
+                    value[..N].copy_from_slice(bytes);
+                    Ok(u32::from_le_bytes(value))
+                } else {
+                    bus.read::<N>(physical).map_err(|error| error.at_virtual(address))
+                }
             })
             .map_err(|error| Fault::Bus(Access::Load, error))
     }
@@ -3562,8 +3567,14 @@ impl Hart {
         }
         self.translate(bus, address, width, crate::pmp::WRITE)
             .and_then(|physical| {
-                bus.write_with_origin(physical, width, value, output, Some(self.slot))
-                    .map_err(|error| error.at_virtual(address))
+                if let Some(bytes) = bus.scoped_cpu_memory64(self.slot, u64::from(physical), width) {
+                    bytes.copy_from_slice(&value.to_le_bytes()[..width]);
+                    bus.observe_memory_store(u64::from(physical), width, u64::from(value));
+                    Ok(())
+                } else {
+                    bus.write_with_origin(physical, width, value, output, Some(self.slot))
+                        .map_err(|error| error.at_virtual(address))
+                }
             })
             .map_err(|error| Fault::Bus(Access::Store, error))
     }
@@ -3711,12 +3722,12 @@ impl Hart {
         let physical = self.translate(bus, pc, minimum, crate::pmp::EXECUTE)?;
         if minimum == 4 {
             return bus
-                .read_ram::<4>(physical)
+                .read_cpu_ram::<4>(self.slot, physical)
                 .map(|word| (word, 4))
                 .map_err(|error| error.at_virtual(pc));
         }
         let low = bus
-            .read_ram::<2>(physical)
+            .read_cpu_ram::<2>(self.slot, physical)
             .map_err(|error| error.at_virtual(pc))?;
         if low & 3 != 3 {
             return Ok((low, 2));
@@ -3732,7 +3743,7 @@ impl Hart {
             physical + 2
         };
         let high = bus
-            .read_ram::<2>(high_physical)
+            .read_cpu_ram::<2>(self.slot, high_physical)
             .map_err(|error| error.at_virtual(upper))?;
         Ok((low | (high << 16), 4))
     }
