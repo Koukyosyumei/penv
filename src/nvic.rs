@@ -58,6 +58,7 @@ pub struct Nvic {
     reset_requested: bool,
     pub lockup: bool,
     active_system: u16,
+    debug_status: bool,
     active: ActiveExceptions,
     fpcar: u32,
     bus_fault_status: u32,
@@ -139,6 +140,7 @@ impl Nvic {
             reset_requested: false,
             lockup: false,
             active_system: 0,
+            debug_status: false,
             active: ActiveExceptions::default(),
             fpcar: 0,
             bus_fault_status: 0,
@@ -219,7 +221,11 @@ impl Nvic {
         self.active_system = active as u16;
     }
     pub fn has_debug_status(&self) -> bool {
-        self.has_fpu()
+        self.debug_status || self.has_fpu()
+    }
+
+    pub(crate) fn set_debug_status_supported(&mut self, supported: bool) {
+        self.debug_status = supported;
     }
     pub fn ignores_negative_priority_bus_fault(&self) -> bool {
         self.ccr & (1 << 8) != 0
@@ -539,7 +545,7 @@ impl Nvic {
                 return Some(self.bus_fault_address);
             }
             if address == BASE + 0xd28 {
-                return Some(self.bus_fault_status);
+                return Some(self.bus_fault_status | self.cfsr);
             }
             if address == AIRCR {
                 return Some(0xfa05_0000 | (u32::from(self.priority_group) << 8));
@@ -551,19 +557,26 @@ impl Nvic {
                 return Some(self.ccr);
             }
             if address == BASE + 0xd24 {
-                return Some(self.fault_enables);
-            }
-            if address == BASE + 0xd28 {
-                return Some(self.cfsr);
-            }
-            if address == BASE + 0xd2c {
-                return Some(self.hfsr);
+                let active = [(4, 0), (5, 1), (3, 2), (6, 3), (2, 5),
+                    (11, 7), (12, 8), (14, 10), (15, 11)];
+                return Some(active.into_iter().fold(self.fault_enables, |value, (exception, bit)| {
+                    let set = self.active.contains(exception) || self.active_system & (1 << exception) != 0;
+                    value | (u32::from(set) << bit)
+                }));
             }
             if address == CPACR {
                 return Some(self.cpacr);
             }
             if address == VTOR {
                 return Some(self.vector_base.unwrap_or(0));
+            }
+            let active_offset = address.wrapping_sub(BASE + 0x300);
+            if active_offset < (self.external_lines.div_ceil(32) * 4) as u32
+                && active_offset.is_multiple_of(4)
+            {
+                let first_line = (active_offset / 4) as usize * 32;
+                return Some((first_line..(first_line + 32).min(self.external_lines))
+                    .fold(0, |value, line| value | (u32::from(self.active.contains(16 + line as u8)) << (line % 32))));
             }
             if let Some((base, bank)) = Self::bank(address) {
                 if bank * 32 >= self.external_lines {
@@ -654,12 +667,16 @@ impl Nvic {
             self.ccr = value & 0x0007_031b;
             return true;
         }
+        if width == 4 && address == DHCSR && self.has_debug_status() {
+            return true;
+        }
         if width == 4 && address == BASE + 0xd24 {
             self.fault_enables = value & (7 << 16);
             return true;
         }
         if width == 4 && address == BASE + 0xd28 {
             self.cfsr &= !value;
+            self.bus_fault_status &= !value;
             return true;
         }
         if width == 4 && address == BASE + 0xd2c {

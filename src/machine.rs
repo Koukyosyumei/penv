@@ -2319,13 +2319,17 @@ impl Hart {
         self.reset_held = self.cpu_wait_asserted;
         self.reset_release = None;
         self.reset_pc_written = false;
+        if let Some(nvic) = bus.nvic.as_mut() {
+            nvic.leave_lockup();
+            nvic.set_debug_status_supported(thumb.thumb2);
+            nvic.set_active_exceptions(0);
+            nvic.set_active(ActiveExceptions::default());
+        }
         let (sp, pc, lr) = if self.reset_held {
             thumb.reset_state();
             (0, 0, 0)
         } else if thumb.thumb2 {
-            let (sp, pc) = thumb.reset(bus)?;
-            thumb.reset_state();
-            (sp, pc, 0)
+            thumb.reset_m4(bus)?
         } else {
             thumb.reset_m0(bus)
         };
@@ -2335,8 +2339,6 @@ impl Hart {
         }
         if let Some(nvic) = bus.nvic.as_mut() {
             nvic.set_vector_base(vectors);
-            nvic.lockup = false;
-            nvic.set_active_exceptions(0);
         }
         self.registers.fill(0);
         self.registers[13] = sp;
