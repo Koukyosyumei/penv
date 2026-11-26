@@ -90,6 +90,27 @@ mod tests {
     }
 
     #[test]
+    fn arm_sleep_fast_forward_leaves_the_timer_boundary_to_the_scheduler() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        let mut bus = Bus::default();
+        bus.set_step_hz(100_000_000);
+        let mut timer = GenericTimer::new(10_000_000, 10_000_000, [Some(30), None, None]);
+        timer.channels[0].compare = 3;
+        timer.channels[0].control = 1;
+        cpu.timer = Some(timer);
+        assert_eq!(cpu.quiet_steps(&bus, 0, 0, 100), 0);
+        cpu.sleep = Sleep::Interrupt;
+        assert_eq!(cpu.quiet_steps(&bus, 0, 0, 100), 20);
+        assert_eq!(cpu.quiet_steps(&bus, 0, 299, 100), 0);
+        assert_eq!(cpu.quiet_steps(&bus, 0, 300, 100), 0);
+        cpu.timer.as_mut().unwrap().channels[0].control = 3;
+        assert_eq!(cpu.quiet_steps(&bus, 0, 300, 100), 100);
+        cpu.sleep = Sleep::Event;
+        bus.arm_events = 1;
+        assert_eq!(cpu.quiet_steps(&bus, 0, 300, 100), 0);
+    }
+
+    #[test]
     fn arm_gic_irq_uses_vector_base_and_banked_return_address() {
         let mut cpu = Cpu::new(Profile::Application);
         let mut bus = Bus::default();
@@ -347,6 +368,33 @@ impl Cpu {
             debug_status: 0,
             timer: None,
         }
+    }
+
+    pub(crate) fn sleeping(&self) -> bool {
+        self.sleep != Sleep::Awake
+    }
+
+    pub(crate) fn quiet_steps(&self, bus: &Bus, slot: usize, now: u128, limit: u64) -> u64 {
+        if !self.is_v8r()
+            || !self.sleeping()
+            || self.sleep == Sleep::Event && bus.arm_events & (1 << slot) != 0
+            || self.interrupt_inputs.into_iter().any(|asserted| asserted)
+            || bus.arm_gic.as_ref().is_some_and(|gic| gic.cpu_inputs(slot) != (false, false))
+        {
+            return 0;
+        }
+        let Some(timer) = &self.timer else { return limit };
+        let rate = u128::from(bus.monitor_step_hz());
+        timer.channels.iter().enumerate()
+            .filter(|(_, channel)| channel.control == 1 && channel.interrupt.is_some())
+            .fold(limit, |quiet, (index, channel)| {
+                // Counting is discrete. Reserve a full counter tick before the
+                // compare point so fractional timer and scheduler phases cannot
+                // skip the first instruction at which the IRQ is visible.
+                let ticks = channel.compare.saturating_sub(timer.count(now, index)).saturating_sub(1);
+                let steps = u128::from(ticks) * rate / u128::from(timer.frequency);
+                quiet.min(u64::try_from(steps).unwrap_or(u64::MAX))
+            })
     }
 
     pub(crate) fn cpsr(&self) -> u32 {

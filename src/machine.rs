@@ -2459,6 +2459,27 @@ impl Machine {
         (quiet, if period.is_some() { quiet } else { 0 })
     }
 
+    fn arm_quiet_steps(&self, remaining: u64) -> u64 {
+        if remaining <= 1 || self.primary.arm32.as_ref().is_none_or(|cpu| !cpu.sleeping())
+            || self.halted != 0
+            || self.cpu_paused || self.cpu_halted || self.cpu_clock_stopped
+            || self.profile.is_some() || self.pc_trace.is_some() || self.recorder.is_some()
+            || !self.replay.is_empty() || !self.inputs.is_empty() || !self.reset_steps.is_empty()
+            || !self.button_events.is_empty() || !self.adc_events.is_empty() || !self.adxl_events.is_empty()
+            || !self.uart_device_events.is_empty() || self.frame_wait_trigger.is_some()
+        {
+            return 0;
+        }
+        let now = self.monitor_elapsed_ns();
+        std::iter::once(&self.primary).chain(&self.secondary).fold(remaining, |quiet, hart| {
+            if hart.monitor_single_step || hart.monitor_paused || hart.monitor_halted || hart.reset_held {
+                0
+            } else {
+                hart.arm32.as_ref().map_or(0, |cpu| cpu.quiet_steps(&self.bus, hart.slot, now, quiet))
+            }
+        })
+    }
+
     fn run_selected<W: Write>(
         &mut self,
         limit: u64,
@@ -2501,7 +2522,14 @@ impl Machine {
             // Give newly delivered host events a regular scheduler cycle
             // before considering an idle span.
             let (quiet, repeated) = if selected.is_none() && remaining != limit {
-                self.stm32_quiet_steps(remaining)
+                let arm = self.arm_quiet_steps(remaining);
+                if arm == 0 {
+                    self.stm32_quiet_steps(remaining)
+                } else {
+                    let harts = self.hart_count();
+                    self.next_hart = (self.next_hart + (arm % harts as u64) as usize) % harts;
+                    (arm, 0)
+                }
             } else {
                 (0, 0)
             };
