@@ -195,7 +195,7 @@ pub fn configure(
         if alias.is_some() {
             return Err(entry.error("IWDG uses an independent clock"));
         }
-        let watchdog = Iwdg::from_repl(base, &entry.body, number)
+        let watchdog = Iwdg::from_repl(base, entry.body.iter().map(|(_, text)| text.as_str()), number)
             .map_err(|error| entry.error(&error))?;
         machine.bus.map_iwdg(watchdog).map_err(|error| entry.error(&error))?;
     }

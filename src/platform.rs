@@ -890,7 +890,7 @@ fn load_platform(
                 }
             }
             crate::stm32_iwdg::Iwdg::MODEL if cortex_m => {
-                let watchdog = crate::stm32_iwdg::Iwdg::from_repl(entry.address()?, &entry.body, number)
+                let watchdog = crate::stm32_iwdg::Iwdg::from_repl(entry.address()?, entry.body.iter().map(|(_, text)| text.as_str()), number)
                     .map_err(|error| entry.error(&error))?;
                 machine.bus.map_iwdg(watchdog).map_err(|error| entry.error(&error))?;
             }

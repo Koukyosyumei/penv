@@ -17,15 +17,15 @@ impl Iwdg {
     pub const MODEL: &str = "Timers.STM32_IndependentWatchdog";
     pub const SIZE: u32 = 0x400;
 
-    pub(crate) fn from_repl(
+    pub(crate) fn from_repl<'a>(
         base: u32,
-        body: &[(usize, String)],
+        body: impl IntoIterator<Item = &'a str>,
         number: impl Fn(&str) -> Result<u32, String>,
     ) -> Result<Self, String> {
         let mut frequency = None;
         let mut window = None;
         let mut prescaler = None;
-        for (_, text) in body {
+        for text in body {
             let (key, value) = text.split_once(':').ok_or("expected IWDG property")?;
             let value = value.trim();
             match key.trim() {
