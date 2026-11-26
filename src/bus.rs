@@ -451,6 +451,7 @@ pub struct Bus {
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
     ns16550_name: Option<String>,
+    scheduled_ns16550_input: VecDeque<(u64, Vec<u8>)>,
     litex_uart: Option<LiteXUart>,
     litex_timer: Option<LiteXTimer>,
     pub litex_cpu_timer: Option<litex::CpuTimer>,
@@ -5506,9 +5507,24 @@ impl Bus {
         self.write_uart_input(name, text.bytes().chain(ending.iter().copied()), false)
     }
 
-    pub(crate) fn write_uart_tester_input(&mut self, name: &str, text: &str, ending: &[u8]) -> Result<(), String> {
-        let bytes = text.encode_utf16().map(|character| character as u8);
-        self.write_uart_input(name, bytes.chain(ending.iter().copied()), true)
+    pub(crate) fn write_uart_tester_input(
+        &mut self, name: &str, text: &str, ending: &[u8], next_sync: u64,
+    ) -> Result<(), String> {
+        let bytes = text.encode_utf16().map(|character| character as u8).chain(ending.iter().copied());
+        if self.tester_port(name)? == TesterPort::Ns16550 {
+            self.scheduled_ns16550_input.push_back((next_sync, bytes.collect()));
+            return Ok(());
+        }
+        self.write_uart_input(name, bytes, true)
+    }
+
+    pub(crate) fn deliver_ns16550_input(&mut self, step: u64) {
+        while self.scheduled_ns16550_input.front().is_some_and(|(deadline, _)| *deadline <= step) {
+            let (_, bytes) = self.scheduled_ns16550_input.pop_front().unwrap();
+            if let Some(uart) = &mut self.ns16550 {
+                uart.queue_input(bytes);
+            }
+        }
     }
 
     fn write_uart_input(&mut self, name: &str, bytes: impl Iterator<Item = u8>, tester: bool) -> Result<(), String> {
@@ -9173,7 +9189,7 @@ mod tests {
         assert_eq!(bus.read::<4>(usart1 + 0x1c).unwrap() & (1 << 5), 0);
         assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), u32::from(b'A'));
         assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), u32::from(b'\r'));
-        bus.write_uart_tester_input("sysbus.usart2", "éÿ", b"").unwrap();
+        bus.write_uart_tester_input("sysbus.usart2", "éÿ", b"", 0).unwrap();
         assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), 0xe9);
         assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), 0xff);
         assert!(

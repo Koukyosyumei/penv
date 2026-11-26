@@ -1485,7 +1485,12 @@ fn run_commands<'a>(
                 } else {
                     None
                 };
-                machine.bus.write_uart_tester_input(&target, text, ending)?;
+                let quantum = duration_cycles(
+                    machine.monitor_quantum, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
+                )?.max(1);
+                let now = machine.elapsed_steps();
+                let next_sync = now.saturating_add(quantum - now % quantum);
+                machine.bus.write_uart_tester_input(&target, text, ending, next_sync)?;
                 if let Some(cycles) = cycles {
                     let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt, Some(false))?;
                     let start = machine.elapsed_steps();

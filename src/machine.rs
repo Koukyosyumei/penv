@@ -2039,6 +2039,7 @@ impl Machine {
                     .nrf_adxl_input(&name)
                     .ok_or_else(|| format!("unknown ADXL372 {name:?}"))? = acceleration;
             }
+            self.bus.deliver_ns16550_input(self.elapsed_steps);
             self.bus.tick_andes_clocked_devices();
             if self.apply_egis_reset_request()? {
                 return Ok((Stop::Reset, retired));
