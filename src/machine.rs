@@ -3139,9 +3139,13 @@ impl Hart {
                 None
             }
             0x57 if !self.csr.vector_configured() => {
-                eprintln!(
+                let message = format!(
                     "PC: 0x{pc:x}, opcode: 0x{encoded:08x}, RISC-V 'V' instruction set is not enabled for this CPU!"
                 );
+                crate::monitor_log::record(3, &message);
+                if bus.monitor_log_enabled(3) {
+                    eprintln!("{message}");
+                }
                 return Err(illegal());
             }
             0x57 if funct3 == 7 => Some(self.csr.configure_vector(insn, a, b).ok_or_else(illegal)?),
