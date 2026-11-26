@@ -705,7 +705,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
             matches!(
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
-                    | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::BusScalar(_)
+                    | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..) | Action::BusScalar(_)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
@@ -3686,7 +3686,7 @@ fn execute(
             Some(Action::LiteXLedState((*target).to_owned()))
         }
 
-        [cpu, "VectorRegisterLength", bits] if boot.started => Some(Action::VectorRegisterLength(
+        [cpu, "VectorRegisterLength", bits] if boot.has_platform() => Some(Action::VectorRegisterLength(
             cpu.trim_start_matches("sysbus.").to_owned(),
             crate::parse_address64(resolve(bits)?)?,
         )),
@@ -4587,7 +4587,7 @@ fn execute(
                     action,
                     Action::BusScalar(_)
                         | Action::AssembleBlock(..)
-                        | Action::AddStackAccessHook(..) | Action::AddCsrHook(..)
+                        | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)
                         | Action::AssertCpuValue(..)
                         | Action::ReadCpuPc(_)
                         | Action::ExecutionMode(..)
