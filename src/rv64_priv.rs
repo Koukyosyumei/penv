@@ -691,6 +691,29 @@ impl Pmp {
     }
 
     fn write(&mut self, csr: u32, value: u64) -> bool {
+        if !self.allow_when_inactive {
+            let entries = self.config.len();
+            let warning = match csr {
+                0x3a0..=0x3af if csr & 1 != 0 => Some(format!(
+                    "Attempted illegal write to pmpcfg register with odd-numbered index ({})",
+                    csr - 0x3a0,
+                )),
+                0x3a0..=0x3af if (csr - 0x3a0) as usize * 4 >= entries => Some(format!(
+                    "Attempted illegal write to pmpcfg entry beyond entry count ({}, entry count is {entries})",
+                    (csr - 0x3a0) * 4,
+                )),
+                0x3b0..=0x3ef if (csr - 0x3b0) as usize >= entries => Some(format!(
+                    "Attempted illegal write to pmpaddr register beyond entry count ({}, entry count is {entries})",
+                    csr - 0x3b0,
+                )),
+                _ => None,
+            };
+            if let Some(message) = warning {
+                crate::monitor_log::record(2, &message);
+                eprintln!("{message}");
+                return false;
+            }
+        }
         let security = self.mseccfg.unwrap_or(0);
         let bypass = security & RLB != 0;
         let lockdown = security & MML != 0;

@@ -4890,7 +4890,7 @@ fn execute(
             };
             let value = arguments
                 .first()
-                .map(|value| crate::parse_address(resolve(value)?))
+                .map(|value| crate::parse_address64(resolve(value)?))
                 .transpose()?;
             boot.cpu_registers
                 .push(CpuRegisterCommand::TrapVector(register, value));
