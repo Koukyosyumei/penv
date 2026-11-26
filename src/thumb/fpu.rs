@@ -46,6 +46,14 @@ impl Thumb {
         Ok(false)
     }
 
+    pub(crate) fn create_fp_context(&mut self, bus: &Bus) {
+        if !self.fp_active && bus.nvic.as_ref().is_some_and(Nvic::fpu_auto_preserve) {
+            self.fp_active = true;
+            self.fpscr = if self.armv81m { 4 << 16 } else { 0 };
+            self.vpr = 0;
+        }
+    }
+
     pub(super) fn transfer_secure_fp(
         &mut self,
         instruction: u32,

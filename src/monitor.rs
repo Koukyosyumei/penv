@@ -1097,7 +1097,7 @@ enum Action {
     CpuVectorTable(String, u32),
     CpuStatus(String, String),
     CpuSecurityState(String, bool),
-    CpuPreserveFp(String),
+    CpuPreserveFp(String, bool),
     CpuFpuEnabled(String, Option<bool>),
     CpuMpuBackground(String, Option<bool>),
     CpuTranslateAddress(String, u32, bool, bool),
@@ -1646,7 +1646,7 @@ fn run_commands<'a>(
                     _ => unreachable!(),
                 }.map(|()| None).map_err(|error| error.to_string())
             }
-            Action::CpuPreserveFp(cpu) => machine.preserve_cortex_m_fp(cpu).map(|()| None),
+            Action::CpuPreserveFp(cpu, create_context) => machine.preserve_cortex_m_fp(cpu, *create_context).map(|()| None),
             Action::CpuFpuEnabled(cpu, enabled) => {
                 machine.cortex_m_cpu(cpu)?;
                 let nvic = machine.bus.nvic.as_mut().filter(|nvic| nvic.has_fpu())
@@ -6775,8 +6775,9 @@ fn execute(
         [target, property @ ("IsLockedUp" | "ExecutedInstructions" | "GetItState" | "FPCAR" | "FPCCR" | "SecureState")] => {
             Some(Action::CpuStatus(resolve(target)?.trim_start_matches("sysbus.").into(), (*property).into()))
         }
-        [target, "DoLazyFloatingPointStatePreservation"] => Some(Action::CpuPreserveFp(
+        [target, "DoLazyFloatingPointStatePreservation", option @ ..] if option.len() <= 1 => Some(Action::CpuPreserveFp(
             resolve(target)?.trim_start_matches("sysbus.").into(),
+            option.first().map(|value| parse_tester_bool(resolve(value)?)).transpose()?.unwrap_or(true),
         )),
         [target, "FpuEnabled", values @ ..] if values.len() <= 1 => Some(Action::CpuFpuEnabled(
             resolve(target)?.trim_start_matches("sysbus.").into(),

@@ -1419,10 +1419,13 @@ impl Machine {
             .ok_or_else(|| format!("{name:?} is not a Cortex-M CPU"))
     }
 
-    pub(crate) fn preserve_cortex_m_fp(&mut self, name: &str) -> Result<(), String> {
+    pub(crate) fn preserve_cortex_m_fp(&mut self, name: &str, create_context: bool) -> Result<(), String> {
         self.cortex_m_cpu(name)?;
-        if self.primary.thumb.as_mut().unwrap().preserve_lazy_fp(&mut self.bus)? {
+        let thumb = self.primary.thumb.as_mut().unwrap();
+        if thumb.preserve_lazy_fp(&mut self.bus)? {
             self.primary.pc = 0xefff_fffe;
+        } else if create_context {
+            thumb.create_fp_context(&self.bus);
         }
         Ok(())
     }
