@@ -94,7 +94,7 @@ pub(crate) fn assemble_source(
     }
     let has_data = thumb && instructions.iter().any(|line| {
         let instruction = line.split_once(':').map_or(*line, |(_, text)| text.trim_start());
-        matches!(instruction.split_ascii_whitespace().next(), Some(".word" | ".short" | ".byte"))
+        matches!(instruction.split_ascii_whitespace().next(), Some(".word" | ".short" | ".byte" | ".align" | ".balign"))
     });
     let instructions = instructions
         .into_iter()
@@ -134,9 +134,21 @@ pub(crate) fn assemble_source(
 }
 
 fn unsupported_assembly_directive(instruction: &str, thumb: bool) -> bool {
-    let known_thumb_data = thumb && matches!(instruction.split_ascii_whitespace().next(),
-        Some(".word" | ".short" | ".byte"));
-    instruction.starts_with('.') && !instruction.starts_with(".insn r ") && !known_thumb_data
+    if !instruction.starts_with('.') || instruction.starts_with(".insn r ") {
+        return false;
+    }
+    if !thumb {
+        return true;
+    }
+    let mut words = instruction.split_ascii_whitespace();
+    match words.next() {
+        Some(".word" | ".short" | ".byte") => false,
+        Some(".align") => !words.next().and_then(|word| word.parse::<u8>().ok())
+            .is_some_and(|alignment| alignment <= 12 && words.next().is_none()),
+        Some(".balign") => !words.next().and_then(|word| word.parse::<u32>().ok())
+            .is_some_and(|alignment| alignment <= 4096 && alignment.is_power_of_two() && words.next().is_none()),
+        _ => true,
+    }
 }
 
 fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
@@ -442,6 +454,13 @@ fn link_instructions(
     ));
     fs::create_dir(&dir).map_err(|e| format!("assembly scratch directory: {e}"))?;
     let dir = Scratch(dir);
+    let attributes = match triple {
+        "thumbv6m-none-eabi" => Some(11),
+        "thumbv7em-none-eabi" => Some(13),
+        "thumbv8.1m.main-none-eabi" => Some(21),
+        _ => None,
+    }.map(|arch| format!(".eabi_attribute 6, {arch}\n.eabi_attribute 7, 77\n.thumb\n{source}"));
+    let source = attributes.as_deref().unwrap_or(source);
     let object = crate::llvm_mc_for(triple, features, "--filetype=obj", source)?;
     if !object.status.success() {
         return Err(format!(
