@@ -1039,7 +1039,7 @@ enum Action {
     LoadMonitorElf(Asset, bool, PathBuf),
     LoadMonitorBinary(Asset, u64, PathBuf),
     LoadMonitorSymbols(Asset, PathBuf),
-    DisassembleBlock(String, u64, usize, String),
+    DisassembleBlock(String, Option<u64>, usize, String),
     BusEndianness,
     BusWhatIsAt(u64, Option<String>),
     ExecutePython(String),
@@ -1564,7 +1564,11 @@ fn run_commands<'a>(
                 readback.map(|()| None)
             }
             Action::DisassembleBlock(cpu, address, length, requested_triple) => {
-                crate::monitor_asm::disassemble_source(machine, cpu, *address, *length, requested_triple)
+                let address = match address {
+                    None | Some(u64::MAX) => machine.monitor_named_pc(cpu)?,
+                    Some(address) => *address,
+                };
+                crate::monitor_asm::disassemble_source(machine, cpu, address, *length, requested_triple)
                     .and_then(|text| output.reply().write_all(text.as_bytes()).map_err(|error| error.to_string()))
                     .map(|()| None)
             }
@@ -5737,14 +5741,23 @@ fn execute(
             };
             Some(Action::PythonHook(cpu, symbol, source))
         }
-        [target, "DisassembleBlock", address, length, options @ ..] => {
-            let length = crate::parse_address(resolve(length)?)? as usize;
+        [target, "DisassembleBlock", arguments @ ..] => {
+            let (address, rest) = if let [address, rest @ ..] = arguments {
+                (Some(crate::parse_address64(resolve(address)?)?), rest)
+            } else {
+                (None, arguments)
+            };
+            let (length, options) = if let [length, options @ ..] = rest {
+                (crate::parse_address(resolve(length)?)? as usize, options)
+            } else {
+                (40, rest)
+            };
             if !(1..=65536).contains(&length) {
                 return Err("DisassembleBlock requires a length of 1 to 65536 bytes".into());
             }
             Some(Action::DisassembleBlock(
                 resolve(target)?.trim_start_matches("sysbus.").into(),
-                crate::parse_address64(resolve(address)?)?, length, assembly_option_triple(options)?.into(),
+                address, length, assembly_option_triple(options)?.into(),
             ))
         }
         ["sysbus", "Endianess"] => Some(Action::BusEndianness),

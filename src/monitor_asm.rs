@@ -480,12 +480,25 @@ pub(crate) fn disassemble_source(
     {
         return Err(format!("disassembler triple {requested_triple} is unavailable for {triple}"));
     }
-    let bytes = match hart {
+    let mut input = String::with_capacity(5 * length + 1);
+    let mut bytes = Vec::with_capacity(length);
+    if let Some(bytes_in_ram) = match hart {
         Some(hart) => machine.bus.cpu_ram64(hart, address, length),
         None => machine.bus.ram64(address, length),
-    }.ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
-    let mut input = String::with_capacity(5 * bytes.len() + 1);
-    for byte in bytes {
+    } {
+        bytes.extend_from_slice(bytes_in_ram);
+    } else if hart.is_none() && let Ok(address) = u32::try_from(address) {
+        bytes = machine.bus.read_bytes(address, length).map_err(|error| error.to_string())?
+            .collect::<Result<_, _>>().map_err(|error| error.to_string())?;
+    } else if let Some(hart) = hart {
+        for offset in 0..length {
+            let address = address.checked_add(offset as u64).ok_or("disassembly address overflow")?;
+            bytes.push(machine.bus.cpu_ram64(hart, address, 1).map_or(0, |byte| byte[0]));
+        }
+    } else {
+        return Err(format!("disassembly address out of range: {address:#x}"));
+    }
+    for byte in &bytes {
         write!(input, "0x{byte:02x} ").unwrap();
     }
     input.push('\n');

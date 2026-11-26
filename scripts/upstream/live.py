@@ -401,7 +401,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if machine is not None and not isinstance(machine, str):
                 raise Unsupported("Execute Command machine must be a name")
             select = f"mach set {self.literal(machine)}" if machine and machine.strip() else None
-            observes_state = " DisassembleBlock " in command or bool(
+            observes_state = bool(
+                re.match(r"[\w.]+\s+DisassembleBlock(?:\s|$)", command) or
                 re.match(r"peripherals\s+export\s", command)
                 or re.match(r"machine\s+LoadPlatformDescriptionFromString\s", command)
                 and self.proc is not None
