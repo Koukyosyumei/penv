@@ -6794,7 +6794,7 @@ fn execute(
         [target, "FPDSCR_NS", values @ ..] if values.len() <= 1 => Some(Action::CpuRegister(
             resolve(target)?.trim_start_matches("sysbus.").into(),
             "fpdscr_ns".into(),
-            values.first().map(|value| crate::parse_address(resolve(value)?)).transpose()?,
+            values.first().map(|value| crate::parse_address(resolve(value)?).map(u64::from)).transpose()?,
         )),
         [target, "FpuEnabled", values @ ..] if values.len() <= 1 => Some(Action::CpuFpuEnabled(
             resolve(target)?.trim_start_matches("sysbus.").into(),
