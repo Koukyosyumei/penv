@@ -136,6 +136,10 @@ impl Thumb {
         !self.clock_gated
     }
 
+    pub(crate) fn it_state(&self) -> u8 {
+        self.itstate
+    }
+
     pub fn executed_instructions(&self) -> u64 {
         self.retired_instructions
     }
@@ -719,11 +723,13 @@ impl Thumb {
         }
     }
 
-    fn can_take_sync_exception(&self, exception: u8, nvic: &crate::nvic::Nvic) -> bool {
-        let priority = nvic.priority(exception);
-        i16::from(priority) < self.priority_boost(false)
+    fn can_take_sync_exception(&self, exception: u8, nvic: &Nvic) -> bool {
+        let priority = |exception| nvic.preemption_priority(nvic.priority(exception));
+        let candidate = priority(exception);
+        !self.faultmask && !self.interrupts_masked
+            && (self.basepri == 0 || candidate < nvic.preemption_priority(self.basepri))
             && (self.active_exception == 0
-                || (self.active_exception > 3 && priority < nvic.priority(self.active_exception)))
+                || (self.active_exception > HARDFAULT && candidate < priority(self.active_exception)))
     }
 
     fn thumb2_exception_priority(&self, bus: &Bus, exception: u8) -> (i16, u8) {

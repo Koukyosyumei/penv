@@ -3873,6 +3873,17 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn monitor_nvic_signal(&self, target: &str, signal: &str, sleeping: bool) -> Result<bool, String> {
+        self.validate_nvic_name(target)?;
+        let nvic = self.nvic.as_ref().unwrap();
+        match signal {
+            "Lockup" => Ok(nvic.lockup),
+            "InSleep" => Ok(sleeping),
+            "InDeepSleep" => Ok(sleeping && nvic.deep_sleep_enabled()),
+            _ => Err(format!("unknown NVIC signal {signal:?}")),
+        }
+    }
+
     fn validate_nvic_name(&self, target: &str) -> Result<(), String> {
         let name = target.strip_prefix("sysbus.").unwrap_or(target);
         if self.nvic.is_none() || self.nvic_name.as_deref() != Some(name) {
@@ -7068,7 +7079,7 @@ impl Bus {
 
     fn thumb_data_error<T: Default>(&mut self, error: BusError, write: bool) -> Result<T, String> {
         let address = match error {
-            BusError::SlaveFault(address) => address,
+            BusError::SlaveFault(address) | BusError::AddressError(address) => address,
             BusError::Unmapped(address, width)
                 if self.report_unmapped_thumb_data
                     && !self.overlaps(u64::from(address), u64::from(address) + width as u64) =>

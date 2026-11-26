@@ -665,6 +665,14 @@ impl Machine {
         ];
         let hart = self.named_hart(name)?;
         let register = register.to_ascii_lowercase();
+        if let Some(thumb) = hart.thumb.as_ref()
+            && matches!(register.as_str(), "cpsr" | "xpsr")
+        {
+            if value.is_some() {
+                return Err("Cortex-M PSR writes are unsupported".into());
+            }
+            return Ok(Some(u64::from(thumb.xpsr())));
+        }
         if hart.thumb.is_some() && register != "resetvector" {
             let index = match register.as_str() {
                 "sp" => Some(13),
@@ -1121,6 +1129,14 @@ impl Machine {
 
     pub fn is_cortex_m(&self) -> bool {
         self.primary.thumb.is_some()
+    }
+
+    pub(crate) fn is_cortex_m55(&self) -> bool {
+        self.primary.thumb.as_ref().is_some_and(|thumb| thumb.cortex_m55)
+    }
+
+    pub(crate) fn cortex_m_sleeping(&self) -> bool {
+        self.primary.thumb.as_ref().is_some_and(Thumb::sleeping)
     }
 
     pub fn has_cortex_m4(&self) -> bool {
@@ -1846,6 +1862,9 @@ impl Machine {
                         missed = 0;
                     }
                     (Stop::Limit, 0) => {
+                        if self.is_cortex_m55() && (self.cortex_m_locked_up() || self.cortex_m_sleeping()) {
+                            break;
+                        }
                         missed += 1;
                         if missed == 256 || self.cpu_halted || self.cpu_clock_stopped {
                             return Err("Cortex-M Step could not retire an instruction".into());

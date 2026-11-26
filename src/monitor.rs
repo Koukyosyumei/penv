@@ -581,6 +581,8 @@ enum Action {
     CpuSymbolPc(String, String),
     CpuSymbolVectorTable(String, String),
     CpuVectorTable(String, u32),
+    CpuStatus(String, String),
+    NvicSignal(String, String),
     SymbolAddress(String),
     I2cSensorProperty(String, String, String),
     I2cAcceleration(String, usize, i32, bool),
@@ -663,6 +665,22 @@ impl BusScalar {
             (Some(address), 4) => bus.read_scalar::<4>(address, true),
             _ => return crate::memory_setup::read_ram(bus, address, width),
         }.map(u64::from).map_err(|error| error.to_string())
+    }
+
+    fn apply_cortex_context(&self, bus: &mut crate::bus::Bus, output: &mut impl Write) -> Result<(), String> {
+        let address = u32::try_from(self.address).map_err(|_| "Cortex-M bus address exceeds CPU width")?;
+        if self.width == 8 {
+            return self.apply(bus, output);
+        }
+        if let Some(value) = self.value {
+            return bus.thumb_write(address, self.width, value as u32, output);
+        }
+        let value = match self.width {
+            1 => bus.thumb_read::<1>(address),
+            2 => bus.thumb_read::<2>(address),
+            _ => bus.thumb_read::<4>(address),
+        }?;
+        self.number_mode.print(u64::from(value), self.width, output)
     }
 
     fn apply(&self, bus: &mut crate::bus::Bus, output: &mut impl Write) -> Result<(), String> {
@@ -911,8 +929,33 @@ fn run_commands<'a>(
                 apply_machine_selection(&mut session.machine_cleared, *cleared, session.machine.as_deref(), &mut session.variables);
                 Ok(None)
             }
-            Action::ContextBusScalar(access, context) => machine.validate_monitor_bus_context(context)
-                .and_then(|()| access.apply(&mut machine.bus, &mut output.reply())).map(|()| None),
+            Action::ContextBusScalar(access, context) => {
+                machine.validate_monitor_bus_context(context)?;
+                let readback = if machine.is_cortex_m() {
+                    access.apply_cortex_context(&mut machine.bus, &mut output.reply())
+                } else {
+                    access.apply(&mut machine.bus, &mut output.reply())
+                };
+                readback.map(|()| None)
+            }
+            Action::CpuStatus(cpu, property) => {
+                let thumb = machine.cortex_m_cpu(cpu)?;
+                match property.as_str() {
+                    "IsLockedUp" => writeln!(output.reply(), "{}", if thumb.locked_up() { "True" } else { "False" }),
+                    "ExecutedInstructions" => writeln!(output.reply(), "{}", thumb.executed_instructions()),
+                    "GetItState" => writeln!(output.reply(), "{}", thumb.it_state()),
+                    "FPCAR" => {
+                        let value = machine.bus.read_scalar::<4>(0xe000_ef38, true).map_err(|error| error.to_string())?;
+                        writeln!(output.reply(), "0x{value:08x}")
+                    }
+                    _ => unreachable!(),
+                }.map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::NvicSignal(target, signal) => {
+                let high = machine.bus.monitor_nvic_signal(target, signal, machine.cortex_m_sleeping())?;
+                writeln!(output.reply(), "{}", if high { "True" } else { "False" })
+                    .map(|()| None).map_err(|error| error.to_string())
+            }
             Action::BusScalar(access) => {
                 if access.value.is_none() {
                     access.apply(&mut machine.bus, &mut output.reply())
@@ -1071,6 +1114,21 @@ fn run_commands<'a>(
             }
             Action::SetQuantum(duration) => {
                 machine.monitor_quantum = *duration;
+                Ok(None)
+            }
+            Action::CpuStep(cpu, count) if machine.is_cortex_m55() => {
+                machine.prepare_monitor_cortex_step(cpu)?;
+                let before = machine.cortex_m_cpu(cpu)?.executed_instructions();
+                let start = machine.elapsed_steps();
+                let was_paused = machine.primary.monitor_paused;
+                machine.primary.monitor_paused = false;
+                let result = machine.monitor_step_cortex_m((*count).min(budget), &mut output);
+                machine.resume_cpu();
+                machine.set_monitor_active(false);
+                machine.primary.monitor_paused = was_paused;
+                result?;
+                retired += machine.cortex_m_cpu(cpu)?.executed_instructions().wrapping_sub(before);
+                budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
                 Ok(None)
             }
             Action::RunToSyncPoint | Action::RunFor(_) | Action::RunUntil(_) | Action::CpuStep(..) => {
@@ -5044,6 +5102,12 @@ fn execute(
                 .parse()
                 .map_err(|_| "expected NVIC Clocked true or false")?,
         )),
+        [target, property @ ("IsLockedUp" | "ExecutedInstructions" | "GetItState" | "FPCAR")] => {
+            Some(Action::CpuStatus(resolve(target)?.trim_start_matches("sysbus.").into(), (*property).into()))
+        }
+        [target, signal @ ("Lockup" | "InSleep" | "InDeepSleep"), "IsSet"] => {
+            Some(Action::NvicSignal(resolve(target)?.into(), (*signal).into()))
+        }
         [target, "SetPendingIRQ", exception] => Some(Action::NvicPending(
             resolve(target)?.to_owned(),
             crate::parse_address(resolve(exception)?)?,
@@ -5086,7 +5150,7 @@ fn execute(
                 && boot.binaries.is_empty()
                 && !matches!(
                     action,
-                    Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..)
+                    Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)
                         | Action::AssertCpuValue(..)

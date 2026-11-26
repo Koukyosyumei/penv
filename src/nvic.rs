@@ -209,6 +209,10 @@ impl Nvic {
         std::mem::take(&mut self.reset_requested)
     }
 
+    pub(crate) fn deep_sleep_enabled(&self) -> bool {
+        self.scr & (1 << 2) != 0
+    }
+
     pub fn sleep_on_exit(&self) -> bool {
         self.scr & (1 << 1) != 0
     }
