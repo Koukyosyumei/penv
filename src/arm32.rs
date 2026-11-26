@@ -40,6 +40,30 @@ mod tests {
     use crate::arm_gic::{Gic, Version, Window, WindowKind};
 
     #[test]
+    fn arm_hcr_injects_irq_at_the_guest_vector() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        let mut bus = Bus::default();
+        let mut registers = [0; 32];
+        let mut output = Vec::new();
+        cpu.hcr = (1 << 7) | (1 << 4);
+        cpu.vbar = 0x1000;
+        cpu.hvbar = 0x2000;
+        assert_eq!(cpu.software_virtual_inputs(), (false, false));
+
+        cpu.set_cpsr(0x13, &mut registers).unwrap();
+        cpu.sleep = Sleep::Interrupt;
+        let mut pc = 0x3000;
+        assert!(matches!(
+            cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output).unwrap(),
+            Step::AsynchronousException
+        ));
+        assert_eq!(pc, 0x1018);
+        assert_eq!(cpu.cpsr() & (I | 31), I | 0x12);
+        assert_eq!(registers[14], 0x3004);
+        assert!(!cpu.sleeping());
+    }
+
+    #[test]
     fn arm_branch_exchange_does_not_decode_as_status_register_write() {
         let mut cpu = Cpu::new(Profile::RealTimeV8);
         let mut bus = Bus::default();
@@ -444,11 +468,21 @@ impl Cpu {
         self.sleep != Sleep::Awake
     }
 
+    fn software_virtual_inputs(&self) -> (bool, bool) {
+        if !self.is_v8r() || self.cpsr & 31 == 0x1a {
+            return (false, false);
+        }
+        let irq = self.hcr & ((1 << 7) | (1 << 4)) == ((1 << 7) | (1 << 4));
+        let fiq = self.hcr & ((1 << 6) | (1 << 3)) == ((1 << 6) | (1 << 3));
+        (irq, fiq)
+    }
+
     pub(crate) fn quiet_steps(&self, bus: &Bus, slot: usize, now: u128, limit: u64) -> u64 {
         if !self.is_v8r()
             || !self.sleeping()
             || self.sleep == Sleep::Event && bus.arm_events & (1 << slot) != 0
             || self.interrupt_inputs.into_iter().any(|asserted| asserted)
+            || self.software_virtual_inputs() != (false, false)
             || bus.arm_gic.as_ref().is_some_and(|gic| gic.cpu_inputs(slot) != (false, false))
         {
             return 0;
@@ -863,8 +897,19 @@ impl Cpu {
         return_address: u32,
         registers: &mut [u32; 32],
     ) -> u32 {
+        self.enter_exception(mode, offset, return_address, registers, false)
+    }
+
+    fn enter_exception(
+        &mut self,
+        mode: u32,
+        offset: u32,
+        return_address: u32,
+        registers: &mut [u32; 32],
+        virtual_interrupt: bool,
+    ) -> u32 {
         let status = self.cpsr;
-        let hypervisor = self.is_v8r()
+        let hypervisor = self.is_v8r() && !virtual_interrupt
             && (status & 31 == 0x1a
                 || mode == 0x1a
                 || offset == 0x18 && self.hcr & (1 << 4) != 0
@@ -1370,11 +1415,12 @@ impl Cpu {
             .arm_gic
             .as_ref()
             .map_or((false, false), |gic| gic.cpu_inputs(slot));
+        let (virtual_irq, virtual_fiq) = self.software_virtual_inputs();
         let fiq = self.interrupt_inputs[1] || gic_fiq;
         let irq = self.interrupt_inputs[0] || gic_irq;
         if self.sleep != Sleep::Awake {
             let event = self.sleep == Sleep::Event && bus.arm_events & (1 << slot) != 0;
-            if !event && !fiq && !irq {
+            if !event && !fiq && !irq && !virtual_irq && !virtual_fiq {
                 return Ok(Step::Trap);
             }
             if event {
@@ -1388,6 +1434,14 @@ impl Cpu {
         }
         if self.cpsr & I == 0 && irq {
             *pc = self.exception(0x12, 0x18, pc.wrapping_add(4), registers);
+            return Ok(Step::AsynchronousException);
+        }
+        if self.cpsr & F == 0 && virtual_fiq {
+            *pc = self.enter_exception(0x11, 0x1c, pc.wrapping_add(4), registers, true);
+            return Ok(Step::AsynchronousException);
+        }
+        if self.cpsr & I == 0 && virtual_irq {
+            *pc = self.enter_exception(0x12, 0x18, pc.wrapping_add(4), registers, true);
             return Ok(Step::AsynchronousException);
         }
         if self.cpsr & T != 0 {
