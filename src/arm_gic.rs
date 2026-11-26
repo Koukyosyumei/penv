@@ -108,6 +108,9 @@ struct CpuInterface {
     private: [Interrupt; PRIVATE_INTERRUPTS],
     enabled_groups: u8,
     split_eoi: bool,
+    virtual_enabled: bool,
+    virtual_control: u32,
+    virtual_list: [u64; 16],
     priority_mask: u8,
     binary_point: [u8; 2],
     active: Vec<(u16, u8)>,
@@ -126,6 +129,9 @@ impl CpuInterface {
             private,
             enabled_groups: 0,
             split_eoi: false,
+            virtual_enabled: false,
+            virtual_control: 0,
+            virtual_list: [0; 16],
             priority_mask: 0,
             binary_point: [0; 2],
             active: Vec::new(),
@@ -382,6 +388,32 @@ impl Gic {
                 return Some(None);
             }
             (0x000c_00ac, value) => return Some(value.is_none().then_some(7)), // ICC_SRE
+            (0x008c_002b, None) => (4 << 29) | (interface.virtual_list.len() as u32 - 1), // ICH_VTR
+            (0x008c_000b, None) => u32::from(interface.virtual_enabled), // ICH_HCR
+            (0x008c_000b, Some(value)) => {
+                interface.virtual_enabled = value & 1 != 0;
+                return Some(None);
+            }
+            (0x008c_00eb, None) => interface.virtual_control, // ICH_VMCR
+            (0x008c_00eb, Some(value)) => {
+                interface.virtual_control = value & 0xfffc_021f;
+                return Some(None);
+            }
+            (0x008c_00ab, None) => interface.virtual_list.iter().enumerate().fold(0, |mask, (index, entry)| {
+                mask | (u32::from(entry >> 62 == 0) << index)
+            }), // ICH_ELRSR
+            (key, value) if key & 0xffff_ff1c == 0x008c_000c => {
+                let index = ((key & 1) * 8 + ((key >> 5) & 7)) as usize;
+                let shift = (key & 2) * 16;
+                let entry = &mut interface.virtual_list[index];
+                if let Some(value) = value {
+                    let mask = if shift == 0 { u32::MAX } else { 0xf0ff_1fff };
+                    *entry = (*entry & !(u64::from(u32::MAX) << shift))
+                        | (u64::from(value & mask) << shift);
+                    return Some(None);
+                }
+                (*entry >> shift) as u32
+            }
             (0x008c_00a9, value) => return Some(value.is_none().then_some(15)), // ICC_HSRE
             _ => return None,
         };
@@ -430,7 +462,8 @@ impl Gic {
                 u64::from(cpu.affinity), u64::from(cpu.enabled_groups), u64::from(cpu.priority_mask),
                 u64::from(first), u64::from(second), u64::from(cpu.processor_sleep), cpu.active.len() as u64,
             ])?;
-            write_words(output, &[u64::from(cpu.split_eoi)])?;
+            write_words(output, &[u64::from(cpu.split_eoi), u64::from(cpu.virtual_enabled), u64::from(cpu.virtual_control)])?;
+            write_words(output, &cpu.virtual_list)?;
             for &(id, priority) in &cpu.active {
                 write_words(output, &[u64::from(id), u64::from(priority)])?;
             }
@@ -465,6 +498,12 @@ impl Gic {
             cpu.binary_point = [byte(first)?, byte(second)?];
             cpu.processor_sleep = read_bool(sleep)?;
             cpu.split_eoi = snapshot_version >= 6 && read_bool(read_words::<1>(input)?[0])?;
+            if snapshot_version >= 7 {
+                let [enabled, control] = read_words(input)?;
+                cpu.virtual_enabled = read_bool(enabled)?;
+                cpu.virtual_control = u32::try_from(control).map_err(io::Error::other)?;
+                cpu.virtual_list = read_words(input)?;
+            }
             cpu.active.clear();
             for _ in 0..active {
                 let [id, priority] = read_words(input)?;
@@ -784,6 +823,16 @@ mod tests {
         assert_eq!(gic.read_cpu_interface(1, 0x18), 37);
         gic.set_shared(5, false);
         assert_eq!(gic.read_cpu_interface(1, 0x18), 1023);
+    }
+
+    #[test]
+    fn arm_gic_virtual_list_register_halves_share_state() {
+        let mut gic = Gic::new(Version::V3, 32, &[0]).unwrap();
+        assert_eq!(gic.access_aarch32(0, 0x008c_002b, None), Some(Some(0x8000_000f)));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00ad, Some(53)), Some(None));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00af, Some(0x50a0_0000)), Some(None));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00ad, None), Some(Some(53)));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00ab, None), Some(Some(0xdfff)));
     }
 
     #[test]

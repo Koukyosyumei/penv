@@ -1,11 +1,11 @@
 use std::io::{self, Read, Write};
 
 pub(crate) const CORTEX_MAGIC: &[u8; 9] = b"PENVTHMB\x01";
-pub(crate) const ARM32_MAGIC: &[u8; 9] = b"PENVARM3\x06";
+pub(crate) const ARM32_MAGIC: &[u8; 9] = b"PENVARM3\x07";
 pub(crate) const RV64_MAGIC: &[u8; 9] = b"PENVRV64\x01";
 
 pub(crate) fn arm32_version(header: &[u8]) -> Option<u8> {
-    let &[version @ 1..=6, ..] = header.strip_prefix(b"PENVARM3")? else { return None };
+    let &[version @ 1..=7, ..] = header.strip_prefix(b"PENVARM3")? else { return None };
     Some(version)
 }
 
