@@ -458,6 +458,7 @@ pub(crate) struct Cpu {
     sctlr: u32,
     vbar: u32,
     hsctlr: u32,
+    vsctlr: u32,
     actlr: u32,
     vpidr: u32,
     vmpidr: u32,
@@ -508,6 +509,7 @@ impl Cpu {
             fiq_high: [0; 5],
             sctlr: 0,
             vbar: 0,
+            vsctlr: 0,
             hsctlr: 0,
             actlr: 0,
             vpidr: 0x411f_d132,
@@ -741,6 +743,7 @@ impl Cpu {
             }
             "sctlr" => 0x0001_0000,
             "vbar" => 0x000c_0000,
+            "vsctlr" => 0x0082_0000,
             "hsctlr" => 0x0081_0000,
             "actlr" => 0x0001_0020,
             "hactlr" => 0x0081_0020,
@@ -893,6 +896,7 @@ impl Cpu {
             0x0001_0040 => (&mut self.cpacr, 0xf0_0000),
             0x0080_0000 if v8r => (&mut self.vpidr, u32::MAX),
             0x0080_00a0 if v8r => (&mut self.vmpidr, u32::MAX),
+            0x0082_0000 if v8r => (&mut self.vsctlr, u32::MAX),
             0x0081_0000 if v8r => (&mut self.hsctlr, u32::MAX),
             0x0081_0020 if v8r => (&mut self.hactlr, u32::MAX),
             // Renode retains word-aligned values in its AArch32 HVBAR model.
