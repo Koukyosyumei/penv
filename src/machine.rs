@@ -1082,9 +1082,9 @@ impl Machine {
         Ok(hart.monitor_single_step)
     }
 
-    pub(crate) fn start_execution_trace(
+    fn open_execution_trace(
         &mut self, cpu: &str, name: &str, path: &std::path::Path, format: &str, binary: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(usize, crate::thumb::trace::Trace), String> {
         let (_, triple, features) = self.monitor_assembly_target(cpu)?;
         let hart = self.named_hart(cpu)?;
         let slot = hart.slot;
@@ -1106,16 +1106,38 @@ impl Machine {
         } else if let Some(thumb) = &hart.thumb {
             if thumb.armv81m { "cortex-m55" } else if thumb.cortex_m33 { "cortex-m33" }
             else if thumb.thumb2 { "cortex-m4" } else { "cortex-m0" }.to_owned()
+        } else if let Some(arm) = &hart.arm32 {
+            arm.model.clone()
         } else {
-            return Err("execution tracing currently requires Cortex-M or RISC-V".into());
+            return Err("execution tracing is unavailable for this CPU".into());
         };
+        let tracer = crate::thumb::trace::Trace::create(name, path, format, binary, (triple, features, &model))?;
+        Ok((slot, tracer))
+    }
+
+    pub(crate) fn start_execution_trace(
+        &mut self, cpu: &str, name: &str, path: &std::path::Path, format: &str, binary: bool,
+    ) -> Result<(), String> {
+        let slot = self.named_hart(cpu)?.slot;
         if self.bus.execution_traces.contains_key(&slot)
             || self.bus.execution_traces.values().any(|trace| trace.name == name)
         {
             return Err(format!("an execution tracer already exists for CPU {cpu:?}"));
         }
-        let tracer = crate::thumb::trace::Trace::create(name, path, format, binary, (triple, features, &model))?;
-        self.bus.execution_traces.insert(slot, tracer);
+        let (_, trace) = self.open_execution_trace(cpu, name, path, format, binary)?;
+        self.bus.execution_traces.insert(slot, trace);
+        Ok(())
+    }
+
+    pub(crate) fn set_disassembly_log(&mut self, cpu: &str, path: Option<&std::path::Path>) -> Result<(), String> {
+        let slot = self.named_hart(cpu)?.slot;
+        if let Some(old) = self.bus.disassembly_logs.remove(&slot) {
+            old.finish()?;
+        }
+        if let Some(path) = path {
+            let (_, trace) = self.open_execution_trace(cpu, cpu, path, "Disassembly", false)?;
+            self.bus.disassembly_logs.insert(slot, trace);
+        }
         Ok(())
     }
 
@@ -1130,6 +1152,9 @@ impl Machine {
         let slot = self.named_hart(cpu)?.slot;
         if let Some(trace) = self.bus.execution_traces.remove(&slot) {
             trace.finish()?;
+        }
+        if let Some(log) = self.bus.disassembly_logs.get_mut(&slot) {
+            log.flush()?;
         }
         Ok(())
     }
@@ -4124,8 +4149,8 @@ impl Hart {
         let (encoded, width) = self
             .fetch(bus)
             .map_err(|error| Fault::Bus(Access::Fetch, error))?;
-        if !bus.execution_traces.is_empty() {
-            bus.trace_instruction(self.slot, u64::from(pc), u64::from(encoded), width as usize)
+        if bus.trace_instructions() {
+            bus.trace_instruction(self.slot, u64::from(pc), u64::from(encoded), width as usize, false)
                 .map_err(Fault::Abort)?;
         }
         if width == 4 && !bus.instruction_hooks.is_empty()

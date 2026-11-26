@@ -1106,6 +1106,7 @@ enum Action {
     CreateExecutionTrace(String, String, PathBuf, String, bool),
     TrackExecutionTrace(String, crate::thumb::trace::Tracking),
     FinishExecutionTrace(String),
+    SetDisassemblyLog(String, Option<PathBuf>),
     InstallOpcodeCounter(String, String, String),
     EnableCustomOpcodeCounters(String),
     EnableOpcodeCounters(String, bool),
@@ -1397,7 +1398,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(..) | Action::ExecutionMode(..)
-                    | Action::CreateExecutionTrace(..) | Action::FinishExecutionTrace(..) | Action::TrackExecutionTrace(..)
+                    | Action::CreateExecutionTrace(..) | Action::FinishExecutionTrace(..) | Action::TrackExecutionTrace(..) | Action::SetDisassemblyLog(..)
                     | Action::EnableOpcodeCatalog(..) | Action::OpcodeCatalogNames | Action::ListOpcodeCounters(..)
                     | Action::EnableCustomOpcodeCounters(..) | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
@@ -1820,7 +1821,7 @@ fn run_commands<'a>(
                         return Ok(Some(stop));
                     }
                     let pc = machine.monitor_named_pc(cpu)?;
-                    writeln!(output.reply(), "0x{pc:08x}").map_err(|error| error.to_string())?;
+                    writeln!(output.reply(), "0x{pc:X}").map_err(|error| error.to_string())?;
                     Ok(None)
                 })
             }
@@ -2307,7 +2308,7 @@ fn run_commands<'a>(
                 }
             }
             Action::ReadCpuPc(cpu) => machine.monitor_named_pc(cpu).and_then(|pc| {
-                writeln!(output.reply(), "0x{pc:08x}")
+                writeln!(output.reply(), "0x{pc:X}")
                     .map_err(|error| error.to_string()).map(|()| None)
             }),
             Action::CreateExecutionTrace(cpu, name, path, format, binary) => {
@@ -2316,6 +2317,10 @@ fn run_commands<'a>(
             }
             Action::TrackExecutionTrace(name, tracking) => {
                 machine.track_execution_trace(name, *tracking)?;
+                Ok(None)
+            }
+            Action::SetDisassemblyLog(cpu, path) => {
+                machine.set_disassembly_log(cpu, path.as_deref())?;
                 Ok(None)
             }
             Action::FinishExecutionTrace(cpu) => {
@@ -6756,6 +6761,13 @@ fn execute(
             };
             Some(Action::TrackExecutionTrace(resolve(target)?.to_owned(), tracking))
         }
+        [target, "LogFile", filename] => {
+            let value = resolve(filename)?;
+            let path = (value != "null").then(|| {
+                script.parent().unwrap_or(Path::new(".")).join(unquote(value.trim_start_matches('@')))
+            });
+            Some(Action::SetDisassemblyLog(resolve(target)?.trim_start_matches("sysbus.").into(), path))
+        }
         [target, "DisableExecutionTracing"] => Some(Action::FinishExecutionTrace(resolve(target)?.trim_start_matches("sysbus.").into())),
         [_, "GetRiscvOpcodesEmbeddedResourceNames"] => Some(Action::OpcodeCatalogNames),
         [target, "GetAllOpcodesCounters"] => Some(Action::ListOpcodeCounters(
@@ -6864,7 +6876,7 @@ fn execute(
             ))
         }
         [target, register @ ("MSTATUS" | "MEPC" | "MCAUSE" | "MTVAL" | "SEPC"), value @ ..]
-            if value.is_empty() || (matches!(*register, "MEPC" | "MTVAL" | "SEPC") && value.len() == 1) =>
+            if value.is_empty() || ((matches!(*register, "MEPC" | "MTVAL" | "SEPC") || *register == "MSTATUS" && boot.started) && value.len() == 1) =>
         {
             let value = value.first().map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
             Some(Action::CpuRegister(
@@ -7130,7 +7142,7 @@ fn execute(
                         | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                         | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                        | Action::CreateExecutionTrace(..) | Action::FinishExecutionTrace(..) | Action::TrackExecutionTrace(..)
+                        | Action::CreateExecutionTrace(..) | Action::FinishExecutionTrace(..) | Action::TrackExecutionTrace(..) | Action::SetDisassemblyLog(..)
                     | Action::EnableOpcodeCatalog(..) | Action::OpcodeCatalogNames | Action::ListOpcodeCounters(..)
                     | Action::EnableCustomOpcodeCounters(..) | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                         | Action::CpuRegister(..) | Action::AddCpuHook(..) | Action::PythonAddressHook(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)

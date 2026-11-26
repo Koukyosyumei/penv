@@ -490,6 +490,7 @@ impl GenericTimer {
 #[derive(Clone)]
 pub(crate) struct Cpu {
     pub(crate) profile: Profile,
+    pub(crate) model: String,
     cpsr: u32,
     thumb: Thumb,
     banks: [Bank; 8],
@@ -541,6 +542,7 @@ impl Cpu {
         thumb.arm_interworking = true;
         Self {
             profile,
+            model: String::new(),
             cpsr: if matches!(profile, Profile::RealTimeV8) {
                 Z | 0x1da
             } else {
@@ -1787,6 +1789,9 @@ impl Cpu {
         }
         let instruction = self.load(bus, slot, *pc, 4)?;
         let address = *pc;
+        if bus.trace_instructions() {
+            bus.trace_instruction(slot, address.into(), instruction.into(), 4, false)?;
+        }
         let mut next = address.wrapping_add(4);
         let condition = instruction >> 28;
         if instruction & 0xfe00_0000 == 0xfa00_0000 {

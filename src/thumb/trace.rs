@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufWriter, Write},
+    io::{BufWriter, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -59,7 +59,15 @@ pub struct Trace {
     pc_size: u8,
     triple: &'static str,
     features: String,
-    disassembly: HashMap<(u64, usize), String>,
+    disassembly: HashMap<(u64, usize, bool), String>,
+    block: Option<TraceBlock>,
+}
+
+struct TraceBlock {
+    thumb: bool,
+    count_at: u64,
+    count: u64,
+    next: u64,
 }
 
 impl Trace {
@@ -87,15 +95,28 @@ impl Trace {
             let include_opcode = !matches!(format, Format::Pc);
             output.write_all(&[pc_size, u8::from(include_opcode)])?;
             if include_opcode {
-                let label = if triple.starts_with("thumb") {
-                    "thumb"
+                let label = triple.split('-').next().unwrap();
+                let mixed = label.starts_with("arm") && label != "arm64";
+                if mixed {
+                    output.write_all(&[2])?;
+                    for target in [label, "thumb"] {
+                        let target_name = format!("{target} {model}");
+                        let size =
+                            u8::try_from(target_name.len()).map_err(std::io::Error::other)?;
+                        output.write_all(&[size])?;
+                        output.write_all(target_name.as_bytes())?;
+                    }
                 } else {
-                    triple
-                };
-                let target_name = format!("{label} {model}");
-                let size = u8::try_from(target_name.len()).map_err(std::io::Error::other)?;
-                output.write_all(&[1, size])?;
-                output.write_all(target_name.as_bytes())?;
+                    let label = if label.starts_with("thumb") {
+                        "thumb"
+                    } else {
+                        label
+                    };
+                    let target_name = format!("{label} {model}");
+                    let size = u8::try_from(target_name.len()).map_err(std::io::Error::other)?;
+                    output.write_all(&[1, size])?;
+                    output.write_all(target_name.as_bytes())?;
+                }
             }
             Ok(())
         };
@@ -115,6 +136,7 @@ impl Trace {
             triple,
             features,
             disassembly: HashMap::new(),
+            block: None,
         })
     }
 
@@ -226,11 +248,53 @@ impl Trace {
         result.map_err(|error| format!("writing atomic operands trace: {error}"))
     }
 
-    pub fn record(&mut self, pc: u64, opcode: u64, width: usize) -> Result<(), String> {
+    fn close_block(&mut self) -> std::io::Result<()> {
+        if let Some(block) = self.block.take() {
+            let end = self.output.stream_position()?;
+            self.output.seek(SeekFrom::Start(block.count_at))?;
+            self.output.write_all(&block.count.to_le_bytes())?;
+            self.output.seek(SeekFrom::Start(end))?;
+        }
+        Ok(())
+    }
+
+    fn extend_block(&mut self, pc: u64, width: usize, thumb: bool) -> std::io::Result<()> {
+        if let Some(block) = self.block.as_mut()
+            && block.thumb == thumb
+            && block.next == pc
+        {
+            block.count += 1;
+            block.next = pc.wrapping_add(width as u64);
+            return Ok(());
+        }
+        self.close_block()?;
+        self.output.write_all(&[u8::from(thumb)])?;
+        let count_at = self.output.stream_position()?;
+        self.output.write_all(&[0; 8])?;
+        self.block = Some(TraceBlock {
+            thumb,
+            count_at,
+            count: 1,
+            next: pc.wrapping_add(width as u64),
+        });
+        Ok(())
+    }
+
+    pub fn record(
+        &mut self,
+        pc: u64,
+        opcode: u64,
+        width: usize,
+        thumb: bool,
+    ) -> Result<(), String> {
         self.close_record()?;
+        if self.binary && !matches!(self.format, Format::Pc) && self.triple.starts_with("arm") {
+            self.extend_block(pc, width, thumb)
+                .map_err(|error| format!("writing trace block: {error}"))?;
+        }
         self.pending = true;
         let mut bytes = opcode.to_le_bytes();
-        if self.triple.starts_with("thumb") && width == 4 {
+        if thumb && width == 4 {
             bytes[..4].rotate_left(2);
         }
         let bytes = &bytes[..width];
@@ -257,7 +321,7 @@ impl Trace {
                 if self.disassembly.len() >= 4096 {
                     self.disassembly.clear();
                 }
-                let key = (opcode, width);
+                let key = (opcode, width, thumb);
                 if let std::collections::hash_map::Entry::Vacant(entry) =
                     self.disassembly.entry(key)
                 {
@@ -266,8 +330,18 @@ impl Trace {
                         .map(|byte| format!("0x{byte:02x}"))
                         .collect::<Vec<_>>()
                         .join(" ");
+                    let triple = if thumb {
+                        match self.triple {
+                            "armv7a-none-eabi" => "thumbv7a-none-eabi",
+                            "armv7r-none-eabi" => "thumbv7r-none-eabi",
+                            "armv8r-none-eabi" => "thumbv8r-none-eabi",
+                            triple => triple,
+                        }
+                    } else {
+                        self.triple
+                    };
                     let result = crate::llvm_mc_with_args(
-                        self.triple,
+                        triple,
                         &self.features,
                         &["--disassemble", "--show-encoding"],
                         &format!("{input}\n"),
@@ -287,7 +361,7 @@ impl Trace {
                 }
                 writeln!(
                     self.output,
-                    "0x{pc:X}: 0x{opcode:0digits$X} {}",
+                    "0x{pc:08x}: {opcode:0digits$x} {}",
                     self.disassembly[&key]
                 )
             }
@@ -295,8 +369,16 @@ impl Trace {
         result.map_err(|error| format!("writing trace: {error}"))
     }
 
+    pub(crate) fn flush(&mut self) -> Result<(), String> {
+        self.output
+            .flush()
+            .map_err(|error| format!("flushing trace: {error}"))
+    }
+
     pub fn finish(mut self) -> Result<(), String> {
         self.close_record()?;
+        self.close_block()
+            .map_err(|error| format!("closing trace block: {error}"))?;
         self.output
             .flush()
             .map_err(|error| format!("flushing trace: {error}"))

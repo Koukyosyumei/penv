@@ -84,6 +84,7 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
             _ => return Err(entry.error("unsupported AArch32 CPU type")),
         };
         let mut processor = Cpu::new(profile);
+        processor.model = model;
         processor.set_affinity(affinity);
         if processor.is_v8r() {
             processor

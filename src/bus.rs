@@ -465,6 +465,7 @@ pub struct Bus {
     pub thumb_block_pc_log: bool,
     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     pub(crate) execution_traces: std::collections::HashMap<usize, crate::thumb::trace::Trace>,
+    pub(crate) disassembly_logs: std::collections::HashMap<usize, crate::thumb::trace::Trace>,
     pub thumb_opcodes: crate::thumb::opcode_counter::OpcodeCounters,
     pub thumb_opcode_hooks: crate::thumb::opcode_counter::OpcodeLogHooks,
     pub(crate) thumb_python_opcodes: Vec<(usize, crate::thumb::opcode_counter::HookPhase, u32, u32, usize)>,
@@ -7244,7 +7245,7 @@ impl Bus {
     }
 
     pub(crate) fn supports_cortex_snapshot(&self) -> bool {
-        let scs = u64::from(crate::nvic::BASE);
+        !self.trace_instructions() && let scs = u64::from(crate::nvic::BASE);
         self.nvic.as_ref().is_some_and(Nvic::supports_snapshot) && self.systick.is_some()
             && !self.peripheral_overlaps(0, scs) && !self.peripheral_overlaps(scs + 0x1000, 1 << 32)
             && self.pydevs.is_empty() && self.policy_tags.is_empty()
@@ -7274,7 +7275,7 @@ impl Bus {
     }
 
     pub(crate) fn supports_rv64_snapshot(&self) -> bool {
-        self.rv64_instruction_hooks.is_empty() && self.rv64_opcode_counters.is_empty()
+        !self.trace_instructions() && self.rv64_instruction_hooks.is_empty() && self.rv64_opcode_counters.is_empty()
             && self.miv_uart.is_none() && self.pl011_uarts.is_empty()
             && self.rv64_devices.supports_snapshot()
             && self.rv64_tohost.is_none() && self.robot_tohost.is_none()
@@ -7409,7 +7410,7 @@ impl Bus {
     }
 
     pub(crate) fn supports_arm_snapshot(&self) -> bool {
-        self.aliases.is_empty() && self.rv64_reservations.iter().all(Option::is_none)
+        !self.trace_instructions() && self.aliases.is_empty() && self.rv64_reservations.iter().all(Option::is_none)
             && self.pydevs.is_empty() && self.arm_gic.is_some()
     }
 
@@ -8148,9 +8149,16 @@ impl Bus {
         Ok(())
     }
 
-    pub(crate) fn trace_instruction(&mut self, hart: usize, pc: u64, opcode: u64, width: usize) -> Result<(), String> {
+    pub(crate) fn trace_instructions(&self) -> bool {
+        !self.execution_traces.is_empty() || !self.disassembly_logs.is_empty()
+    }
+
+    pub(crate) fn trace_instruction(&mut self, hart: usize, pc: u64, opcode: u64, width: usize, thumb: bool) -> Result<(), String> {
         if let Some(trace) = self.execution_traces.get_mut(&hart) {
-            trace.record(pc, opcode, width)?;
+            trace.record(pc, opcode, width, thumb)?;
+        }
+        if let Some(log) = self.disassembly_logs.get_mut(&hart) {
+            log.record(pc, opcode, width, thumb)?;
         }
         Ok(())
     }

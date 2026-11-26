@@ -1819,7 +1819,7 @@ impl Thumb {
     ) -> Result<bool, InstructionError> {
         use opcode_counter::HookPhase;
         if !bus.thumb_opcodes.enabled && bus.thumb_opcode_hooks.is_empty()
-            && bus.thumb_python_opcodes.is_empty() && bus.execution_traces.is_empty()
+            && bus.thumb_python_opcodes.is_empty() && !bus.trace_instructions()
         {
             return self.execute_fetched(inst, pc, r, bus, output);
         }
@@ -1829,9 +1829,9 @@ impl Thumb {
         } else {
             inst
         };
-        if !bus.execution_traces.is_empty() {
+        if bus.trace_instructions() {
             let hart = bus.guest_access.map_or(0, |(index, _)| index);
-            bus.trace_instruction(hart, u64::from(address), u64::from(opcode), if inst >= 0xe800 { 4 } else { 2 })?;
+            bus.trace_instruction(hart, u64::from(address), u64::from(opcode), if inst >= 0xe800 { 4 } else { 2 }, true)?;
         }
         if bus.thumb_opcodes.enabled {
             bus.thumb_opcodes.record(opcode);
