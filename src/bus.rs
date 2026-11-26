@@ -4657,7 +4657,7 @@ impl Bus {
         Ok(())
     }
 
-    pub(crate) fn attach_renesas_iic_eeprom(&mut self, target: &str, address: u32, eeprom: Eeprom) -> Result<(), String> {
+    pub(crate) fn attach_renesas_iic_eeprom(&mut self, target: &str, address: u32, eeprom: crate::stm32_i2c::Eeprom) -> Result<(), String> {
         let device = self.renesas_ra_iic.iter_mut().find(|device| device.name == target)
             .ok_or("unknown Renesas I²C controller")?;
         let address = u8::try_from(address).map_err(|_| "invalid I²C address")?;
