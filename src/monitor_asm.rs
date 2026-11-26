@@ -127,6 +127,11 @@ pub(crate) fn assemble_source(
                 line.to_owned()
             };
             let line = normalize_vector_memory_operand(&line);
+            let line = if features.iter().any(|feature| feature == "+zicond") {
+                lower_zicond_instruction(&line)
+            } else {
+                line
+            };
             lower_andes_instruction(&line, triple)
         })
         .collect::<Result<Vec<_>, _>>()?
@@ -191,6 +196,23 @@ fn unsupported_assembly_directive(instruction: &str, thumb: bool) -> bool {
             .is_some_and(|alignment| alignment <= 4096 && alignment.is_power_of_two() && words.next().is_none()),
         _ => true,
     }
+}
+
+// Spell these using the architectural encoding for host LLVM versions that
+// predate Zicond support. LLVM still validates the operands and resolves labels.
+fn lower_zicond_instruction(line: &str) -> String {
+    let (label, instruction) = line.split_once(':').map_or(("", line), |(label, rest)| {
+        (&line[..label.len() + 1], rest.trim_start())
+    });
+    let Some((name, operands)) = instruction.split_once(char::is_whitespace) else {
+        return line.to_owned();
+    };
+    let funct3 = match name.to_ascii_lowercase().as_str() {
+        "czero.eqz" => 5,
+        "czero.nez" => 7,
+        _ => return line.to_owned(),
+    };
+    format!("{label} .insn r 0x33, {funct3}, 7, {operands}")
 }
 
 fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {

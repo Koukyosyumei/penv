@@ -109,6 +109,7 @@ impl Isa {
         let mut extensions = normalized
             .strip_prefix("rv64")
             .ok_or_else(|| format!("invalid RV64 ISA {value:?}"))?
+            .trim_end_matches('_')
             .split('_');
         let base = extensions.next().unwrap_or("");
         if !base.starts_with(['i', 'g'])
