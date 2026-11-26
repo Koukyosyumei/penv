@@ -1561,11 +1561,19 @@ fn run_commands<'a>(
                 let rate = machine.bus.monitor_step_hz();
                 let timeout = duration_cycles(*timeout, CORTEX_M_STEP_HZ, rate)?;
                 let hold = duration_cycles(*hold, CORTEX_M_STEP_HZ, rate)?;
-                if timeout.min(budget) != 0 || hold.min(budget) != 0 {
+                let index = machine.bus.gpio_led_index(target)?;
+                let needs_time = hold.min(budget) != 0
+                    || (timeout.min(budget) != 0 && machine.bus.gpio_led(index).state != *state);
+                if needs_time {
                     machine.set_monitor_active(true);
                 }
-                let count = wait_for_led(machine, target, *state, timeout, hold, &mut budget, &mut output)?;
-                if *pause {
+                let count = wait_for_led(machine, target, *state, timeout, hold, &mut budget, &mut output)
+                    .map_err(|error| if error.contains("did not reach state") {
+                        format!("LED assertion not met. {error}")
+                    } else {
+                        error
+                    })?;
+                if *pause && needs_time {
                     machine.set_monitor_active(false);
                 }
                 retired += count;

@@ -28,13 +28,39 @@ def write_case(case, record, directory):
     write_json(directory / "case.json", dict(case, engine="penv", **record))
 
 
+def expected_keyword_errors(result):
+    expected = []
+    for item in getattr(result, "body", ()):
+        if getattr(item, "name", None) == "BuiltIn.Run Keyword And Expect Error" and item.status == "PASS":
+            for child in item.body:
+                if getattr(child, "status", None) != "FAIL" or not getattr(child, "kwname", None):
+                    continue
+                expected.extend((child.kwname, message.message) for message in child.body
+                                if getattr(message, "level", None) == "FAIL")
+        expected.extend(expected_keyword_errors(item))
+    return expected
+
+
 def assess(test, endpoint):
     # Robot can time out while an XML-RPC keyword is still running.
     failures = [call for call in endpoint.calls if call.get("status") not in (None, "ok")]
     if test.status == "PASS":
         # A typed rejection came from an actual monitor lookup. Robot's
         # successful error assertion supplies the expected-outcome check.
-        failures = [call for call in failures if call.get("monitor", {}).get("reply") != "REJECTED"]
+        expected_errors = expected_keyword_errors(test)
+        unverified = []
+        for call in failures:
+            observation = call.get("monitor", {})
+            if observation.get("reply") == "REJECTED":
+                continue
+            if observation.get("result") == "fail":
+                match = next((entry for entry in expected_errors
+                              if entry[0] == call["keyword"] and call["message"] in entry[1]), None)
+                if match:
+                    expected_errors.remove(match)
+                    continue
+            unverified.append(call)
+        failures = unverified
     in_flight = any("status" not in call for call in endpoint.calls)
     issue = next((call for call in failures if call["status"] == "unsupported"), None)
     if issue:
