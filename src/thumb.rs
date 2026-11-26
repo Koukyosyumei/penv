@@ -75,6 +75,7 @@ pub struct Thumb {
     greater_equal: u32,
     fp: [u32; 32],
     fpscr: u32,
+    vpr: u32,
     pub(crate) arm_interworking: bool,
     pub(crate) arm_unaligned_context: Option<(usize, bool)>,
     pub(crate) arm_branch_taken: bool,

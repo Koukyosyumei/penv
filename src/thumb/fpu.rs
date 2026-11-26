@@ -81,6 +81,17 @@ impl Thumb {
         register: &str,
         value: Option<u64>,
     ) -> Option<Result<Option<u64>, String>> {
+        if register == "vpr" && self.armv81m {
+            return Some(match value {
+                Some(value) => u32::try_from(value)
+                    .map(|value| {
+                        self.vpr = value;
+                        None
+                    })
+                    .map_err(|_| "VPR value exceeds 32 bits".into()),
+                None => Ok(Some(u64::from(self.vpr))),
+            });
+        }
         if register == "fpscr" {
             return Some(match value {
                 Some(value) => u32::try_from(value)
@@ -265,12 +276,11 @@ impl Thumb {
     }
 
     fn select_or_minmax_kind(high: u32, low: u32) -> Option<u32> {
-        if !matches!(low & 0xf10, 0xa00 | 0xb00) {
-            return None;
-        }
-        if high & 0xff80 == 0xfe00 && low & 0x40 == 0 {
+        let precision = low & 0xf10;
+        if high & 0xff80 == 0xfe00 && low & 0x40 == 0 && matches!(precision, 0x900 | 0xa00 | 0xb00)
+        {
             Some((high >> 4) & 3)
-        } else if high & 0xffb0 == 0xfe80 {
+        } else if high & 0xffb0 == 0xfe80 && matches!(precision, 0xa00 | 0xb00) {
             Some(4 + ((low >> 6) & 1))
         } else {
             None
@@ -320,7 +330,11 @@ impl Thumb {
         } else {
             self.fp_minmax_bits(left, right, double, kind == 5)
         };
-        self.fp[destination] = result as u32;
+        self.fp[destination] = if low & 0xf00 == 0x900 {
+            result as u16 as u32
+        } else {
+            result as u32
+        };
         if double {
             self.fp[destination + 1] = (result >> 32) as u32;
         }
@@ -373,10 +387,41 @@ impl Thumb {
         }
     }
 
+    fn is_fp_half_move(high: u32, low: u32) -> bool {
+        high & !0x40 == 0xfeb0 && low & 0xf50 == 0xa40
+    }
+
+    fn is_secure_fp_clear(high: u32, low: u32) -> bool {
+        high & !0x40 == 0xec9f && low & 0x0e00 == 0x0a00 && (low & 0x100 == 0 || low & 1 == 0)
+    }
+
+    fn clear_secure_fp(&mut self, high: u32, low: u32, bus: &Bus) -> bool {
+        if !self.armv81m || !self.trustzone || !self.secure {
+            return false;
+        }
+        if !self.fp_active && bus.nvic.as_ref().is_some_and(Nvic::fpu_auto_preserve) {
+            return true;
+        }
+        let extension = (high >> 6) & 1;
+        let (first, count) = if low & 0x100 == 0 {
+            ((low >> 12) * 2 + extension, low & 0xff)
+        } else {
+            (((low >> 12) + 16 * extension) * 2, low & 0xfe)
+        };
+        let Some(registers) = self.fp.get_mut(first as usize..(first + count) as usize) else {
+            return false;
+        };
+        registers.fill(0);
+        self.vpr = 0;
+        true
+    }
+
     pub(crate) fn is_fpu_instruction(high: u32, low: u32) -> bool {
         Self::fp_round_kind(high, low).is_some()
             || Self::fp_convert_kind(high, low).is_some()
             || Self::select_or_minmax_kind(high, low).is_some()
+            || Self::is_fp_half_move(high, low)
+            || Self::is_secure_fp_clear(high, low)
             || matches!(high & 0xff00, 0xec00 | 0xed00 | 0xee00)
                 && matches!(low & 0xf00, 0xa00 | 0xb00)
     }
@@ -410,6 +455,14 @@ impl Thumb {
             if !(self.armv81m || self.cortex_m33) || !self.select_or_minmax(high, low, kind) {
                 return Ok(false);
             }
+        } else if Self::is_fp_half_move(high, low) && self.armv81m {
+            self.fp[sd] = if low & 0x80 != 0 {
+                (self.fp[sd] & 0xffff) | (self.fp[sm] << 16)
+            } else {
+                self.fp[sm] >> 16
+            };
+        } else if Self::is_secure_fp_clear(high, low) {
+            return Ok(self.clear_secure_fp(high, low, bus));
         } else if high & 0xffe0 == 0xec40 && low & 0xd0 == 0x10 {
             let rt = (low >> 12) as usize;
             let rt2 = (high & 15) as usize;
