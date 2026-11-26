@@ -4296,6 +4296,7 @@ impl Bus {
             .as_mut()
             .ok_or("NVIC logging requires SysTick")?
             .set_noisy();
+        crate::monitor_log::set_target_level(target.trim_start_matches("sysbus."), -1);
         Ok(())
     }
 
@@ -7827,6 +7828,7 @@ impl Bus {
                     }
                 }
                 CpuHook::Pause => {
+                    crate::monitor_log::record(1, "Machine paused");
                     writeln!(output, "Machine paused").map_err(BusError::Output)?;
                     return Ok(true);
                 }
@@ -9269,23 +9271,18 @@ impl Bus {
             && let Some(timer) = self.systick.as_mut()
         {
             let before = timer.pending_exceptions();
+            let zero_reload = timer.enabling_with_zero_reload(address, value);
             if timer.write(address, value) {
                 if timer.pending_exceptions() & !before != 0
                     && let Some(nvic) = &mut self.nvic
                 {
                     nvic.signal_pending_event();
                 }
-                return Ok(());
-            }
-        }
-        if width == 4
-            && let Some(timer) = self.systick.as_mut()
-        {
-            let zero_reload = timer.enabling_with_zero_reload(address, value);
-            if timer.write(address, value) {
                 if zero_reload {
-                    writeln!(uart, "Systick_NS enabled but it won't be started as long as the reload value is zero")
-                        .map_err(BusError::Output)?;
+                    let name = self.nvic_name.as_deref().unwrap_or("nvic");
+                    crate::monitor_log::record(0, &format!(
+                        "{name}: Systick_NS enabled but it won't be started as long as the reload value is zero"
+                    ));
                 }
                 return Ok(());
             }

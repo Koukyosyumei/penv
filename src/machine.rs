@@ -3564,7 +3564,9 @@ impl Hart {
                             .map_err(|error| format!("CPU hook at {:#010x}: {error}", self.pc))?,
                         CpuHook::Pause => {
                             self.monitor_paused = true;
+                            crate::monitor_log::record(1, "Machine paused");
                             eprintln!("Machine paused");
+                            return Ok(Step::Stop(Stop::Paused));
                         }
                     }
                 }
