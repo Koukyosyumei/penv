@@ -32,6 +32,22 @@ mod tests {
     use crate::arm_gic::{Gic, Version, Window, WindowKind};
 
     #[test]
+    fn arm_branch_exchange_does_not_decode_as_status_register_write() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        let mut output = Vec::new();
+        bus.write(0, 4, 0x012f_ff1e, &mut output).unwrap(); // BXEQ lr
+        let mut registers = [0; 32];
+        registers[14] = 0x201;
+        let mut pc = 0;
+        cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output)
+            .unwrap();
+        assert_eq!(pc, 0x200);
+        assert_eq!(cpu.cpsr() & (T | 31), T | 0x1a);
+    }
+
+    #[test]
     fn arm_generic_timer_distinguishes_count_offset_compare_and_mask() {
         let mut timer = GenericTimer::new(100_000_000, 100_000_000, [Some(30), Some(27), Some(26)]);
         assert_eq!(timer.read32(0x000e_0000, 0), Some(100_000_000));
@@ -1379,7 +1395,9 @@ impl Cpu {
                         self.banks[Self::bank_for(self.cpsr).unwrap()].spsr
                     };
                 }
-                _ if instruction & 0x0db0_f000 == 0x0120_f000 => {
+                _ if instruction & 0x0fb0_fff0 == 0x0120_f000
+                    || instruction & 0x0fb0_f000 == 0x0320_f000 =>
+                {
                     let (value, _) = self.operand(instruction, registers, address);
                     let mut fields = 0;
                     for field in 0..4 {
