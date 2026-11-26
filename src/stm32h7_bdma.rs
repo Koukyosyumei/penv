@@ -151,6 +151,10 @@ impl Bdma {
         }
     }
 
+    pub(crate) fn needs_tick(&self) -> bool {
+        self.channels.iter().any(Channel::software_request)
+    }
+
     pub fn request(
         &mut self,
         channel: usize,

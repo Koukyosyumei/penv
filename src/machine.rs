@@ -2267,7 +2267,7 @@ impl Machine {
         self.bus.egis_quiet_steps(self.elapsed_steps, remaining)
     }
 
-    fn f4_quiet_steps(&mut self, remaining: u64) -> (u64, u64) {
+    fn stm32_quiet_steps(&mut self, remaining: u64) -> (u64, u64) {
         if remaining <= 1 || !self.secondary.is_empty()
             || self.primary.reset_held || self.primary.monitor_halted || self.cpu_halted
             || self.primary.monitor_paused || self.halted != 0 || self.primary.monitor_single_step
@@ -2279,6 +2279,11 @@ impl Machine {
             return (0, 0);
         }
         let Some(thumb) = self.primary.thumb.as_mut() else { return (0, 0) };
+        if let Some(wait) = self.primary.busy_wait.as_mut().filter(|wait| wait.remaining() != 0) {
+            let quiet = self.bus.advance_stm32_quiet(remaining.min(wait.remaining()), 1);
+            wait.advance_quiet(quiet);
+            return (quiet, 0);
+        }
         let pc = self.primary.pc;
         let period = if !thumb.sleeping() && self.primary.busy_wait.is_none()
             && self.primary.monitor_hooks.is_empty() && self.python_hooks.is_empty()
@@ -2291,7 +2296,7 @@ impl Machine {
         if !thumb.sleeping() && period.is_none() {
             return (0, 0);
         }
-        let quiet = self.bus.advance_f4_quiet(remaining, period.unwrap_or(1));
+        let quiet = self.bus.advance_stm32_quiet(remaining, period.unwrap_or(1));
         if period.is_some() {
             thumb.retire_repeated_branch(quiet);
         }
@@ -2339,7 +2344,7 @@ impl Machine {
             // Give newly delivered host events a regular scheduler cycle
             // before considering an idle span.
             let (quiet, repeated) = if selected.is_none() && remaining != limit {
-                self.f4_quiet_steps(remaining)
+                self.stm32_quiet_steps(remaining)
             } else {
                 (0, 0)
             };

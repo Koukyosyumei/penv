@@ -178,6 +178,10 @@ impl LpTimer {
             }
         }
     }
+
+    pub(crate) fn needs_tick(&self) -> bool {
+        self.mode.is_some() && self.reload != 0 && self.config & 1 == 0
+    }
 }
 
 #[cfg(test)]

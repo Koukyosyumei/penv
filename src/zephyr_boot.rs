@@ -95,6 +95,14 @@ impl BusyWait {
         true
     }
 
+    pub(crate) fn remaining(&self) -> u64 {
+        self.remaining
+    }
+
+    pub(crate) fn advance_quiet(&mut self, steps: u64) {
+        self.remaining -= steps;
+    }
+
     pub fn contains(&self, pc: u32) -> bool {
         self.entries.binary_search(&pc).is_ok()
     }

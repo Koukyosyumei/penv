@@ -127,6 +127,10 @@ impl Ltdc {
         }
     }
 
+    pub(crate) fn needs_tick(&self) -> bool {
+        self.registers[0x18 / 4] & self.active.0[0] & 1 != 0 && self.active.0[12] == 0
+    }
+
     fn check_scanout(&mut self) {
         if self.registers[0x18 / 4] & self.active.0[0] & 1 != 0 && self.active.0[12] == 0 {
             self.registers[0x38 / 4] |= FIFO_UNDERRUN;

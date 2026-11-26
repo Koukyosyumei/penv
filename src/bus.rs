@@ -2576,9 +2576,15 @@ impl Bus {
         self.gpio_wires = wires;
     }
 
-    fn sample_timer_pins(&mut self) -> bool {
+    fn sample_timer_pins(&mut self, track_output_changes: bool) -> bool {
         if self.timer_pins.is_empty() && self.gpio_wires.is_empty() {
             return false;
+        }
+        let mut prior_levels = [0; 16];
+        if track_output_changes {
+            for (prior, gpio) in prior_levels.iter_mut().zip(&self.h7_gpio) {
+                *prior = gpio.pins();
+            }
         }
         for gpio in &mut self.h7_gpio {
             gpio.clear_timer_output();
@@ -2631,7 +2637,10 @@ impl Bus {
             });
             input_changed |= timer.sample_inputs(levels);
         }
-        input_changed
+        input_changed || track_output_changes && (
+            self.h7_gpio.len() > prior_levels.len()
+                || prior_levels.iter().zip(&self.h7_gpio).any(|(&before, gpio)| before != gpio.pins())
+        )
     }
 
     pub(crate) fn can_batch_thumb_polling(&self) -> bool {
@@ -2654,12 +2663,18 @@ impl Bus {
 
     // Stop before the next modeled clock edge. The ordinary scheduler runs
     // that edge, including capture wiring, DMA and NVIC sampling, in order.
-    pub(crate) fn advance_f4_quiet(&mut self, limit: u64, stride: u64) -> u64 {
-        if self.f4_rcc.is_none() || self.h7_network_control.is_some()
+    pub(crate) fn advance_stm32_quiet(&mut self, limit: u64, stride: u64) -> u64 {
+        let control = self.h7_network_control.as_ref();
+        if self.f4_rcc.is_none() && control.is_none()
             || !self.nrf_peripherals.is_empty() || self.has_rv64_ethernet_link()
             || self.litex_uart.is_some() || self.uart.is_some() || !self.pl011_uarts.is_empty() || self.stm32_rtc.is_some()
-            || self.h7_ltdc.is_some() || !self.h7_i2c.is_empty() || !self.h7_lptimers.is_empty()
-            || !self.h7_adc.is_empty() || !self.h7_bdma.is_empty() || !self.stm32_regular_adcs.is_empty()
+            || self.h7_ltdc.as_ref().is_some_and(|device| ltdc_clocked(control, device) && device.needs_tick())
+            || self.h7_lptimers.iter().any(|timer| lptim_clocked(control, timer) && timer.needs_tick())
+            || self.h7_adc.iter().any(|adc| adc_clocked(control, adc) && adc.needs_tick())
+            || self.h7_bdma.iter().any(|dma| bdma_clocked(control, dma) && dma.needs_tick())
+            || self.h7_i2c.iter().any(|i2c| i2c.next_sensor_event() == Some(0))
+            || !self.gpio_pwm_leds.is_empty()
+            || !self.stm32_regular_adcs.is_empty()
             || self.stm32_adc.is_some() || self.stm32_dma.as_ref().is_some_and(Stm32Dma::has_enabled_channels)
             || self.nvic.as_ref().is_some_and(Nvic::has_wake_event)
             || self.systick.as_ref().is_some_and(|timer| timer.pending_exceptions() != 0)
@@ -2671,9 +2686,13 @@ impl Bus {
         // The preceding timer clock can change a pin. Sample that edge
         // before skipping cycles, and deliver a regular cycle to the CPU
         // when capture or encoder inputs change.
-        if self.sample_timer_pins() {
+        if self.sample_timer_pins(true) {
             return 0;
         }
+        if self.sample_h7_sensor_outputs() {
+            return 0;
+        }
+        let control = self.h7_network_control.as_ref();
         let rate = self.step_hz();
         let mut quiet = limit.min(1_000_000);
         if let Some(systick) = &self.systick {
@@ -2683,12 +2702,21 @@ impl Bus {
             quiet = timer.quiet_steps(quiet);
         }
         let clocked = |base| f4_clocked(self.f4_rcc.as_ref(), base);
-        let timer_clocked = |base| self.f4_repl_timing || self.f4_monitor_timer_clocks || clocked(base);
-        for timer in self.h7_timers.iter().filter(|timer| timer_clocked(timer.base)) {
+        let f4_timer_clocked = |base| self.f4_repl_timing || self.f4_monitor_timer_clocks || clocked(base);
+        let timer_enabled = |timer: &H7Timer| timer_clocked(control, timer) && f4_timer_clocked(timer.base);
+        let rtc_enabled = |rtc: &H7Rtc| rtc_clocked(control, rtc) && clocked(rtc.base);
+        for timer in self.h7_timers.iter().filter(|timer| timer_enabled(timer)) {
             quiet = timer.quiet_steps(quiet, rate);
         }
-        for rtc in self.h7_rtc.iter().filter(|rtc| clocked(rtc.base)) {
+        for rtc in self.h7_rtc.iter().filter(|rtc| rtc_enabled(rtc)) {
             quiet = rtc.quiet_steps(quiet, rate);
+        }
+        for next in self.h7_i2c.iter().filter_map(I2c::next_sensor_event) {
+            let when = u128::from(next) * 1000;
+            let from_epoch = when.saturating_sub(self.monitor_clock_ns);
+            let at_step = (from_epoch * u128::from(self.monitor_step_hz())).div_ceil(1_000_000_000);
+            let now = u128::from(self.h7_step.wrapping_sub(self.monitor_clock_step));
+            quiet = u128::from(quiet).min(at_step.saturating_sub(now).saturating_sub(1)) as u64;
         }
         let quiet = quiet - quiet % stride;
         if quiet < 2 {
@@ -2704,29 +2732,43 @@ impl Bus {
         for timer in &mut self.stm32_timers {
             timer.advance_quiet(quiet);
         }
-        for timer in self.h7_timers.iter_mut().filter(|timer| timer_clocked(timer.base)) {
+        for timer in self.h7_timers.iter_mut().filter(|timer| timer_enabled(timer)) {
             timer.advance_quiet(quiet, rate);
         }
-        for rtc in self.h7_rtc.iter_mut().filter(|rtc| clocked(rtc.base)) {
+        for rtc in self.h7_rtc.iter_mut().filter(|rtc| rtc_enabled(rtc)) {
             rtc.advance_quiet(quiet);
+        }
+        if !self.h7_i2c.is_empty() {
+            let now = self.h7_sensor_time_us();
+            for i2c in &mut self.h7_i2c {
+                i2c.update_sensor_time(now);
+            }
         }
         quiet
     }
 
-    pub fn tick_h7_peripherals(&mut self) {
-        self.h7_step = self.h7_step.wrapping_add(1);
-        let step = self.h7_step;
+    fn sample_h7_sensor_outputs(&mut self) -> bool {
+        let mut changed = false;
         if !self.h7_i2c.is_empty() {
             let now = self.h7_sensor_time_us();
             for i2c in &mut self.h7_i2c {
                 for (base, pin, level) in i2c.sample_sensor_outputs(now) {
                     if let Some(port) = self.h7_gpio.iter_mut().find(|port| port.base == base) {
+                        let before = port.pins();
                         port.set_external(pin, level);
+                        changed |= before != port.pins();
                     }
                 }
             }
         }
-        self.sample_timer_pins();
+        changed
+    }
+
+    pub fn tick_h7_peripherals(&mut self) {
+        self.h7_step = self.h7_step.wrapping_add(1);
+        let step = self.h7_step;
+        self.sample_h7_sensor_outputs();
+        self.sample_timer_pins(false);
         let rate = self.step_hz();
         let control = self.h7_network_control.as_ref();
         for uart in &mut self.stm32_uarts {

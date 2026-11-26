@@ -166,6 +166,19 @@ impl I2c {
             })
     }
 
+    pub(crate) fn next_sensor_event(&self) -> Option<u64> {
+        self.targets.iter().filter_map(|(_, target)| match target {
+            Target::PowerMonitor(_, sensor) => sensor.next_sample_time(),
+            Target::Magnetometer(_, sensor) => sensor.next_sample_time(),
+            Target::Imu(..) | Target::Touch(..) => Some(0),
+            _ => None,
+        }).min()
+    }
+
+    pub(crate) fn update_sensor_time(&mut self, now: u64) {
+        self.step = now;
+    }
+
     pub fn reset(&mut self) {
         self.stop();
         self.registers = [0; 11];

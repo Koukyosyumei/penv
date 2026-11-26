@@ -95,6 +95,10 @@ impl Iis2mdc {
         })
     }
 
+    pub(crate) fn next_sample_time(&self) -> Option<u64> {
+        self.samples.get(self.next_sample).map(|(time, _)| *time)
+    }
+
     pub fn read_byte(&mut self) -> u8 {
         let register = self.pointer;
         self.pointer = self.pointer.wrapping_add(1);

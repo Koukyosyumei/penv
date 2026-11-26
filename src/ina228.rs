@@ -111,6 +111,10 @@ impl Ina228 {
         }
     }
 
+    pub(crate) fn next_sample_time(&self) -> Option<u64> {
+        self.next_sample
+    }
+
     fn signed(value: f64, bits: u32) -> i64 {
         let half = (1i64 << (bits - 1)) as f64;
         value.clamp(-half, half - 1.0).round_ties_even() as i64

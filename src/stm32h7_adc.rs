@@ -136,6 +136,10 @@ impl Adc {
         }
     }
 
+    pub(crate) fn needs_tick(&self) -> bool {
+        self.service_regular || self.service_injected || self.timer_running || self.dma_pending
+    }
+
     pub fn read(&mut self, address: u32) -> u32 {
         match address - self.base {
             0 => self.registers[0] | self.regulator_ready(),
