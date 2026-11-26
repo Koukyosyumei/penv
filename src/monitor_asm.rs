@@ -52,8 +52,9 @@ pub(crate) fn assemble_source(
     }
     let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
     let thumb = triple.starts_with("thumb");
+    let arm = thumb || triple.starts_with("arm");
     let mut cleaned = String::new();
-    if thumb {
+    if arm {
         let mut rest = source;
         while let Some((before, comment)) = rest.split_once("/*") {
             cleaned.push_str(before);
@@ -64,7 +65,7 @@ pub(crate) fn assemble_source(
         cleaned = cleaned.lines().map(|line| line.split_once("//").map_or(line, |(code, _)| code))
             .collect::<Vec<_>>().join("\n");
     }
-    let source = if thumb { cleaned.as_str() } else { source };
+    let source = if arm { cleaned.as_str() } else { source };
     let comment = if thumb { '@' } else { '#' };
     let instructions: Vec<_> = source
         .lines()
@@ -80,21 +81,22 @@ pub(crate) fn assemble_source(
                     || !label
                         .chars()
                         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
-                    || unsupported_assembly_directive(instruction.trim_start(), thumb)
+                    || unsupported_assembly_directive(instruction.trim_start(), arm)
                     || instruction.contains(':')
             } else {
-                unsupported_assembly_directive(line, thumb)
+                unsupported_assembly_directive(line, arm)
             }
         })
     {
         return Err("monitor assembly requires instructions and optional local labels".into());
     }
-    if requested_triple != "default" && requested_triple != triple {
+    if requested_triple != "default" && requested_triple != triple
+        && triple.strip_suffix("-none-eabi") != Some(requested_triple) {
         return Err(format!(
             "assembler triple {requested_triple} is unavailable for {triple}"
         ));
     }
-    let has_data = thumb && instructions.iter().any(|line| {
+    let has_data = arm && instructions.iter().any(|line| {
         let instruction = line.split_once(':').map_or(*line, |(_, text)| text.trim_start());
         matches!(instruction.split_ascii_whitespace().next(), Some(".word" | ".short" | ".byte" | ".align" | ".balign"))
     });

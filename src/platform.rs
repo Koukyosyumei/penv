@@ -3,6 +3,7 @@ use crate::repl_syntax::{quoted_string, unquoted_delimiters, without_comment};
 
 mod stm32f0;
 mod scoped_nvic;
+mod arm32;
 
 use std::{
     cell::RefCell,
@@ -600,6 +601,9 @@ fn load_platform(
         return scoped_nvic::construct(&entries);
     }
     apply_repl_overrides(&mut entries)?;
+    if arm32::matches(&entries) {
+        return arm32::construct(&entries, require_ram);
+    }
     if entries.iter().any(|entry| entry.model == "CPU.RiscV64") {
         return crate::rv64_platform::load(
             entries,

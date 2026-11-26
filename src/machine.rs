@@ -211,6 +211,7 @@ pub struct Hart {
     unaligned_accesses: bool,
     zicond: bool,
     pub rv64: Option<Box<Rv64>>,
+    pub(crate) arm32: Option<Box<crate::arm32::Cpu>>,
     busy_wait: Option<BusyWait>,
     zacas: bool,
     zabha: bool,
@@ -396,6 +397,7 @@ impl Machine {
                 unaligned_accesses: false,
                 zicond: false,
                 rv64: None,
+                arm32: None,
                 busy_wait: None,
                 zacas: false,
                 zabha: false,
@@ -686,6 +688,14 @@ impl Machine {
         ];
         let hart = self.named_hart(name)?;
         let register = register.to_ascii_lowercase();
+        if hart.arm32.is_some() {
+            let index = match register.as_str() {
+                "sp" => Some(13), "lr" => Some(14), "pc" => Some(15), "cpsr" | "xpsr" => Some(25),
+                name => crate::parse_address(name.strip_prefix('r').unwrap_or(name)).ok(),
+            }.ok_or_else(|| format!("unknown ARMv7 register {register:?}"))?;
+            let value = value.map(u32::try_from).transpose().map_err(|_| "register value exceeds ARMv7 width")?;
+            return hart.monitor_integer_register(index, value).map(|result| result.map(u64::from));
+        }
         if let Some(thumb) = hart.thumb.as_ref()
             && matches!(register.as_str(), "cpsr" | "xpsr")
         {
@@ -919,6 +929,9 @@ impl Machine {
             return Ok((Some(index), "riscv64", cpu.isa().llvm_features()));
         }
         let hart = self.named_hart(name)?;
+        if let Some(cpu) = &hart.arm32 {
+            return Ok((Some(hart.slot), cpu.profile.triple(), "+v7".into()));
+        }
         if let Some(thumb) = &hart.thumb {
             let (triple, features) = if thumb.cortex_m55 {
                 ("thumbv8.1m.main-none-eabi", "+mve.fp")
@@ -3027,6 +3040,25 @@ impl Hart {
         index: u32,
         value: Option<u32>,
     ) -> Result<Option<u32>, String> {
+        if let Some(cpu) = &mut self.arm32 {
+            if index == 25 {
+                if let Some(value) = value {
+                    cpu.set_cpsr(value);
+                    return Ok(None);
+                }
+                return Ok(Some(cpu.cpsr()));
+            }
+            let register = match index {
+                0..=14 => &mut self.registers[index as usize],
+                15 => &mut self.pc,
+                _ => return Err(format!("invalid ARMv7 register index {index}")),
+            };
+            if let Some(value) = value {
+                *register = value;
+                return Ok(None);
+            }
+            return Ok(Some(*register));
+        }
         if self.thumb.is_some() {
             if index >= 16 {
                 return Err(format!("Wrong Cortex-M register index: {index}"));
@@ -3126,6 +3158,9 @@ impl Hart {
     ) -> Result<Step, String> {
         if let Some(cpu) = &mut self.rv64 {
             return cpu.step(bus, self.csr.hart_id, elapsed_steps, output);
+        }
+        if let Some(cpu) = &mut self.arm32 {
+            return cpu.step(&mut self.pc, &mut self.registers, bus, self.slot, output);
         }
         if self.thumb.is_some() && bus.reset_cortex_m_if_requested(false) {
             self.reset_cortex_m(bus)?;

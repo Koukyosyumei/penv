@@ -402,7 +402,7 @@ impl Thumb {
         positive ^ (condition & 1 != 0)
     }
 
-    fn apsr(&self) -> u32 {
+    pub(crate) fn apsr(&self) -> u32 {
         (u32::from(self.negative) << 31)
             | (u32::from(self.zero) << 30)
             | (u32::from(self.carry) << 29)
@@ -410,7 +410,7 @@ impl Thumb {
             | (self.greater_equal << 16)
     }
 
-    fn set_apsr(&mut self, value: u32) {
+    pub(crate) fn set_apsr(&mut self, value: u32) {
         self.negative = value >> 31 != 0;
         self.zero = value & (1 << 30) != 0;
         self.carry = value & (1 << 29) != 0;
