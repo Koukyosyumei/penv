@@ -4327,6 +4327,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unregistered_cortex_m_nvic_does_not_reserve_mmio() {
+        let path = std::env::temp_dir().join(format!("penv-unregistered-nvic-{}.repl", std::process::id()));
+        fs::write(&path, r#"
+nvic: IRQControllers.NVIC
+cpu: CPU.CortexM @ sysbus { cpuType: "cortex-m4"; nvic: nvic }
+mem: Memory.MappedMemory @ sysbus 0xe000e100 { size: 0x80 }
+"#).unwrap();
+        let machine = load(&path, None, false);
+        fs::remove_file(path).unwrap();
+        let mut bus = machine.unwrap().bus;
+        assert!(bus.nvic.is_some());
+        bus.write(0xe000e100, 4, 0x1234, &mut std::io::sink()).unwrap();
+        assert_eq!(bus.read::<4>(0xe000e100).unwrap(), 0x1234);
+    }
+
+    #[test]
     fn andes_gpio_overlay_routes_output_to_rising_edge_interrupt() {
         let directory = std::env::temp_dir().join(format!("penv-andes-gpio-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
