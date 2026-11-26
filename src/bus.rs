@@ -4954,6 +4954,16 @@ impl Bus {
         self.refresh_gpio_wiring();
     }
 
+    pub(crate) fn set_sht45_property(&mut self, target: &str, property: &str, value: &str) -> Result<(), String> {
+        let path = target.strip_prefix("sysbus.").unwrap_or(target);
+        let (bus_name, name) = path.split_once('.').ok_or("expected SHT45 controller and device name")?;
+        let sensor = self.stm32_i2cs.iter_mut()
+            .find(|bus| bus.name.as_deref() == Some(bus_name))
+            .and_then(|bus| bus.sht45(name))
+            .ok_or_else(|| format!("unknown SHT45 {target:?}"))?;
+        sensor.set_property(property, value)
+    }
+
     pub(crate) fn wire_fram_write_protect(
         &mut self,
         port: u32,

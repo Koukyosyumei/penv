@@ -16,6 +16,7 @@ const AUTO_STOP: u32 = 1 << 25;
 
 pub struct Stm32I2c {
     pub base: u32,
+    pub(crate) name: Option<String>,
     pub irq: Option<crate::stm32_uart::Stm32Irq>,
     pub dma_rx: u8,
     pub dma_tx: u8,
@@ -84,6 +85,7 @@ impl Eeprom {
 enum Target {
     Eeprom(Eeprom),
     Fram(Rc<RefCell<Fram>>, bool),
+    Sht45(String, Sht45),
 }
 
 pub(crate) struct Fram(Eeprom);
@@ -101,6 +103,57 @@ impl Fram {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct Sht45 {
+    temperature: f64,
+    humidity: f64,
+    serial: u32,
+    response: std::collections::VecDeque<u8>,
+}
+
+impl Sht45 {
+    fn write(&mut self, command: u8) {
+        let words = match command {
+            0x15 | 0x1e | 0x24 | 0x2f | 0x32 | 0x39 | 0xe0 | 0xf6 | 0xfd => [
+                ((self.temperature + 45.0) * 65535.0 / 175.0)
+                    .round_ties_even().clamp(0.0, 65535.0) as u16,
+                ((self.humidity + 6.0) * 65535.0 / 125.0)
+                    .round_ties_even().clamp(0.0, 65535.0) as u16,
+            ],
+            0x89 => [(self.serial >> 16) as u16, self.serial as u16],
+            0x94 => {
+                self.response.clear();
+                return;
+            }
+            _ => return,
+        };
+        self.response.clear();
+        for word in words {
+            let bytes = word.to_be_bytes();
+            let crc = bytes.into_iter().fold(0xffu8, |crc, byte| {
+                (0..8).fold(crc ^ byte, |crc, _| {
+                    (crc << 1) ^ if crc & 0x80 != 0 { 0x31 } else { 0 }
+                })
+            });
+            self.response.extend([bytes[0], bytes[1], crc]);
+        }
+    }
+
+    pub(crate) fn set_property(&mut self, property: &str, value: &str) -> Result<(), String> {
+        let measurement = || {
+            value.parse::<f64>().ok().filter(|value| value.is_finite())
+                .ok_or_else(|| format!("invalid SHT45 {property} value {value:?}"))
+        };
+        match property {
+            "Temperature" => self.temperature = measurement()?,
+            "Humidity" => self.humidity = measurement()?,
+            "SerialNumber" => self.serial = crate::parse_address(value)?,
+            _ => return Err(format!("unknown SHT45 property {property:?}")),
+        }
+        Ok(())
+    }
+}
+
 impl Target {
     fn start_write(&mut self) {
         match self {
@@ -110,6 +163,7 @@ impl Target {
                 memory.0.start_write();
                 memory.0.address_latch = usize::from(*high);
             }
+            Self::Sht45(..) => {}
         }
     }
 
@@ -117,6 +171,7 @@ impl Target {
         match self {
             Self::Eeprom(memory) => memory.read(),
             Self::Fram(memory, _) => memory.borrow_mut().0.read(),
+            Self::Sht45(_, sensor) => sensor.response.pop_front().unwrap_or(0),
         }
     }
 
@@ -124,6 +179,7 @@ impl Target {
         match self {
             Self::Eeprom(memory) => memory.write(value),
             Self::Fram(memory, _) => memory.borrow_mut().0.write(value),
+            Self::Sht45(_, sensor) => sensor.write(value),
         }
     }
 }
@@ -134,6 +190,7 @@ impl Stm32I2c {
     pub fn new(base: u32) -> Self {
         Self {
             base,
+            name: None,
             irq: None,
             dma_rx: 0,
             dma_tx: 0,
@@ -152,6 +209,17 @@ impl Stm32I2c {
 
     pub(crate) fn attach_fram(&mut self, address: u32, fram: Rc<RefCell<Fram>>, high: bool) -> Result<(), String> {
         self.attach_target(address, Target::Fram(fram, high))
+    }
+
+    pub(crate) fn attach_sht45(&mut self, address: u32, name: String) -> Result<(), String> {
+        self.attach_target(address, Target::Sht45(name, Sht45::default()))
+    }
+
+    pub(crate) fn sht45(&mut self, name: &str) -> Option<&mut Sht45> {
+        self.targets.iter_mut().find_map(|(_, target)| match target {
+            Target::Sht45(sensor_name, sensor) if sensor_name == name => Some(sensor),
+            _ => None,
+        })
     }
 
     fn attach_target(&mut self, address: u32, target: Target) -> Result<(), String> {
