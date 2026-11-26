@@ -3487,7 +3487,8 @@ fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus, root: &Path, assets: Option<&
             .split_once(char::is_whitespace)
             .ok_or_else(|| error("expected a sysbus init command"))?;
         if command == "ApplySVD" {
-            let path = crate::monitor::Asset::new(range.trim(), &entry.source).input_path(root, assets)?;
+            let file = range.trim().strip_prefix('@').unwrap_or(range.trim());
+            let path = crate::monitor::Asset::new(file, &entry.source).input_path(root, assets)?;
             bus.svd.push(crate::svd::Svd::open(&path).map_err(|e| error(&e))?);
             continue;
         }
