@@ -940,7 +940,7 @@ fn run_commands<'a>(
                     AssemblyAddress::ProgramCounter(cpu) => machine.monitor_named_pc(cpu)?,
                 };
                 crate::monitor_asm::assemble_source(machine, cpu, address, triple, source)
-                    .and_then(|size| mode.print(size as u64, 4, &mut output.output))
+                    .and_then(|size| mode.print(size as u64, 4, &mut output.reply()))
                     .map(|()| None)
             }
             Action::MonitorLog(command) => {

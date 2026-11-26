@@ -389,7 +389,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     if reply == "OK":
                         self.commands.append(command)
                         return value
-                # Only route read-only queries here. Rust parses and evaluates the original command.
+                # Assembly must execute immediately because its byte count is a command result.
+                if re.match(r"[\w.]+\s+AssembleBlock(?:\s|$)", command):
+                    return self.operation(command, assertion=True)
+                # Rust parses and evaluates these read-only startup queries.
                 if (re.match(r"(?:echo|lastLog|printenv)(?:\s|$)", command)
                         or re.fullmatch(r"emulation\s+IsStarted", command)):
                     reply, value = self.inspect_startup(command)
