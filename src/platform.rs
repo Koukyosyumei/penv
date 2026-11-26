@@ -893,6 +893,7 @@ fn load_platform(
             "IRQControllers.PlatformLevelInterruptController" | "IRQControllers.AndesNCEPLIC100" => plic.push(entry),
             "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
             "Miscellaneous.LED" => gpio_leds.push(entry),
+            "Mocks.BusFaultingPeripheral" if cortex_m => map_bus_faulting_model(entry, &mut machine.bus)?,
             "PWMTester" => gpio_pwm_testers.push(entry),
             "Miscellaneous.Button" => gpio_buttons.push(entry),
             "CRC.STM32_CRC" => {
@@ -1370,9 +1371,10 @@ fn load_platform(
                 _ => unreachable!(),
             }
         }
-        let cortex_m4f = cpu_type == Some(r#""cortex-m4f""#);
+        let cortex_m55 = cpu_type == Some(r#""cortex-m55""#);
+        let cortex_m4f = cpu_type == Some(r#""cortex-m4f""#) || cortex_m55;
         if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) && !cortex_m4f {
-            return Err(entry.error("expected Cortex-M0, Cortex-M0+ or Cortex-M4F cpuType"));
+            return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4F or Cortex-M55 cpuType"));
         }
         if !cortex_m4f {
             machine.bus.map_stm32f072_flash().map_err(|error| entry.error(&error))?;
@@ -2321,6 +2323,9 @@ fn load_platform(
         }
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors, cortex_m4f);
+        if cortex_m55 {
+            machine.primary.mark_cortex_m55()?;
+        }
         machine.set_cortex_m_cpu_wait(&entry.name, cpu_wait)?;
         return Ok(machine);
     }
@@ -3978,6 +3983,23 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
         }
     }
     Ok(port)
+}
+
+pub(crate) fn map_bus_faulting_model(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
+    let mut offset = None;
+    let mut writes = true;
+    for (key, value) in keys(entry, &["FaultOffset", "FaultOnWrites"])? {
+        if key == "FaultOffset" {
+            offset = Some(number(value).map_err(|error| entry.error(&error))? as usize);
+        } else {
+            writes = value.parse().map_err(|_| entry.error("invalid FaultOnWrites boolean"))?;
+        }
+    }
+    let address = entry.address()?;
+    bus.map_bus_faulting_peripheral(address, offset).map_err(|error| entry.error(&error))?;
+    bus.name_faulting_peripheral(address, entry.name.clone());
+    bus.set_mock_fault_on_writes(address, writes);
+    Ok(())
 }
 
 fn group_stm32_i2c_sensors<'a>(

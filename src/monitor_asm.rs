@@ -50,9 +50,23 @@ pub(crate) fn assemble_source(
     if source.len() > 65_536 {
         return Err("oversized assembly source".into());
     }
+    let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
+    let thumb = triple.starts_with("thumb");
+    let mut cleaned = String::new();
+    if thumb {
+        let mut rest = source;
+        while let Some((before, comment)) = rest.split_once("/*") {
+            cleaned.push_str(before);
+            cleaned.push(' ');
+            rest = comment.split_once("*/").ok_or("unterminated ARM assembly comment")?.1;
+        }
+        cleaned.push_str(rest);
+    }
+    let source = if thumb { cleaned.as_str() } else { source };
+    let comment = if thumb { '@' } else { '#' };
     let instructions: Vec<_> = source
         .lines()
-        .map(|line| line.split_once('#').map_or(line, |(code, _)| code))
+        .map(|line| line.split_once(comment).map_or(line, |(code, _)| code))
         .flat_map(|line| line.split(';'))
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -64,21 +78,24 @@ pub(crate) fn assemble_source(
                     || !label
                         .chars()
                         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
-                    || unsupported_assembly_directive(instruction.trim_start())
+                    || unsupported_assembly_directive(instruction.trim_start(), thumb)
                     || instruction.contains(':')
             } else {
-                unsupported_assembly_directive(line)
+                unsupported_assembly_directive(line, thumb)
             }
         })
     {
         return Err("monitor assembly requires instructions and optional local labels".into());
     }
-    let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
     if requested_triple != "default" && requested_triple != triple {
         return Err(format!(
             "assembler triple {requested_triple} is unavailable for {triple}"
         ));
     }
+    let has_data = thumb && instructions.iter().any(|line| {
+        let instruction = line.split_once(':').map_or(*line, |(_, text)| text.trim_start());
+        matches!(instruction.split_ascii_whitespace().next(), Some(".word" | ".short" | ".byte"))
+    });
     let instructions = instructions
         .into_iter()
         .map(|line| {
@@ -101,7 +118,7 @@ pub(crate) fn assemble_source(
     }
     let output_text = String::from_utf8_lossy(&output.stdout);
     let image = match inline_encoding(&output_text)? {
-        Some(image) if !instructions.contains(".4byte ") && !instructions.contains(".insn ") && !output_text.contains("fixup ") => image,
+        Some(image) if !has_data && !instructions.contains(".4byte ") && !instructions.contains(".insn ") && !output_text.contains("fixup ") => image,
         _ => link_instructions(triple, &features, address, &instructions)?,
     };
     if image.is_empty() {
@@ -116,8 +133,10 @@ pub(crate) fn assemble_source(
     Ok(image.len())
 }
 
-fn unsupported_assembly_directive(instruction: &str) -> bool {
-    instruction.starts_with('.') && !instruction.starts_with(".insn r ")
+fn unsupported_assembly_directive(instruction: &str, thumb: bool) -> bool {
+    let known_thumb_data = thumb && matches!(instruction.split_ascii_whitespace().next(),
+        Some(".word" | ".short" | ".byte"));
+    instruction.starts_with('.') && !instruction.starts_with(".insn r ") && !known_thumb_data
 }
 
 fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {

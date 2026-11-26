@@ -585,6 +585,7 @@ enum Action {
     I2cAccelerationRead(String, usize),
     I2cSampleRate(String, u32),
     UsartWriteChar(String, u8),
+    BusFaultingProperty(String, String, String),
     AllowPrivates(bool),
     MachineReset(Vec<ResetHook>),
     ReadScalar(u64, ScalarWidth),
@@ -1311,6 +1312,8 @@ fn run_commands<'a>(
                 writeln!(output.reply(), "{value}").map_err(|error| error.to_string())?;
                 Ok(None)
             }
+            Action::BusFaultingProperty(target, property, value) =>
+                machine.bus.set_bus_faulting_property(target, property, value).map(|()| None),
             Action::UsartWriteChar(target, value) =>
                 machine.bus.write_usart_char(target, *value).map(|()| None),
             Action::I2cSampleRate(target, rate) => {
@@ -3328,6 +3331,8 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                         state.machine = true;
                         state.boot.platform = Some(included);
                     }
+                    Some("cs") if fs::canonicalize(root.join("tests/unit-tests/BusFaultingPeripheral.cs"))
+                        .is_ok_and(|native| fs::canonicalize(&included).is_ok_and(|source| source == native)) => {}
                     Some("repl" | "cs" | "py") => {
                         return Err(error("unsupported command: include needs an available loader"));
                     }
@@ -4525,6 +4530,9 @@ fn execute(
                 ending,
             ))
         }
+        [target, property @ ("FaultOffset" | "FaultOnWrites"), value] => {
+            Some(Action::BusFaultingProperty(resolve(target)?.into(), (*property).into(), resolve(value)?.into()))
+        }
         [target, "WriteChar", value] => {
             let value = u8::try_from(crate::parse_address(resolve(value)?)?)
                 .map_err(|_| "expected a byte for WriteChar")?;
@@ -5018,7 +5026,7 @@ fn execute(
                         | Action::UartIdle(..)
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)
-                        | Action::UsartWriteChar(..) | Action::WaitForMemory(..)
+                        | Action::UsartWriteChar(..) | Action::WaitForMemory(..) | Action::BusFaultingProperty(..)
                         | Action::PeripheralLog(..)
                         | Action::I2cAccelerationFeed(..) | Action::I2cAccelerationRead(..) | Action::I2cSampleRate(..) | Action::I2cAcceleration(..)
                         | Action::RunFor(_)

@@ -865,7 +865,17 @@ impl Machine {
             return Ok((Some(index), "riscv64", cpu.isa().llvm_features()));
         }
         let hart = self.named_hart(name)?;
-        if hart.thumb.is_some() || hart.csr.embedded_base {
+        if let Some(thumb) = &hart.thumb {
+            let (triple, features) = if thumb.cortex_m55 {
+                ("thumbv8.1m.main-none-eabi", "+fp-armv8d16sp")
+            } else if thumb.thumb2 {
+                ("thumbv7em-none-eabi", "+vfp4d16sp")
+            } else {
+                ("thumbv6m-none-eabi", "")
+            };
+            return Ok((None, triple, features.to_owned()));
+        }
+        if hart.csr.embedded_base {
             return Err("unsupported monitor assembler target".into());
         }
         let available = [
@@ -2351,6 +2361,11 @@ impl Hart {
         let mut thumb = Thumb::new(vectors);
         thumb.thumb2 = thumb2;
         self.thumb = Some(thumb);
+    }
+
+    pub(crate) fn mark_cortex_m55(&mut self) -> Result<(), String> {
+        self.thumb.as_mut().ok_or("Cortex-M55 requires a Cortex-M CPU")?.cortex_m55 = true;
+        Ok(())
     }
 
     pub fn set_embedded_base(&mut self, enabled: bool) {

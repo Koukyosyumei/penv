@@ -45,6 +45,7 @@ pub(crate) enum DebugStep {
 pub struct Thumb {
     vectors: Option<u32>,
     pub(crate) thumb2: bool,
+    pub(crate) cortex_m55: bool,
     basepri: u8,
     faultmask: bool,
     itstate: u8,
@@ -121,6 +122,7 @@ impl Thumb {
         *self = Self {
             vectors: self.vectors,
             thumb2: self.thumb2,
+            cortex_m55: self.cortex_m55,
             clock_gated: self.clock_gated,
             ..Self::default()
         };

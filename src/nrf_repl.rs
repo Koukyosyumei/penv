@@ -337,6 +337,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .bus
                     .map_bus_faulting_peripheral(address, fault_offset)
                     .map_err(|e| entry.error(&e))?;
+                machine.bus.name_faulting_peripheral(address, entry.name.clone());
                 machine
                     .bus
                     .set_mock_fault_on_writes(address, fault_on_writes);

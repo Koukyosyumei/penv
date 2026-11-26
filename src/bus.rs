@@ -308,6 +308,7 @@ const FAULTING_PERIPHERAL_SIZE: usize = 0x1000;
 
 struct FaultingPeripheral {
     base: u32,
+    name: Option<String>,
     fault_offset: Option<usize>,
     fault_on_writes: bool,
     bytes: Box<[u8; FAULTING_PERIPHERAL_SIZE]>,
@@ -893,10 +894,38 @@ impl Bus {
         }
         self.faulting_peripherals.push(FaultingPeripheral {
             base,
+            name: None,
             fault_offset,
             fault_on_writes: true,
             bytes: Box::new([0; FAULTING_PERIPHERAL_SIZE]),
         });
+        Ok(())
+    }
+
+    pub(crate) fn name_faulting_peripheral(&mut self, base: u32, name: String) {
+        if let Some(device) = self.faulting_peripherals.iter_mut().find(|device| device.base == base) {
+            device.name = Some(name);
+        }
+    }
+
+    pub(crate) fn set_bus_faulting_property(&mut self, target: &str, property: &str, value: &str) -> Result<(), String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        let device = self.faulting_peripherals.iter_mut()
+            .find(|device| device.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown bus-faulting peripheral {target:?}"))?;
+        match property {
+            "FaultOffset" => {
+                let offset = (value != "null").then(|| crate::parse_address(value)).transpose()?;
+                if offset.is_some_and(|offset| offset as usize >= FAULTING_PERIPHERAL_SIZE) {
+                    return Err("FaultOffset is outside the faulting peripheral".into());
+                }
+                device.fault_offset = offset.map(|offset| offset as usize);
+            }
+            "FaultOnWrites" => {
+                device.fault_on_writes = value.parse().map_err(|_| "expected true or false for FaultOnWrites")?;
+            }
+            _ => return Err(format!("unknown bus-faulting peripheral property {property:?}")),
+        }
         Ok(())
     }
 
