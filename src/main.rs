@@ -1747,6 +1747,7 @@ fn run() -> Result<ExitCode, String> {
                 Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
             }
         };
+        machine.set_egis_reset_entry(monitor_session.egis_reset_entry());
         if monitor_stdio && !has_firmware && !machine.is_cortex_m() {
             machine.initialize_monitor_reset_pcs();
         }

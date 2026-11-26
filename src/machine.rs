@@ -130,6 +130,7 @@ pub struct Machine {
     pub(crate) empty_monitor: bool,
     monitor_active: bool,
     egis_reset_cpu: Option<Box<Hart>>,
+    egis_reset_entry: Option<u32>,
     pub(crate) monitor_single_step_blocking: bool,
     pub bus: Bus,
     pub primary: Hart,
@@ -426,6 +427,7 @@ impl Machine {
             empty_monitor: false,
             monitor_active: false,
             egis_reset_cpu: None,
+            egis_reset_entry: None,
             monitor_single_step_blocking: true,
             boot_memory_cleared: false,
             monitor_firmware: None,
@@ -560,6 +562,14 @@ impl Machine {
 
     pub(crate) fn configure_egis_reset(&mut self) {
         self.egis_reset_cpu = Some(Box::new(self.primary.clone()));
+    }
+
+    pub(crate) fn set_egis_reset_entry(&mut self, entry: Option<(&str, u32)>) {
+        if self.egis_reset_cpu.is_some() {
+            self.egis_reset_entry = entry
+                .filter(|(name, _)| self.primary.name.as_deref() == Some(*name))
+                .map(|(_, address)| address);
+        }
     }
 
     pub(crate) fn initialize_monitor_reset_pcs(&mut self) {
@@ -1854,6 +1864,10 @@ impl Machine {
         let paused = self.primary.monitor_paused;
         self.primary.configure_reset_vector(vector);
         self.primary.monitor_reset(initial)?;
+        if let Some(address) = self.egis_reset_entry {
+            self.primary.pc = address;
+            self.primary.pc_written = true;
+        }
         self.primary.monitor_paused = paused;
         self.halted &= !1;
         Ok(false)

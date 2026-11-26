@@ -284,6 +284,19 @@ fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<Stri
 }
 
 impl Session {
+    pub(crate) fn egis_reset_entry(&self) -> Option<(&str, u32)> {
+        let body = self.macros.get("reset")?;
+        let mut commands = body.commands.iter().map(|(_, text)| text.trim())
+            .filter(|text| !text.is_empty() && !text.starts_with('#'));
+        let words = command_words(commands.next()?).ok()?;
+        let [name, "PC", address] = words.as_slice() else { return None };
+        if commands.next().is_some() {
+            return None;
+        }
+        let address = crate::parse_address(resolve(&self.variables, address).ok()?).ok()?;
+        Some((name.strip_prefix("sysbus.").unwrap_or(name), address))
+    }
+
     fn selected_machine(&self) -> Option<&str> {
         self.machine.as_deref().filter(|_| !self.machine_cleared)
     }
