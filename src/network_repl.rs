@@ -145,7 +145,7 @@ impl Entry {
         number(address.trim()).map_err(|e| self.error(&e))
     }
 
-    fn address(&self) -> Result<u32, String> {
+    pub(crate) fn address(&self) -> Result<u32, String> {
         self.sysbus()?
             .ok_or_else(|| self.error("expected a sysbus address"))
     }
