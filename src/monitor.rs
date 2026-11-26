@@ -305,7 +305,7 @@ fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<Snap
         let repl = crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?;
         return Ok(((!metadata.selected.is_empty()).then_some(metadata.selected), Some(SnapshotPlatform::Inline(repl))));
     }
-    if header.starts_with(crate::snapshot::RV64_MAGIC) || crate::snapshot::arm32_version(header).is_some()
+    if crate::snapshot::rv64_version(header).is_some() || crate::snapshot::arm32_version(header).is_some()
     {
         let metadata = metadata.ok_or("native CPU snapshot requires monitor metadata")?;
         if metadata.cpu_mips.is_none_or(|mips| mips == 0) {

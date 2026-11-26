@@ -1546,7 +1546,7 @@ impl Machine {
         if Self::cpu_less_snapshot_format(&header).is_ok()
             || Self::cortex_snapshot_has_registers(&header).is_ok()
             || crate::snapshot::arm32_version(&header).is_some()
-            || &header == crate::snapshot::RV64_MAGIC
+            || crate::snapshot::rv64_version(&header).is_some()
             || &header == crate::snapshot::CORTEX_MAGIC
         {
             Ok(())
@@ -1634,18 +1634,23 @@ impl Machine {
                 hart.rv64.as_ref().unwrap().save_snapshot(output)?;
             }
             self.bus.rv64_devices.save_snapshot(output)?;
+            write_words(output, &[u64::from(self.bus.clint.is_some())])?;
+            if let Some(clint) = &self.bus.clint {
+                clint.save_snapshot(output)?;
+            }
             self.bus.save_rv64_memory_snapshot(output)
         };
         write().map_err(|error| error.to_string())
     }
 
     fn read_rv64_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
-        use crate::snapshot::{RV64_MAGIC, invalid, read_bool, read_text, read_words};
+        use crate::snapshot::{invalid, read_bool, read_text, read_words, rv64_version};
         let platform = self.rv64_snapshot_platform()?.to_owned();
         let mut read = || -> std::io::Result<()> {
             let mut header = [0; 9];
             input.read_exact(&mut header)?;
-            if &header != RV64_MAGIC || std::path::Path::new(&read_text(input)?) != platform {
+            let version = rv64_version(&header).ok_or_else(|| invalid("invalid RV64 snapshot version"))?;
+            if std::path::Path::new(&read_text(input)?) != platform {
                 return Err(invalid("RV64 snapshot was created for a different platform"));
             }
             let firmware = read_text(input)?;
@@ -1671,7 +1676,16 @@ impl Machine {
                 cpus.push((cpu, read_bool(halt)?, read_bool(pause)?, read_bool(single)?));
             }
             let devices = self.bus.rv64_devices.read_snapshot(input)?;
+            let has_clint = version >= 2 && read_bool(read_words::<1>(input)?[0])?;
+            let mut clint = self.bus.clint.clone();
+            if has_clint != clint.is_some() {
+                return Err(invalid("CLINT snapshot configuration differs from the platform"));
+            }
+            if let Some(clint) = &mut clint {
+                clint.load_snapshot(input)?;
+            }
             self.bus.load_rv64_memory_snapshot(input)?;
+            self.bus.clint = clint;
             for (hart, (cpu, halt, pause, single)) in std::iter::once(&mut self.primary)
                 .chain(&mut self.secondary).zip(cpus)
             {
