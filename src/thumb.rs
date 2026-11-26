@@ -1094,6 +1094,7 @@ impl Thumb {
                     nvic.force_hard_fault()
                 };
                 if exception == HARDFAULT && bus.thumb_negative_priority {
+                    nvic.enter_lockup();
                     *pc = self.lockup();
                 } else {
                     *pc = self.exception_entry(exception, fault_pc, r, bus)?;
