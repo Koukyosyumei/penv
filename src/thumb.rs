@@ -76,6 +76,7 @@ pub struct Thumb {
     fp: [u32; 32],
     fpscr: u32,
     vpr: u32,
+    secure_fp_lazy_transfer: bool,
     pub(crate) arm_interworking: bool,
     pub(crate) arm_unaligned_context: Option<(usize, bool)>,
     pub(crate) arm_branch_taken: bool,

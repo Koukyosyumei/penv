@@ -23,7 +23,12 @@ impl Thumb {
         }
         let words = if full_frame { 34 } else { 18 };
         match bus.write_cortex_m_exception_stack(address, &state[..words]) {
-            Ok(()) => {}
+            Ok(()) => {
+                if std::mem::take(&mut self.secure_fp_lazy_transfer) && full_frame {
+                    self.fp.fill(0);
+                    self.vpr = 0;
+                }
+            }
             Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
                 let nvic = bus.nvic.as_mut().unwrap();
                 nvic.record_lazy_fault();
@@ -61,10 +66,12 @@ impl Thumb {
             if let Some(nvic) = &mut bus.nvic {
                 if load && nvic.pending_lazy_fp().is_some() {
                     nvic.clear_lazy_fp();
+                    self.secure_fp_lazy_transfer = false;
                     return Ok(());
                 }
                 if !load && nvic.lazy_fp_enabled() {
                     nvic.reserve_lazy_fp(r[rn] & !7, true, full_frame);
+                    self.secure_fp_lazy_transfer = true;
                     return Ok(());
                 }
             }
@@ -95,6 +102,10 @@ impl Thumb {
             bus.thumb_write(address, 4, self.fpscr, output)?;
             if self.armv81m {
                 bus.thumb_write(address.wrapping_add(4), 4, self.vpr, output)?;
+                if full_frame {
+                    self.fp.fill(0);
+                    self.vpr = 0;
+                }
             }
         }
         Ok(())
