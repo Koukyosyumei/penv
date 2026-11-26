@@ -88,6 +88,7 @@ pub struct Session {
     led_testers: Vec<(Option<String>, String, u64)>,
     uart_testers: Vec<(Option<String>, usize)>,
     rv64_switches: HashMap<String, crate::rv64_ethernet::LocalSwitch>,
+    rv64_switch_links: HashMap<String, String>,
     led_timeout: u64,
 }
 
@@ -127,7 +128,12 @@ const SESSION_SNAPSHOT_V5: &[u8; 9] = b"PENVSESS\x05";
 const SESSION_SNAPSHOT_V6: &[u8; 9] = b"PENVSESS\x06";
 const SESSION_SNAPSHOT_V7: &[u8; 9] = b"PENVSESS\x07";
 const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x08";
-const MULTI_SNAPSHOT: &[u8; 9] = b"PENVMULT\x01";
+const MULTI_SNAPSHOT: &[u8; 9] = b"PENVMULT\x02";
+
+fn multi_snapshot_version(header: &[u8]) -> Option<u8> {
+    let &[version @ 1..=2, ..] = header.strip_prefix(b"PENVMULT")? else { return None };
+    Some(version)
+}
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
 fn write_snapshot(
@@ -295,7 +301,7 @@ enum SnapshotPlatform {
 }
 
 fn skip_multi_snapshot_frame_header(input: &mut impl BufRead) -> Result<(), String> {
-    if input.fill_buf().map_err(|error| error.to_string())?.starts_with(MULTI_SNAPSHOT) {
+    if multi_snapshot_version(input.fill_buf().map_err(|error| error.to_string())?).is_some() {
         input.consume(MULTI_SNAPSHOT.len());
         let [length] = crate::snapshot::read_words(input).map_err(|error| error.to_string())?;
         if length < crate::snapshot::RV64_MAGIC.len() as u64 {
@@ -636,8 +642,10 @@ impl Session {
             file.write_all(&data).map_err(|e| e.to_string())?;
             if self.named_machines.order.len() > 1 {
                 self.save_named_machines(machine, file)
-            } else {
+            } else if self.rv64_switches.is_empty() {
                 machine.write_boot_snapshot(file)
+            } else {
+                Err("unsupported snapshot of a single machine with an attached local switch".into())
             }
         })
     }
@@ -679,11 +687,30 @@ impl Session {
             write_text(file, owner.as_deref().unwrap_or(selected)).map_err(|error| error.to_string())?;
             write_words(file, &[*local as u64]).map_err(|error| error.to_string())?;
         }
+        let mut switches: Vec<_> = self.rv64_switches.keys().collect();
+        switches.sort_unstable();
+        write_words(file, &[switches.len() as u64]).map_err(|error| error.to_string())?;
+        for name in switches {
+            write_text(file, name).map_err(|error| error.to_string())?;
+        }
+        write_words(file, &[self.rv64_switch_links.len() as u64]).map_err(|error| error.to_string())?;
+        for name in &self.named_machines.order {
+            if let Some(switch) = self.rv64_switch_links.get(name) {
+                write_text(file, name).map_err(|error| error.to_string())?;
+                write_text(file, switch).map_err(|error| error.to_string())?;
+                let machine = if name == selected {
+                    active
+                } else {
+                    self.named_machines.detached.get(name).ok_or("missing Ethernet machine")?
+                };
+                machine.bus.save_local_ethernet_queue(file).map_err(|error| error.to_string())?;
+            }
+        }
         Ok(())
     }
 
     fn load_named_machines(
-        &mut self, active: &mut Machine, input: &mut impl Read, selected: &str, root: &Path,
+        &mut self, active: &mut Machine, input: &mut impl Read, selected: &str, root: &Path, version: u8,
     ) -> Result<(), String> {
         use crate::snapshot::{read_text, read_words};
         fn read_machine(machine: &mut Machine, input: &mut impl Read) -> Result<(), String> {
@@ -743,11 +770,45 @@ impl Session {
             let [local] = read_words(input).map_err(|error| error.to_string())?;
             testers.push((Some(owner), usize::try_from(local).map_err(|error| error.to_string())?));
         }
+        let mut switches = HashMap::new();
+        let mut links = HashMap::new();
+        if version >= 2 {
+            let [count] = read_words(input).map_err(|error| error.to_string())?;
+            if count > 64 {
+                return Err("invalid snapshot switch count".into());
+            }
+            for _ in 0..count {
+                let name = read_text(input).map_err(|error| error.to_string())?;
+                if switches.insert(name, crate::rv64_ethernet::LocalSwitch::default()).is_some() {
+                    return Err("duplicate snapshot switch".into());
+                }
+            }
+            let [count] = read_words(input).map_err(|error| error.to_string())?;
+            if count > machines.order.len() as u64 {
+                return Err("invalid snapshot switch link count".into());
+            }
+            for _ in 0..count {
+                let name = read_text(input).map_err(|error| error.to_string())?;
+                let switch = read_text(input).map_err(|error| error.to_string())?;
+                if links.insert(name.clone(), switch.clone()).is_some() {
+                    return Err("duplicate snapshot Ethernet link".into());
+                }
+                let target = if name == selected {
+                    &mut *active
+                } else {
+                    machines.detached.get_mut(&name).ok_or("snapshot Ethernet machine is missing")?
+                };
+                target.bus.connect_local_rv64_ethernet(switches.get(&switch).ok_or("snapshot switch is missing")?)?;
+                target.bus.load_local_ethernet_queue(input).map_err(|error| error.to_string())?;
+            }
+        }
         if input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {
             return Err("trailing multi-machine snapshot data".into());
         }
         self.named_machines = machines;
         self.uart_testers = testers;
+        self.rv64_switches = switches;
+        self.rv64_switch_links = links;
         Ok(())
     }
 
@@ -775,12 +836,12 @@ impl Session {
                     variables.insert(key.into(), value.clone());
                 }
             }
-            if input.fill_buf().map_err(|error| error.to_string())?.starts_with(MULTI_SNAPSHOT) {
+            if let Some(version) = multi_snapshot_version(input.fill_buf().map_err(|error| error.to_string())?) {
                 input.consume(MULTI_SNAPSHOT.len());
                 let root = machine.monitor_platform_root.clone().unwrap_or_else(|| {
                     path.parent().unwrap_or(Path::new(".")).to_owned()
                 });
-                self.load_named_machines(machine, &mut input, &selected, &root)?;
+                self.load_named_machines(machine, &mut input, &selected, &root, version)?;
             } else {
                 machine.read_boot_snapshot(&mut input)?;
             }
@@ -1961,7 +2022,9 @@ fn run_commands<'a>(
                 if !matches!(device.as_str(), "ethernet" | "sysbus.ethernet") {
                     return Err(format!("unsupported local Ethernet device {device:?}"));
                 }
-                let switch = session.rv64_switches.get(switch)
+                let name = owner.clone().or_else(|| session.machine.clone())
+                    .ok_or("Ethernet connector needs a named machine")?;
+                let transport = session.rv64_switches.get(switch)
                     .ok_or_else(|| format!("Ethernet switch {switch:?} not found"))?;
                 let target = match owner.as_deref() {
                     Some(name) if Some(name) != session.machine.as_deref() =>
@@ -1969,7 +2032,9 @@ fn run_commands<'a>(
                             .ok_or_else(|| format!("Ethernet machine {name:?} not found"))?,
                     _ => machine,
                 };
-                target.bus.connect_local_rv64_ethernet(switch).map(|()| None)
+                target.bus.connect_local_rv64_ethernet(transport)?;
+                session.rv64_switch_links.insert(name, switch.clone());
+                Ok(None)
             }
             Action::ExternalPmpOverlay(cpu, name, entries) =>
                 session.attach_external_pmp(machine, cpu, name, *entries).map(|()| None),

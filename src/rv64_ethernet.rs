@@ -178,7 +178,7 @@ impl Ethernet {
     }
 
     pub(crate) fn supports_snapshot(&self) -> bool {
-        !self.has_link()
+        self.link.is_none()
     }
 
     pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
@@ -693,6 +693,46 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn save_local_ethernet_queue(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, write_words};
+        let [mac] = self.rv64_devices.ethernet.as_slice() else {
+            return Err(invalid("local switch requires one Ethernet MAC"));
+        };
+        let port = mac.local.as_ref().ok_or_else(|| invalid("Ethernet is not connected to a local switch"))?;
+        let ports = port.ports.lock().expect("Ethernet switch lock");
+        let queue = ports[port.index].as_ref().expect("connected Ethernet port");
+        write_words(output, &[queue.len() as u64])?;
+        for frame in queue {
+            write_words(output, &[frame.len() as u64])?;
+            output.write_all(frame)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_local_ethernet_queue(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_words};
+        let [mac] = self.rv64_devices.ethernet.as_mut_slice() else {
+            return Err(invalid("local switch requires one Ethernet MAC"));
+        };
+        let port = mac.local.as_ref().ok_or_else(|| invalid("Ethernet is not connected to a local switch"))?;
+        let [count] = read_words(input)?;
+        if count > 128 {
+            return Err(invalid("invalid Ethernet switch queue length"));
+        }
+        let mut frames = VecDeque::new();
+        for _ in 0..count {
+            let [length] = read_words(input)?;
+            if !(14..=(MAX_FRAME - 4) as u64).contains(&length) {
+                return Err(invalid("invalid Ethernet switch frame length"));
+            }
+            let mut frame = vec![0; length as usize];
+            input.read_exact(&mut frame)?;
+            frames.push_back(frame);
+        }
+        port.ports.lock().expect("Ethernet switch lock")[port.index] = Some(frames);
+        Ok(())
+    }
+
     pub fn connect_rv64_ethernet(&mut self, local: u16, peer: u16) -> Result<(), String> {
         let [mac] = self.rv64_devices.ethernet.as_mut_slice() else {
             return Err("--ethernet-loopback requires exactly one BeagleV Ethernet MAC".into());
@@ -772,6 +812,28 @@ mod tests {
                 .unwrap()
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn local_switch_snapshot_restores_an_in_flight_frame() {
+        let switch = LocalSwitch::default();
+        let sender = switch.connect();
+        let mut bus = Bus::default();
+        bus.rv64_devices.ethernet.push(Ethernet::new(0, 1));
+        bus.connect_local_rv64_ethernet(&switch).unwrap();
+        sender.send(&[0x55; 60]);
+        let mut snapshot = Vec::new();
+        bus.save_local_ethernet_queue(&mut snapshot).unwrap();
+
+        let restored_switch = LocalSwitch::default();
+        let mut restored = Bus::default();
+        restored.rv64_devices.ethernet.push(Ethernet::new(0, 1));
+        restored.connect_local_rv64_ethernet(&restored_switch).unwrap();
+        restored.load_local_ethernet_queue(&mut snapshot.as_slice()).unwrap();
+        let mut frame = [0; MAX_FRAME];
+        assert_eq!(restored.rv64_devices.ethernet[0].recv_frame(&mut frame), Some(60));
+        assert_eq!(frame[..60], [0x55; 60]);
+        assert_eq!(restored.rv64_devices.ethernet[0].recv_frame(&mut frame), None);
     }
 
     #[test]
