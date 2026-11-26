@@ -1044,17 +1044,16 @@ fn load_platform(
                     }
                 }
                 let size = size.filter(|size| *size > 0).ok_or_else(|| entry.error("Python peripheral requires a positive size"))?;
-                let quoted = |value: &str| value.strip_prefix('"').and_then(|value| value.strip_suffix('"')).map(str::to_owned);
                 let script = match (source, filename) {
-                    (Some(source), None) => multiline_value(source).or_else(|| quoted(source))
+                    (Some(source), None) => multiline_value(source).or_else(|| quoted_string(source))
                         .ok_or_else(|| entry.error("expected a quoted Python script"))?,
                     (None, Some(filename)) => {
-                        let filename = quoted(filename).ok_or_else(|| entry.error("expected a quoted Python script filename"))?;
-                        let root_path = root.unwrap_or(Path::new(".")).join(&filename);
-                        let path = if root_path.is_file() {
-                            root_path
+                        let filename = quoted_string(filename).ok_or_else(|| entry.error("expected a quoted Python script filename"))?;
+                        let local = entry.source.parent().unwrap_or(Path::new(".")).join(&filename);
+                        let path = if local.is_file() {
+                            local
                         } else {
-                            entry.source.parent().unwrap_or(Path::new(".")).join(filename)
+                            root.unwrap_or(Path::new(".")).join(filename)
                         };
                         fs::read_to_string(&path).map_err(|error| entry.error(&format!("{}: {error}", path.display())))?
                     }
