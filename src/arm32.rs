@@ -539,12 +539,23 @@ impl Cpu {
         (irq, fiq)
     }
 
+    fn virtual_interrupt_inputs(&self, bus: &Bus, slot: usize) -> (bool, bool) {
+        let (software_irq, software_fiq) = self.software_virtual_inputs();
+        if !self.is_v8r() || self.cpsr & 31 == 0x1a {
+            return (false, false);
+        }
+        let (gic_irq, gic_fiq) = bus.arm_gic.as_ref()
+            .map_or((false, false), |gic| gic.virtual_cpu_inputs(slot));
+        (software_irq || gic_irq && self.hcr & (1 << 4) != 0,
+            software_fiq || gic_fiq && self.hcr & (1 << 3) != 0)
+    }
+
     pub(crate) fn quiet_steps(&self, bus: &Bus, slot: usize, now: u128, limit: u64) -> u64 {
         if !self.is_v8r()
             || !self.sleeping()
             || self.sleep == Sleep::Event && bus.arm_events & (1 << slot) != 0
             || self.interrupt_inputs.into_iter().any(|asserted| asserted)
-            || self.software_virtual_inputs() != (false, false)
+            || self.virtual_interrupt_inputs(bus, slot) != (false, false)
             || bus.arm_gic.as_ref().is_some_and(|gic| gic.cpu_inputs(slot) != (false, false))
         {
             return 0;
@@ -1487,7 +1498,7 @@ impl Cpu {
             .arm_gic
             .as_ref()
             .map_or((false, false), |gic| gic.cpu_inputs(slot));
-        let (virtual_irq, virtual_fiq) = self.software_virtual_inputs();
+        let (virtual_irq, virtual_fiq) = self.virtual_interrupt_inputs(bus, slot);
         let fiq = self.interrupt_inputs[1] || gic_fiq;
         let irq = self.interrupt_inputs[0] || gic_irq;
         if self.sleep != Sleep::Awake {
@@ -1978,11 +1989,16 @@ impl Cpu {
                                     .flatten()
                             })
                             .or_else(|| {
-                                bus.arm_gic.as_mut()?.access_aarch32(
-                                    slot,
-                                    key,
-                                    write.then_some(registers[rd]),
-                                )
+                                let gic = bus.arm_gic.as_mut()?;
+                                let value = write.then_some(registers[rd]);
+                                if self.is_v8r() && self.cpsr & 31 != 0x1a
+                                    && let Some(reply) = gic.access_virtual_aarch32(
+                                        slot, key, value, self.hcr & (1 << 4) != 0, self.hcr & (1 << 3) != 0,
+                                    )
+                                {
+                                    return Some(reply);
+                                }
+                                gic.access_aarch32(slot, key, value)
                             })
                     {
                         if let Some(value) = reply {

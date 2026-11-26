@@ -131,7 +131,7 @@ impl CpuInterface {
             enabled_groups: 0,
             split_eoi: false,
             virtual_enabled: false,
-            virtual_control: 0,
+            virtual_control: 0xff00_0000,
             virtual_list: [0; 16],
             virtual_active_priorities: [0; 2],
             priority_mask: 0,
@@ -140,6 +140,27 @@ impl CpuInterface {
             processor_sleep: true,
         }
     }
+    fn virtual_running_priority(&self) -> u32 {
+        let active = self.virtual_active_priorities[0] | self.virtual_active_priorities[1];
+        (active.trailing_zeros() << 3).min(0xff)
+    }
+
+    fn pending_virtual_entry(&self, group: Option<usize>) -> Option<usize> {
+        if !self.virtual_enabled {
+            return None;
+        }
+        let limit = (self.virtual_control >> 24).min(self.virtual_running_priority());
+        self.virtual_list.iter().enumerate().filter_map(|(index, &entry)| {
+            let entry_group = ((entry >> 60) & 1) as usize;
+            let priority = ((entry >> 48) as u32) & 0xf8;
+            (entry >> 62 == 1
+                && group.is_none_or(|group| group == entry_group)
+                && self.virtual_control & (1 << entry_group) != 0
+                && priority < limit)
+                .then_some((priority, index))
+        }).min().map(|(_, index)| index)
+    }
+
 }
 
 #[derive(Clone)]
@@ -273,6 +294,13 @@ impl Gic {
         }
     }
 
+    pub(crate) fn virtual_cpu_inputs(&self, cpu: usize) -> (bool, bool) {
+        let Some(interface) = self.cpus.get(cpu) else { return (false, false) };
+        let Some(index) = interface.pending_virtual_entry(None) else { return (false, false) };
+        let fiq = interface.virtual_list[index] & (1 << 60) == 0 && interface.virtual_control & 8 != 0;
+        (!fiq, fiq)
+    }
+
     pub(crate) fn acknowledge(&mut self, cpu: usize, group: Option<usize>) -> u16 {
         let id = self.highest_pending(cpu, group);
         if id != SPURIOUS_INTERRUPT {
@@ -323,6 +351,87 @@ impl Gic {
         if let Some(interface) = self.cpus.get_mut(cpu) {
             interface.priority_mask = mask;
         }
+    }
+
+    pub(crate) fn access_virtual_aarch32(
+        &mut self,
+        cpu: usize,
+        key: u32,
+        value: Option<u32>,
+        irq: bool,
+        fiq: bool,
+    ) -> Option<Option<u32>> {
+        if self.version != Version::V3 {
+            return None;
+        }
+        let interface = self.cpus.get_mut(cpu)?;
+        let group = match key {
+            0x000c_0008 | 0x000c_0028 | 0x000c_0048 | 0x000c_0068 | 0x000c_00cc if fiq => 0,
+            0x000c_000c | 0x000c_002c | 0x000c_004c | 0x000c_006c | 0x000c_00ec if irq => 1,
+            0x0004_0006 | 0x000c_006b | 0x000c_008c | 0x000c_002b if irq || fiq => 0,
+            _ => return None,
+        };
+        let field = match key {
+            0x0004_0006 => Some((24, 0xff)),
+            0x000c_0068 => Some((21, 7)),
+            0x000c_006c => Some((18, 7)),
+            0x000c_00cc | 0x000c_00ec => Some((group as u32, 1)),
+            _ => None,
+        };
+        if let Some((shift, mask)) = field {
+            if let Some(value) = value {
+                interface.virtual_control = (interface.virtual_control & !(mask << shift))
+                    | ((value & mask) << shift);
+                return Some(None);
+            }
+            return Some(Some((interface.virtual_control >> shift) & mask));
+        }
+        let split = interface.virtual_control & (1 << 9) != 0;
+        let reply = match (key, value) {
+            (0x000c_008c, None) => 0x400 | (u32::from(split) << 1),
+            (0x000c_008c, Some(value)) => {
+                interface.virtual_control = (interface.virtual_control & !(1 << 9)) | ((value & 2) << 8);
+                return Some(None);
+            }
+            (0x000c_006b, None) => interface.virtual_running_priority(),
+            (0x000c_0008 | 0x000c_000c | 0x000c_0048 | 0x000c_004c, None) => {
+                let Some(index) = interface.pending_virtual_entry(Some(group)) else {
+                    return Some(Some(u32::from(SPURIOUS_INTERRUPT)));
+                };
+                let entry = &mut interface.virtual_list[index];
+                if key & 0x40 == 0 {
+                    *entry = (*entry & !(3 << 62)) | (2 << 62);
+                    interface.virtual_active_priorities[group] |= 1 << ((*entry >> 51) & 31);
+                }
+                *entry as u32
+            }
+            (0x000c_0028 | 0x000c_002c | 0x000c_002b, Some(id)) => {
+                let deactivate_only = key == 0x000c_002b;
+                let mut physical = None;
+                if (!deactivate_only || split)
+                    && let Some(entry) = interface.virtual_list.iter_mut().find(|entry| {
+                        **entry >> 63 != 0 && **entry as u32 == id
+                            && (deactivate_only || ((**entry >> 60) & 1) as usize == group)
+                    })
+                {
+                    if !deactivate_only {
+                        interface.virtual_active_priorities[group] &= !(1 << ((*entry >> 51) & 31));
+                    }
+                    if deactivate_only || !split {
+                        if *entry & (1 << 61) != 0 {
+                            physical = Some(((*entry >> 32) & 0x1fff) as u16);
+                        }
+                        *entry &= !(2 << 62);
+                    }
+                }
+                if let Some(id) = physical {
+                    self.deactivate(cpu, id);
+                }
+                return Some(None);
+            }
+            _ => return None,
+        };
+        Some(Some(reply))
     }
 
     pub(crate) fn access_aarch32(
@@ -851,6 +960,23 @@ mod tests {
         assert_eq!(gic.access_aarch32(0, 0x008c_00af, Some(0x50a0_0000)), Some(None));
         assert_eq!(gic.access_aarch32(0, 0x008c_00ad, None), Some(Some(53)));
         assert_eq!(gic.access_aarch32(0, 0x008c_00ab, None), Some(Some(0xdfff)));
+    }
+
+    #[test]
+    fn arm_gic_virtual_irq_acknowledge_and_eoi_update_list_state() {
+        let mut gic = Gic::new(Version::V3, 32, &[0, 1]).unwrap();
+        gic.access_aarch32(0, 0x008c_000b, Some(1)); // ICH_HCR.En
+        gic.access_aarch32(0, 0x008c_00eb, Some(0xff00_0002)); // Group 1, VPMR
+        gic.access_aarch32(0, 0x008c_000c, Some(53));
+        gic.access_aarch32(0, 0x008c_000e, Some(0x5080_0000)); // Pending, group 1
+        assert_eq!(gic.virtual_cpu_inputs(0), (true, false));
+        assert_eq!(gic.virtual_cpu_inputs(1), (false, false));
+        assert_eq!(gic.access_virtual_aarch32(0, 0x000c_000c, None, true, false), Some(Some(53)));
+        assert_eq!(gic.virtual_cpu_inputs(0), (false, false));
+        assert_eq!(gic.access_aarch32(0, 0x008c_0009, None), Some(Some(1 << 16)));
+        gic.access_virtual_aarch32(0, 0x000c_002c, Some(53), true, false);
+        assert_eq!(gic.access_aarch32(0, 0x008c_0009, None), Some(Some(0)));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00ab, None), Some(Some(0xffff)));
     }
 
     #[test]
