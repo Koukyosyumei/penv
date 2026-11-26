@@ -487,6 +487,45 @@ impl Session {
         Ok((machine, Some(*local)))
     }
 
+    fn with_uart_peers<T>(
+        &mut self,
+        active: &mut Machine,
+        id: Option<usize>,
+        operation: impl FnOnce(&mut Machine, Option<usize>, &mut [&mut Machine]) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let (owner, local) = id.and_then(|id| self.uart_testers.get(id))
+            .map_or((self.machine.clone(), id), |(name, local)| (name.clone(), Some(*local)));
+        let Some((owner, switch)) = owner.as_ref().and_then(|owner| {
+            self.rv64_switch_links.get(owner).map(|switch| (owner, switch))
+        }) else {
+            let (target, local) = self.uart_machine(active, id)?;
+            return operation(target, local, &mut []);
+        };
+        let active_is_target = self.machine.as_ref() == Some(owner);
+        let mut detached_target = if active_is_target {
+            None
+        } else {
+            Some(self.named_machines.detached.remove(owner).ok_or("UART machine is missing")?)
+        };
+        let mut peers = self.named_machines.detached.iter_mut()
+            .filter(|(name, _)| self.rv64_switch_links.get(*name) == Some(switch))
+            .collect::<Vec<_>>();
+        peers.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        let mut peers = peers.into_iter().map(|(_, machine)| machine).collect::<Vec<_>>();
+        let result = if let Some(target) = &mut detached_target {
+            if self.machine.as_ref().and_then(|name| self.rv64_switch_links.get(name)) == Some(switch) {
+                peers.push(active);
+            }
+            operation(target, local, &mut peers)
+        } else {
+            operation(active, local, &mut peers)
+        };
+        if let Some(target) = detached_target {
+            self.named_machines.detached.insert(owner.clone(), target);
+        }
+        result
+    }
+
     fn describe_machine_log_levels(&self, machine: &Machine, output: &mut impl Write) -> Result<(), String> {
         const LEVELS: [&str; 5] = ["NOISY", "DEBUG", "INFO", "WARNING", "ERROR"];
         for (name, &level) in &self.named_machines.log_levels {
@@ -3210,12 +3249,12 @@ pub fn serve(
                 }
             }
             (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups, first_only, pause), .. }]) => {
-                let result = session.uart_machine(machine, *id).and_then(|(machine, id)| {
+                let result = session.with_uart_peers(machine, *id, |machine, id, peers| {
                     let cycles = uart_wait_cycles(machine, id, *timeout)?;
                     let watch = machine.bus.watch_uart_tester_text(id, expected, regex.clone(), *mode, *first_only)?;
                     let pause = !*absent && pause.unwrap_or(machine.bus.default_uart_pause);
                     let started_at = machine.monitor_elapsed_ns();
-                    let stop = drive_tester_watch(machine, watch, cycles, pause, &mut bytes);
+                    let stop = drive_networked_tester_watch(machine, watch, cycles, pause, peers, &mut bytes);
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
                     let timestamp = if machine.bus.uart_tester_matched_unfinished_line(watch) {
@@ -3637,6 +3676,43 @@ fn drive_uart_watch(
         Ok((Stop::OutputMatch, 0))
     } else {
         run_until_deadline(machine, budget, output, |bus, _| bus.stm32_uart_matched(watch))
+    }
+}
+
+fn drive_networked_tester_watch(
+    machine: &mut Machine,
+    watch: UartWatch,
+    budget: u64,
+    pause: bool,
+    peers: &mut [&mut Machine],
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    if peers.is_empty() {
+        return drive_tester_watch(machine, watch, budget, pause, output);
+    }
+    let start = machine.elapsed_steps();
+    let quantum = (machine.bus.monitor_step_hz() / 1_000).max(1);
+    let mut retired = 0;
+    loop {
+        let remaining = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
+        let (stop, count) = drive_tester_watch(machine, watch, remaining.min(quantum), pause, output)?;
+        retired += count;
+        let deadline = machine.monitor_elapsed_ns();
+        for peer in peers.iter_mut() {
+            let nanos = deadline.saturating_sub(peer.monitor_elapsed_ns());
+            let steps = nanos.saturating_mul(u128::from(peer.bus.monitor_step_hz())) / 1_000_000_000;
+            if steps != 0 {
+                peer.set_monitor_active(true);
+                let (_, _) = run_until_deadline(peer, u64::try_from(steps).unwrap_or(u64::MAX),
+                    &mut io::sink(), |_, _| false)?;
+                if pause && stop == Stop::OutputMatch {
+                    peer.set_monitor_active(false);
+                }
+            }
+        }
+        if stop != Stop::Limit || remaining <= quantum {
+            return Ok((stop, retired));
+        }
     }
 }
 
