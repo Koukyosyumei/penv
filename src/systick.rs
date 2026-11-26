@@ -10,6 +10,7 @@ const CSR: u32 = 0xe000_e010;
 const RELOAD: u32 = 0xe000_e014;
 const CURRENT: u32 = 0xe000_e018;
 const CALIBRATION: u32 = 0xe000_e01c;
+const RENODE_DEFAULT_FREQUENCY: u32 = 50 * 0x80_0000;
 pub const ICSR: u32 = 0xe000_ed04;
 
 pub struct SysTick {
@@ -180,7 +181,12 @@ impl SysTick {
             RELOAD => self.reload,
             CURRENT if self.zero_state_reload && !self.current_initialized => 0xff_ffff,
             CURRENT => self.current,
-            CALIBRATION => 1 << 31, // No separate reference clock.
+            CALIBRATION => {
+                let frequency = self.frequency.unwrap_or(RENODE_DEFAULT_FREQUENCY);
+                ((frequency / 100) & 0xff_ffff)
+                    | (u32::from(frequency % 100 != 0) << 30)
+                    | (1 << 31)
+            }
             ICSR => {
                 (u32::from(self.pending) << 26)
                     | (u32::from(self.pendsv_pending) << 28)

@@ -1740,7 +1740,7 @@ pub fn serve(
                     let result = run_until_deadline(machine, steps, &mut io::sink(), |_, _| false);
                     match result {
                         Ok((Stop::Limit, _)) if machine.elapsed_steps() != start => {}
-                        Ok((Stop::Limit, _)) => machine.set_monitor_active(false),
+                        Ok((Stop::Limit | Stop::Paused, _)) => machine.set_monitor_active(false),
                         Ok((stop, _)) => {
                             machine.set_monitor_active(false);
                             background_stop = Some(format!("emulation stopped: {stop:?}"));

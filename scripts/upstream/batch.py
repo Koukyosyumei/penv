@@ -174,7 +174,8 @@ def run_suite(task, *, options, renode, binary, assets, host_case_timeout, rust_
             listener = SuiteListener(endpoint, active, out, xml)
             # This suite sleeps while a GPIO button is held. Advance its single
             # Cortex-M machine during the same keyword before releasing the button.
-            virtual_sleep = VirtualSleepListener(endpoint) if path == "tests/platforms/STM32F072b.robot" else None
+            virtual_sleep = (VirtualSleepListener(endpoint)
+                             if not rust_monitor and path == "tests/platforms/STM32F072b.robot" else None)
             listeners = [listener, virtual_sleep] if virtual_sleep else [listener]
             with endpoint.server() as server:
                 worker = Thread(target=server.serve_forever, daemon=True)
@@ -216,7 +217,7 @@ def run_suite(task, *, options, renode, binary, assets, host_case_timeout, rust_
                              and keyword.find("status").get("status") != "NOT RUN"
                              for keyword in node.iter("kw"))
                 mirrored = virtual_sleep.mirrored.get(name, 0) if virtual_sleep else 0
-                if records[name]["status"] in {"pass", "fail"} and sleeps > mirrored:
+                if not rust_monitor and records[name]["status"] in {"pass", "fail"} and sleeps > mirrored:
                     records[name].update(status="unsupported", category="adapter_missing",
                                          reason="requires asynchronous emulation during host Sleep")
                 if node.find("status").get("status") == "FAIL" and records[name]["status"] == "pass":
