@@ -547,7 +547,7 @@ impl Session {
         Ok(())
     }
 
-    fn python_worker(&mut self, bus: &mut Bus) -> Result<&crate::cpu_python_hook::SharedHook, String> {
+    fn python_worker(&mut self, bus: &mut crate::bus::Bus) -> Result<&crate::cpu_python_hook::SharedHook, String> {
         if self.python.is_none() {
             let worker = crate::cpu_python_hook::Hook::new("", None, None)?;
             self.python = Some(std::sync::Arc::new(std::sync::Mutex::new(worker)));
