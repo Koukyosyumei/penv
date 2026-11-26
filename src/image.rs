@@ -161,7 +161,7 @@ fn load_hex_records(
 }
 
 pub fn load_rv64_dtb(machine: &mut Machine, mut file: File, address: u64) -> Result<(), String> {
-    if machine.primary.rv64.is_none() {
+    if machine.rv64_cpus().next().is_none() {
         return Err("--dtb requires an RV64 machine".into());
     }
     if address & 7 != 0 {
@@ -179,12 +179,9 @@ pub fn load_rv64_dtb(machine: &mut Machine, mut file: File, address: u64) -> Res
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     load_binary(machine, file, address)?;
     for hart in 0..machine.hart_count() {
-        machine
-            .hart_mut(hart)
-            .rv64
-            .as_mut()
-            .expect("RV64 machine")
-            .set_boot_arguments(hart, address);
+        if let Some(cpu) = machine.hart_mut(hart).rv64.as_mut() {
+            cpu.set_boot_arguments(cpu.mhartid_override.unwrap_or(hart as u64) as usize, address);
+        }
     }
     Ok(())
 }
@@ -235,7 +232,7 @@ pub fn load(
     if renode_elf_load {
         return Err("--renode-elf-load requires an RV64 ELF".into());
     }
-    if machine.primary.rv64.is_some() {
+    if !cortex_m && !aarch32 && machine.first_rv32_hart().is_none() {
         return Err("RV64 requires a little-endian RISC-V ELF64 executable".into());
     }
     if header[..7] != *b"\x7fELF\x01\x01\x01"
@@ -265,8 +262,8 @@ pub fn load(
     } else if half(&header, 18) != 243
         || flags
             & !(abi_flags
-                | u32::from(machine.primary.compressed_instructions())
-                | (u32::from(machine.primary.embedded_base()) << 3))
+                | u32::from(machine.first_rv32_hart().unwrap().compressed_instructions())
+                | (u32::from(machine.first_rv32_hart().unwrap().embedded_base()) << 3))
             != 0
     {
         return Err("expected a RISC-V ELF32 executable with supported ISA flags".into());
@@ -280,7 +277,8 @@ pub fn load(
         return Err("invalid ELF program header table".into());
     }
 
-    let minimum_instruction_size = if (aarch32 && entry & 1 != 0) || (!aarch32 && machine.primary.compressed_instructions()) {
+    let minimum_instruction_size = if (aarch32 && entry & 1 != 0)
+        || machine.first_rv32_hart().is_some_and(|cpu| cpu.compressed_instructions()) {
         2
     } else {
         4
@@ -378,7 +376,7 @@ pub fn load(
     if let Some(symbols) = machine.function_symbols.as_mut() {
         load_code_symbols(&mut file, &header, length, symbols)?;
     }
-    machine.set_entry(entry);
+    machine.set_elf32_entry(entry);
     Ok(())
 }
 

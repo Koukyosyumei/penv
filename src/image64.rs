@@ -32,7 +32,7 @@ pub fn load(
         return Err(format!("unsupported RISC-V ELF64 ISA flags {flags:#x}"));
     }
     let compressed = flags & 1 != 0;
-    let default_isa = if let Some(cpu) = &machine.primary.rv64 {
+    let default_isa = if let Some(cpu) = machine.rv64_cpus().next() {
         let isa = cpu.isa();
         if compressed && !isa.compressed {
             return Err("ELF requires the RV64 compressed extension".into());
@@ -43,8 +43,7 @@ pub fn load(
             4 => isa.double,
             _ => true,
         };
-        if !(0..machine.hart_count())
-            .any(|hart| supported(machine.hart_mut(hart).rv64.as_ref().unwrap().isa()))
+        if !machine.rv64_cpus().any(|cpu| supported(cpu.isa()))
         {
             return Err("RV64 platform lacks the ELF floating-point ABI extension".into());
         }
@@ -215,9 +214,8 @@ pub fn load(
 
 fn minimum_width(machine: &Machine, compressed: bool) -> usize {
     if machine
-        .primary
-        .rv64
-        .as_ref()
+        .rv64_cpus()
+        .next()
         .map_or(compressed, |cpu| cpu.isa().compressed)
     {
         2

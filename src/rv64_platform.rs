@@ -803,6 +803,7 @@ fn create_cpu(
         return Err(entry.error("unsupported RV64 privileged architecture"));
     }
     let mut cpu = Rv64::new(isa);
+    cpu.renode_cas_word_result = true;
     if let Some(value) = property(entry, "CyclesPerInstruction") {
         let cycles = u32::try_from(number(entry, value)?).ok().filter(|cycles| *cycles != 0)
             .ok_or_else(|| entry.error("CyclesPerInstruction requires a positive integer"))?;

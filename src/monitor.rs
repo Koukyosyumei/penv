@@ -5208,7 +5208,19 @@ fn execute(
                 _ => (rest, None),
             };
             let value = match (method.starts_with("Write"), rest) {
-                (true, [value]) => Some(crate::memory_setup::write_value(resolve(value)?, width)?),
+                (true, [value]) => {
+                    let text = resolve(value)?;
+                    let value = crate::memory_setup::write_value(text, width).or_else(|error| {
+                        let raw = crate::parse_address64(text).map_err(|_| error.clone())?;
+                        let bits = (8 - width) * 8;
+                        let extended = (((raw << bits) as i64) >> bits) as u64;
+                        if raw != extended {
+                            return Err(error);
+                        }
+                        Ok(raw & (u64::MAX >> bits))
+                    })?;
+                    Some(value)
+                }
                 (false, []) => None,
                 _ => return Err(format!("invalid sysbus {method} arguments")),
             };

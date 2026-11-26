@@ -498,6 +498,15 @@ impl Machine {
         1 + self.secondary.len()
     }
 
+    pub(crate) fn rv64_cpus(&self) -> impl Iterator<Item = &Rv64> {
+        std::iter::once(&self.primary).chain(&self.secondary).filter_map(|hart| hart.rv64.as_deref())
+    }
+
+    pub(crate) fn first_rv32_hart(&self) -> Option<&Hart> {
+        std::iter::once(&self.primary).chain(&self.secondary)
+            .find(|hart| hart.rv64.is_none() && hart.arm32.is_none() && hart.thumb.is_none())
+    }
+
     pub fn hart_mut(&mut self, id: usize) -> &mut Hart {
         if id == 0 {
             &mut self.primary
@@ -1229,10 +1238,21 @@ impl Machine {
         }
     }
 
+    pub(crate) fn set_elf32_entry(&mut self, entry: u32) {
+        for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if hart.rv64.is_none() {
+                hart.pc = hart.arm32.as_mut().map_or(entry, |cpu| cpu.image_entry(entry));
+                hart.pc_written = true;
+            }
+        }
+    }
+
     pub fn set_rv64_entry(&mut self, entry: u64) {
         for (index, hart) in std::iter::once(&mut self.primary).chain(&mut self.secondary).enumerate() {
-            hart.rv64.as_mut().expect("RV64 machine").set_image_entry(entry);
-            self.bus.take_reservation64(index);
+            if let Some(cpu) = hart.rv64.as_mut() {
+                cpu.set_image_entry(entry);
+                self.bus.take_reservation64(index);
+            }
         }
         self.halted = 0;
     }

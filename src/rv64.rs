@@ -41,6 +41,7 @@ pub struct Rv64 {
     pub privilege: Privilege,
     translations: TranslationCache,
     pub allow_unaligned: bool,
+    pub(crate) renode_cas_word_result: bool,
     waiting: bool,
     wfi_as_nop: bool,
 }
@@ -279,6 +280,7 @@ impl Rv64 {
             privilege,
             translations: TranslationCache::default(),
             allow_unaligned: false,
+            renode_cas_word_result: false,
             waiting: false,
             wfi_as_nop: false,
         }
@@ -1139,7 +1141,12 @@ impl Rv64 {
         if width == 16 && destination != 0 {
             self.registers[destination + 1] = (old >> 64) as u64;
         }
-        Ok(Some(sign(old as u64, width.min(8) as u32 * 8)))
+        if width == 4 && self.renode_cas_word_result {
+            // The pinned tlib uses an unsigned 32-bit compare-exchange load.
+            Ok(Some(old as u64))
+        } else {
+            Ok(Some(sign(old as u64, width.min(8) as u32 * 8)))
+        }
     }
 
     fn read_unaligned_atomic(
