@@ -485,7 +485,7 @@ pub(crate) fn disassemble_source(
         None => machine.bus.ram64(address, length),
     }.ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
     let mut input = String::with_capacity(5 * bytes.len() + 1);
-    for byte in &bytes {
+    for byte in bytes {
         write!(input, "0x{byte:02x} ").unwrap();
     }
     input.push('\n');
