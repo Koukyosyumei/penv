@@ -5245,7 +5245,7 @@ fn execute(
                         | Action::SaveMemory(..)
                         | Action::ClearMemory
                         | Action::LoadMemory(_)
-                        | Action::UnhandledAccess(_)
+                        | Action::UnhandledAccess(_) | Action::Tag(..)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)
                         | Action::RtcMode(_)

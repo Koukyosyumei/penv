@@ -257,7 +257,7 @@ pub(crate) fn handle(
             };
             let pattern = LogPattern::new(kind, pattern)?;
             if !CAPTURE.with_borrow(|capture| capture.is_some()) {
-                return Err("Log tester is not available".into());
+                return Ok(("FAIL", "Log tester is not available".into()));
             }
             let find = |keep: bool| {
                 CAPTURE.with_borrow_mut(|capture| {

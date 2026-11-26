@@ -248,13 +248,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             self.commands.append("ClearMonitorLog")
 
     def check_log(self, command, pattern, args, positional):
-        if self.log_timeout is None:
+        if self.log_timeout is None and not self.rust_monitor:
             raise AssertionFailed("Log tester is not available")
         options = self.log_options(args, set(positional), positional)
         pause = self.log_bool(options["pauseEmulation"]) if "pauseEmulation" in options else self.log_pause
         if pause and not self.rust_monitor:
             raise Unsupported("log tester pause-on-match requires the Rust monitor")
-        duration = self.duration(options.get("timeout", self.log_timeout), maximum=18_446_744_073)
+        duration = self.duration(options.get("timeout", self.log_timeout or 0), maximum=18_446_744_073)
         timeout = f"{duration}s" if self.rust_monitor else int(Decimal(duration) * 1000)
         starts = self.log_bool(options.get("startEmulation", "true"))
         if not self.rust_monitor and timeout and not (starts or self.started):
