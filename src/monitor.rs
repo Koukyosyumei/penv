@@ -5879,7 +5879,7 @@ fn execute(
         });
         return Ok(());
     }
-    if boot.started || boot.runtime.iter().any(|entry|
+    if boot.started || !matches!(words, ["showAnalyzer", _]) && boot.runtime.iter().any(|entry|
         !is_console_action(&entry.action) && !is_log_capture_setup(&entry.action)
             && !matches!(entry.action, Action::AllowPrivates(_) | Action::ExecutePython(_) | Action::PythonAssignment(..)))
     {

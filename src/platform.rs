@@ -1005,7 +1005,7 @@ fn load_platform(
             "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
             "UART.SiFive_UART" => sifive_uarts.push(entry),
             "GPIOPort.SiFive_GPIO" => sifive_gpios.push(entry),
-            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart" => {
+            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart" | "UART.MiV_CoreUART" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
                 }
@@ -3353,6 +3353,12 @@ fn load_platform(
         if entry.model == "UART.TrivialUart" {
             keys(entry, &[])?;
             machine.bus.map_trivial_uart(entry.address()?, &entry.name).map_err(|e| entry.error(&e))?;
+        } else if entry.model == "UART.MiV_CoreUART" {
+            let fields = keys(entry, &["clockFrequency"])?;
+            if !matches!(fields.as_slice(), [("clockFrequency", value)] if number(value).is_ok_and(|hz| hz > 0)) {
+                return Err(entry.error("Mi-V UART requires a positive clockFrequency"));
+            }
+            machine.bus.map_miv_uart(entry.address()?, &entry.name).map_err(|e| entry.error(&e))?;
         } else if entry.model == "UART.Murax_UART" {
             let connected = direct_irq(entry, &cpu.name, 11)?;
             machine

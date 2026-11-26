@@ -210,6 +210,7 @@ enum TesterPort {
     Nrf(usize),
     Rv64(usize),
     Ns16550,
+    MiV,
 }
 
 enum TesterHistory {
@@ -458,6 +459,7 @@ pub struct Bus {
     uart_logs: Vec<(TesterPort, String, Vec<u8>)>,
     named_stm32_gpios: Vec<(String, u32)>,
     pub uart: Option<MuraxUart>,
+    miv_uart: Option<crate::uart::MiVUart>,
     ns16550: Option<Ns16550>,
     ns16550_name: Option<String>,
     scheduled_ns16550_input: std::collections::VecDeque<(u64, Vec<u8>)>,
@@ -538,7 +540,6 @@ pub struct Bus {
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<H7Gpio>,
     h7_gpio_buttons: Vec<(String, u32, u8, bool)>,
-    h7_gpio_leds: Vec<(String, u32, u8, bool)>,
     gpio_pwm_leds: Vec<PwmLed>,
     h7_rtc: Vec<H7Rtc>,
     h7_spi: Vec<Spi>,
@@ -2046,8 +2047,10 @@ impl Bus {
             .set_frame_rate(fps)
     }
 
-    pub fn add_h7_gpio_led(&mut self, name: String, base: u32, pin: u8, inverted: bool) {
-        self.h7_gpio_leds.push((name, base, pin, inverted));
+    pub fn add_h7_gpio_led(&mut self, name: String, parent: String, base: u32, pin: u8, inverted: bool) {
+        let mut led = GpioLed::new(name, pin, inverted);
+        led.parent = Some(parent);
+        self.gpio_leds.push((base, led));
     }
 
     pub fn gpio_led_states(&self) -> impl Iterator<Item = (&str, bool)> {
@@ -2070,12 +2073,23 @@ impl Bus {
     }
 
     pub fn h7_gpio_led_states(&self) -> impl Iterator<Item = (&str, bool)> {
-        self.h7_gpio_leds
+        self.gpio_leds
             .iter()
-            .filter_map(|(name, base, pin, inverted)| {
-                let port = self.h7_gpio.iter().find(|port| port.base == *base)?;
-                Some((name.as_str(), (port.pins() & (1 << pin) != 0) ^ inverted))
+            .filter_map(|(base, led)| {
+                self.h7_gpio.iter().any(|port| port.base == *base)
+                    .then_some((led.name.as_str(), led.state))
             })
+    }
+
+    fn sample_h7_gpio_leds(leds: &mut [(u32, GpioLed)], ports: &[H7Gpio], report: bool) {
+        if ports.is_empty() {
+            return;
+        }
+        for (base, led) in leds {
+            if let Some(port) = ports.iter().find(|port| port.base == *base) {
+                led.sample(port.pins(), report);
+            }
+        }
     }
 
     pub fn add_gpio_pwm_led(
@@ -2123,6 +2137,7 @@ impl Bus {
     pub fn map_h7_gpio(&mut self, port: H7Gpio) -> Result<(), String> {
         self.check_peripheral_range(port.base, port.size)?;
         self.h7_gpio.push(port);
+        Self::sample_h7_gpio_leds(&mut self.gpio_leds, &self.h7_gpio, self.led_events);
         Ok(())
     }
 
@@ -2699,6 +2714,7 @@ impl Bus {
                 });
             port.drive_alternate(led.pin, level);
         }
+        Self::sample_h7_gpio_leds(&mut self.gpio_leds, &self.h7_gpio, self.led_events);
         for port in &mut self.h7_gpio {
             for (base, channel, level) in port.timer_input_changes() {
                 if let Some(timer) = self
@@ -3266,6 +3282,9 @@ impl Bus {
                 let other = u64::from(uart.base);
                 start < other + MuraxUart::SIZE && other < end
             })
+            || self.miv_uart.as_ref().is_some_and(|uart| {
+                overlaps_range(start, end, uart.base, crate::uart::MiVUart::SIZE as u32)
+            })
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 uart.bases
                     .iter()
@@ -3617,6 +3636,16 @@ impl Bus {
             return Err(format!("invalid or overlapping UART range at {base:#010x}"));
         }
         self.uart = Some(MuraxUart::new(base, irq_connected));
+        Ok(())
+    }
+
+    pub(crate) fn map_miv_uart(&mut self, base: u32, name: &str) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + crate::uart::MiVUart::SIZE;
+        if base & 3 != 0 || end > 1 << 32 || self.miv_uart.is_some() || self.overlaps(start, end) {
+            return Err("invalid or overlapping Mi-V UART".into());
+        }
+        self.miv_uart = Some(crate::uart::MiVUart::new(base, name.to_owned()));
         Ok(())
     }
 
@@ -5976,6 +6005,10 @@ impl Bus {
             self.ns16550.as_mut().unwrap().queue_input(bytes.collect());
             return Ok(());
         }
+        if port == TesterPort::MiV {
+            self.miv_uart.as_mut().unwrap().queue_input(bytes.collect());
+            return Ok(());
+        }
         if let TesterPort::Rv64(_) = port {
             self.rv64_devices.select_uart(name.trim_start_matches("sysbus."))?;
             self.rv64_devices.queue_input(bytes.collect());
@@ -6033,6 +6066,7 @@ impl Bus {
 
     pub fn has_uart_input(&self) -> bool {
         self.uart.is_some()
+            || self.miv_uart.is_some()
             || self.ns16550.is_some()
             || self.litex_uart.is_some()
             || !self.stm32_uarts.is_empty()
@@ -6046,6 +6080,8 @@ impl Bus {
 
     pub fn queue_uart_input(&mut self, bytes: Vec<u8>) -> Result<(), BusError> {
         if let Some(uart) = self.uart.as_mut() {
+            uart.queue_input(bytes);
+        } else if let Some(uart) = self.miv_uart.as_mut() {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.ns16550.as_mut() {
             uart.queue_input(bytes);
@@ -6108,6 +6144,8 @@ impl Bus {
             Ok(TesterPort::Nrf(index))
         } else if self.ns16550_name.as_deref() == Some(name) {
             Ok(TesterPort::Ns16550)
+        } else if self.miv_uart.as_ref().is_some_and(|uart| uart.name == name) {
+            Ok(TesterPort::MiV)
         } else if let Some(index) = self.rv64_devices.uart_index(name) {
             Ok(TesterPort::Rv64(index))
         } else {
@@ -6610,7 +6648,7 @@ impl Bus {
     }
 
     pub(crate) fn supports_rv64_snapshot(&self) -> bool {
-        self.clint.is_none() && self.rv64_devices.supports_snapshot()
+        self.clint.is_none() && self.miv_uart.is_none() && self.rv64_devices.supports_snapshot()
             && self.rv64_tohost.is_none() && self.robot_tohost.is_none()
             && self.policy_tags.is_empty() && self.pydevs.is_empty()
             && self.riscv_machine_timer.is_none() && self.clic.is_none()
@@ -7600,6 +7638,11 @@ impl Bus {
         {
             return Ok(uart.read(address));
         }
+        if matches!(N, 1 | 2 | 4)
+            && let Some(uart) = self.miv_uart.as_mut().filter(|uart| uart.contains(address))
+        {
+            return Ok(uart.read(address));
+        }
         if matches!(N, 1 | 4)
             && let Some(clic) = self.clic.as_ref()
             && let Some(offset) = clic.offset(address, N)
@@ -8531,6 +8574,16 @@ impl Bus {
         {
             return device.write(address, value, uart).map_err(BusError::Output);
         }
+        if matches!(width, 1 | 2 | 4)
+            && let Some(device) = self.miv_uart.as_mut().filter(|device| device.contains(address))
+        {
+            if let Some(byte) = device.write(address, value) {
+                uart.write_all(&[byte]).map_err(BusError::Output)?;
+                let console = self.monitor_log_enabled(1);
+                self.observe_uart_output(TesterPort::MiV, &[byte], console);
+            }
+            return Ok(());
+        }
         if matches!(width, 1 | 4)
             && let Some(clic) = self.clic.as_mut()
             && let Some(offset) = clic.offset(address, width)
@@ -9164,6 +9217,7 @@ impl Bus {
                 } else {
                     port.write(address, value);
                 }
+                Self::sample_h7_gpio_leds(&mut self.gpio_leds, &self.h7_gpio, self.led_events);
             }
             return Ok(());
         }

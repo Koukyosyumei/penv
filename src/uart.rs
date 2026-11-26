@@ -4,6 +4,52 @@ use std::{
     sync::mpsc::{Receiver, TryRecvError},
 };
 
+pub(crate) struct MiVUart {
+    pub(crate) base: u32,
+    pub(crate) name: String,
+    receive: VecDeque<u8>,
+    control: [u8; 3],
+}
+
+impl MiVUart {
+    pub(crate) const SIZE: u64 = 0x18;
+
+    pub(crate) fn new(base: u32, name: String) -> Self {
+        Self { base, name, receive: VecDeque::new(), control: [0; 3] }
+    }
+
+    pub(crate) fn contains(&self, address: u32) -> bool {
+        address & 3 == 0 && u64::from(address.wrapping_sub(self.base)) < Self::SIZE
+    }
+
+    pub(crate) fn queue_input(&mut self, bytes: Vec<u8>) {
+        self.receive.extend(bytes);
+    }
+
+    pub(crate) fn read(&mut self, address: u32) -> u32 {
+        u32::from(match address - self.base {
+            4 => self.receive.pop_front().unwrap_or(0),
+            8 => self.control[0],
+            12 => self.control[1],
+            16 => 1 | (u8::from(!self.receive.is_empty()) << 1),
+            20 => self.control[2],
+            _ => 0,
+        })
+    }
+
+    pub(crate) fn write(&mut self, address: u32, value: u32) -> Option<u8> {
+        let byte = value as u8;
+        match address - self.base {
+            0 => return Some(byte),
+            8 => self.control[0] = byte,
+            12 => self.control[1] = byte,
+            20 => self.control[2] = byte & 7,
+            _ => {}
+        }
+        None
+    }
+}
+
 pub struct MuraxUart {
     pub base: u32,
     irq_connected: bool,

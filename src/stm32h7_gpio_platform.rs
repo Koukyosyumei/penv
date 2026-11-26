@@ -188,7 +188,7 @@ pub fn configure(
         } else {
             machine
                 .bus
-                .add_h7_gpio_led(led.name.clone(), port.base, pin, inverted);
+                .add_h7_gpio_led(led.name.clone(), parent.to_owned(), port.base, pin, inverted);
         }
     }
 
