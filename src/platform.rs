@@ -618,6 +618,7 @@ fn load_platform(
     let mut stm32_cans = Vec::new();
     let mut i2c_eeproms = Vec::new();
     let mut stm32_adc = None;
+    let mut stm32_regular_adcs = Vec::new();
     let mut stm32_rtc = None;
     let mut stm32f4_rcc = None;
     let mut stm32_dma = None;
@@ -902,6 +903,7 @@ fn load_platform(
                     return Err(entry.error("only one STM32 DMA controller is supported"));
                 }
             }
+            "Analog.STM32_ADC" => stm32_regular_adcs.push(entry),
             "Analog.STM32F0_ADC" => {
                 if stm32_adc.replace(entry).is_some() {
                     return Err(entry.error("only one STM32F0 ADC is supported"));
@@ -943,6 +945,22 @@ fn load_platform(
         .iter()
         .any(|uart| uart.model == "UART.STM32_UART");
     let irq_lines = if extended_nvic { 48 } else { 32 };
+    for entry in stm32_regular_adcs {
+        let irq = match entry.body.as_slice() {
+            [] => None,
+            [(_, wire)] => {
+                let (pin, destination) = wire.split_once("->").ok_or_else(|| entry.error("expected ADC IRQ wiring"))?;
+                let (name, line) = destination.split_once('@').ok_or_else(|| entry.error("expected ADC NVIC destination"))?;
+                if !matches!(pin.trim(), "" | "IRQ") || !nvic.is_some_and(|nvic| nvic.name == name.trim()) {
+                    return Err(entry.error("invalid ADC NVIC destination"));
+                }
+                Some(irq_index(line, irq_lines).map_err(|error| entry.error(&error))?)
+            }
+            _ => return Err(entry.error("unsupported ADC property or wiring")),
+        };
+        machine.bus.map_stm32_adc(crate::stm32_adc::Stm32Adc::new(entry.address()?, entry.name.clone(), irq))
+            .map_err(|error| entry.error(&error))?;
+    }
     if let Some(rcc) = stm32f4_rcc {
         let options = keys(rcc, &["rtcPeripheral"])?;
         if !options

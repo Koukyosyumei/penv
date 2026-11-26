@@ -497,6 +497,7 @@ pub struct Bus {
     stm32_crc: Option<Stm32F0Crc>,
     stm32_cans: Vec<Stm32Can>,
     stm32_adc: Option<Stm32F0Adc>,
+    stm32_regular_adcs: Vec<crate::stm32_adc::Stm32Adc>,
     stm32_adc_name: Option<String>,
     stm32_dma: Option<Stm32Dma>,
     policy_tags: Vec<BusTag>,
@@ -2979,6 +2980,11 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.stm32_regular_adcs.iter().any(|adc| {
+            overlaps_range(start, end, adc.base, crate::stm32_adc::Stm32Adc::SIZE)
+        }) {
+            return true;
+        }
         if self.egis_extra.iter().any(|device| overlaps_range(start, end, device.base(), device.size())) {
             return true;
         }
@@ -3965,6 +3971,9 @@ impl Bus {
         if let Some(rcc) = self.stm32f4_rcc.as_mut() {
             *rcc = Stm32F4Rcc::new(rcc.base);
         }
+        for adc in &mut self.stm32_regular_adcs {
+            adc.reset();
+        }
         if let Some(adc) = self.stm32_adc.as_mut() {
             adc.reset();
         }
@@ -4011,6 +4020,7 @@ impl Bus {
         }
         let nrf_ticks = self.nrf_clock_ticks();
         let (timer_irqs, timer_dma) = self.tick_stm32_timers();
+        let adc_step_rate = self.step_hz();
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.set_uart_level(
                 self.litex_uart
@@ -4226,6 +4236,11 @@ impl Bus {
                 .is_some_and(Stm32F0Flash::interrupt_pending)
             {
                 irqs |= 1 << Stm32F0Flash::IRQ;
+            }
+            for adc in &mut self.stm32_regular_adcs {
+                if adc.tick(adc_step_rate) && let Some(line) = adc.irq {
+                    irqs |= 1 << line;
+                }
             }
             if let Some(adc) = self.stm32_adc.as_mut()
                 && adc.tick()
@@ -5035,6 +5050,25 @@ impl Bus {
         }
         self.stm32_dma = Some(dma);
         Ok(())
+    }
+
+    pub(crate) fn map_stm32_adc(&mut self, adc: crate::stm32_adc::Stm32Adc) -> Result<(), String> {
+        let start = u64::from(adc.base);
+        let end = start + u64::from(crate::stm32_adc::Stm32Adc::SIZE);
+        if adc.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping STM32 ADC at {start:#010x}"));
+        }
+        self.stm32_regular_adcs.push(adc);
+        Ok(())
+    }
+
+    pub(crate) fn feed_stm32_adc_sample(
+        &mut self, name: &str, value: u32, channel: u32, repeat: i32,
+    ) -> Result<(), String> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        self.stm32_regular_adcs.iter_mut().find(|adc| adc.name == name)
+            .ok_or_else(|| format!("unknown STM32 ADC {name:?}"))?
+            .feed_sample(value, channel, repeat)
     }
 
     pub fn map_stm32f0_adc(&mut self, name: String, adc: Stm32F0Adc) -> Result<(), String> {
@@ -5999,7 +6033,6 @@ impl Bus {
                 self.plics[controller].1.set_line(source, gpio.interrupt());
             }
         }
-        let step_rate = self.step_hz();
         for rtc in &self.andes_rtc {
             if let Some((controller, source)) = rtc.irq {
                 self.plics[controller].1.set_line(source, rtc.interrupt());
@@ -6868,6 +6901,9 @@ impl Bus {
             && let Some(value) = self.read_translated(address, width)
         {
             return Ok(value as u32);
+        }
+        if N == 4 && let Some(adc) = self.stm32_regular_adcs.iter_mut().find(|adc| adc.contains(address)) {
+            return Ok(adc.read(address));
         }
         if N == 4
             && let Some(error) = self
@@ -7746,6 +7782,10 @@ impl Bus {
                 .access(address.into(), width as u32, Some(value.into()))
                 .map(|_| ())
                 .map_err(BusError::Python);
+        }
+        if width == 4 && let Some(adc) = self.stm32_regular_adcs.iter_mut().find(|adc| adc.contains(address)) {
+            adc.write(address, value);
+            return Ok(());
         }
         if width == 4 && self.trivial_peripheral_at(address) {
             return Ok(());

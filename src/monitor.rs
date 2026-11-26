@@ -568,6 +568,7 @@ enum Action {
     PeripheralRead(String, u32, u32),
     TimerQuadWord(String, u32, Option<u64>),
     WatchdogIrq(String),
+    Stm32AdcSample(String, u32, u32, i32),
     EgisSysconProperty(String, String),
     SynchroniseQuantum,
     CpuReset(String),
@@ -753,7 +754,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
-                    | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
+                    | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_) | Action::PeripheralLog(..)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
@@ -1204,6 +1205,9 @@ fn run_commands<'a>(
                 let value = machine.bus.egis_syscon_property(target, property)
                     .ok_or_else(|| format!("unknown AOSMU property {target} {property}"))?;
                 writeln!(output.reply(), "{value}").map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::Stm32AdcSample(target, value, channel, repeat) => {
+                machine.bus.feed_stm32_adc_sample(target, *value, *channel, *repeat).map(|()| None)
             }
             Action::WatchdogIrq(target) => {
                 let value = machine.bus.andes_watchdog_irq(target)
@@ -4671,6 +4675,15 @@ fn execute(
             )),
         [target, property @ ("APBClockFrequency" | "RootClockFrequency")] if !matches!(*target, "cpu" | "sysbus.cpu") =>
             Some(Action::EgisSysconProperty(resolve(target)?.into(), (*property).into())),
+        [target, "FeedSample", sample, channel, repeat @ ..]
+            if repeat.len() <= 1 && crate::parse_address(resolve(sample)?).is_ok() =>
+        {
+            let repeat = repeat.first().map(|value| resolve(value)?.parse::<i32>().map_err(|_| String::from("invalid ADC sample repeat")))
+                .transpose()?.unwrap_or(1);
+            Some(Action::Stm32AdcSample(
+                resolve(target)?.into(), crate::parse_address(resolve(sample)?)?, crate::parse_address(resolve(channel)?)?, repeat,
+            ))
+        }
         [target, "IRQ", "IsSet"] => Some(Action::WatchdogIrq(resolve(target)?.into())),
         ["emulation", "SynchroniseQuantum"] => Some(Action::SynchroniseQuantum),
         [target, operation @ ("Pause" | "Resume" | "IsPaused")] => {
@@ -4813,7 +4826,7 @@ fn execute(
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)
-                        | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::EgisSysconProperty(..)
+                        | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..)
                         | Action::CreateUartTester(..)
                         | Action::DefaultUartTester(_)
                         | Action::ClearUartTesterReport(_)

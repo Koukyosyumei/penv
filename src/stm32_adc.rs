@@ -241,3 +241,151 @@ mod tests {
         }
     }
 }
+
+#[derive(Default)]
+struct AdcSampleQueue {
+    queued: std::collections::VecDeque<(u32, u32)>,
+    repeated: Option<u32>,
+}
+
+impl AdcSampleQueue {
+    fn next(&mut self) -> u32 {
+        let Some((value, count)) = self.queued.front_mut() else {
+            return self.repeated.unwrap_or(0);
+        };
+        let sample = *value;
+        *count -= 1;
+        if *count == 0 {
+            self.queued.pop_front();
+        }
+        sample
+    }
+}
+
+pub(crate) struct Stm32Adc {
+    pub base: u32,
+    pub name: String,
+    samples: [AdcSampleQueue; 19],
+    pub irq: Option<u8>,
+    status: u32,
+    control1: u32,
+    control2: u32,
+    sequence: [u32; 3],
+    channel_index: usize,
+    phase: u64,
+    converting: bool,
+    interrupt: bool,
+    data: u32,
+}
+
+impl Stm32Adc {
+    pub const SIZE: u32 = 0x50;
+
+    pub fn new(base: u32, name: String, irq: Option<u8>) -> Self {
+        Self {
+            base, name, irq, samples: std::array::from_fn(|_| AdcSampleQueue::default()), status: 0, control1: 0, control2: 0, sequence: [0; 3],
+            channel_index: 0, phase: 0, converting: false, interrupt: false, data: 0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::new(self.base, std::mem::take(&mut self.name), self.irq);
+    }
+
+    pub fn feed_sample(&mut self, value: u32, channel: u32, repeat: i32) -> Result<(), String> {
+        let queue = self.samples.get_mut(channel as usize)
+            .ok_or_else(|| format!("invalid STM32 ADC channel {channel}"))?;
+        queue.repeated = (repeat == -1).then_some(value);
+        if repeat > 0 {
+            queue.queued.push_back((value, repeat as u32));
+        }
+        Ok(())
+    }
+
+    pub fn contains(&self, address: u32) -> bool {
+        address.wrapping_sub(self.base) < Self::SIZE
+    }
+
+    pub fn read(&mut self, address: u32) -> u32 {
+        match address - self.base {
+            0 => self.status,
+            4 => self.control1,
+            8 => self.control2,
+            offset @ (0x2c | 0x30 | 0x34) => self.sequence[(offset as usize - 0x2c) / 4],
+            0x4c => {
+                self.status &= !2;
+                self.interrupt = false;
+                self.data
+            }
+            _ => 0,
+        }
+    }
+
+    pub fn write(&mut self, address: u32, value: u32) {
+        match address - self.base {
+            0 => self.status = value & 2,
+            4 => self.control1 = value & 0x120,
+            8 => {
+                self.control2 = value & 0x703;
+                if value & (1 << 30) != 0 && self.control2 & 1 != 0 {
+                    self.converting = true;
+                }
+            }
+            offset @ (0x2c | 0x30 | 0x34) => {
+                let index = (offset as usize - 0x2c) / 4;
+                self.sequence[index] = value & if index == 0 { 0xff_ffff } else { 0x3fff_ffff };
+            }
+            _ => {}
+        }
+    }
+
+    pub fn tick(&mut self, rate: u32) -> bool {
+        if !self.converting {
+            return self.interrupt;
+        }
+        // The upstream sampling clock completes one conversion per 100 microseconds.
+        self.phase += 10_000;
+        if self.phase < u64::from(rate) {
+            return self.interrupt;
+        }
+        self.phase %= u64::from(rate);
+        let length = ((self.sequence[0] >> 20) & 15) as usize + 1;
+        let index = self.channel_index % length;
+        let shift = (index % 6) * 5;
+        let channel = ((self.sequence[2 - index / 6] >> shift) & 31) as usize;
+        self.data = self.samples.get_mut(channel).map_or(0, AdcSampleQueue::next);
+        let scan_active = self.control1 & (1 << 8) != 0 && self.channel_index + 1 < length;
+        if !scan_active || self.control2 & (1 << 10) != 0 {
+            self.status |= 2;
+            self.interrupt |= self.control1 & (1 << 5) != 0;
+        } else {
+            self.status &= !2;
+        }
+        self.channel_index = (self.channel_index + 1) % length;
+        self.converting = scan_active || self.control2 & 2 != 0;
+        self.interrupt
+    }
+}
+
+#[cfg(test)]
+mod regular_adc_tests {
+    use super::Stm32Adc;
+
+    #[test]
+    fn scans_sampled_channels_and_signals_the_end_of_the_sequence() {
+        let mut adc = Stm32Adc::new(0, "adc".into(), Some(12));
+        adc.feed_sample(0x123, 3, 1).unwrap();
+        adc.feed_sample(0x456, 7, -1).unwrap();
+        adc.write(4, 0x120);
+        adc.write(0x2c, 1 << 20);
+        adc.write(0x34, (7 << 5) | 3);
+        adc.write(8, (1 << 30) | 1);
+        assert!(!adc.tick(20_000));
+        assert!(!adc.tick(20_000));
+        assert_eq!(adc.read(0x4c), 0x123);
+        assert!(!adc.tick(20_000));
+        assert!(adc.tick(20_000));
+        assert_eq!(adc.read(0x4c), 0x456);
+        assert!(!adc.tick(20_000));
+    }
+}
