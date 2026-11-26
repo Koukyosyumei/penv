@@ -1075,17 +1075,38 @@ impl Thumb {
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<ThumbStep, String> {
+        if self.locked_up {
+            return Ok(ThumbStep::Exception);
+        }
         if self.thumb2 {
-            return self.step(pc, r, bus, output).map(|retired| {
+            let fault_pc = *pc;
+            let fault_itstate = self.itstate;
+            bus.thumb_negative_priority = self.faultmask || matches!(self.active_exception, NMI | HARDFAULT);
+            let step = self.step(pc, r, bus, output);
+            if let Some(address) = bus.take_thumb_data_fault() {
+                const BUSFAULT: u8 = 5;
+                self.itstate = fault_itstate;
+                let nvic = bus.nvic.as_mut().ok_or("precise bus fault requires NVIC")?;
+                nvic.record_precise_bus_fault(address, false);
+                let exception = if nvic.fault_enabled(BUSFAULT) && self.can_take_sync_exception(BUSFAULT, nvic) {
+                    BUSFAULT
+                } else {
+                    nvic.force_hard_fault()
+                };
+                if exception == HARDFAULT && bus.thumb_negative_priority {
+                    *pc = self.lockup();
+                } else {
+                    *pc = self.exception_entry(exception, fault_pc, r, bus)?;
+                }
+                return Ok(ThumbStep::Exception);
+            }
+            return step.map(|retired| {
                 if retired {
                     ThumbStep::Retired
                 } else {
                     ThumbStep::Breakpoint
                 }
             });
-        }
-        if self.locked_up {
-            return Ok(ThumbStep::Exception);
         }
         let result = if self.invalid_thumb_state {
             Err(InstructionError::GuestFault)
