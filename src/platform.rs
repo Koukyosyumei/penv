@@ -591,6 +591,7 @@ fn load_platform(
     let mut riscv_machine_timer = None;
     let mut andes_pits = Vec::new();
     let mut andes_gpios = Vec::new();
+    let mut andes_watchdogs = Vec::new();
     let mut clic = None;
     let mut nvic = None;
     let mut exti = None;
@@ -770,6 +771,7 @@ fn load_platform(
             "Miscellaneous.LED" | "Miscellaneous.Button" if !cortex_m => panel_parts.push(entry),
             "GPIOPort.LiteX_GPIO" => litex_gpios.push(entry),
             "Timers.AndesATCPIT100" => andes_pits.push(entry),
+            "Timers.AndesATCWDT200_Watchdog" => andes_watchdogs.push(entry),
             "GPIOPort.AndesATCGPIO100" => andes_gpios.push(entry),
             "Timers.RiscVMachineTimer" => {
                 if riscv_machine_timer.replace(entry).is_some() {
@@ -2656,6 +2658,30 @@ fn load_platform(
             machine.bus.map_plic(entry.address()?, sources, &outputs[..count], priorities.unwrap_or(true))
         }.map_err(|e| entry.error(&e))?;
         plic_config.get_or_insert((entry, sources));
+    }
+    for entry in andes_watchdogs {
+        let mut frequency = None;
+        let mut irq = None;
+        for (_, row) in &entry.body {
+            if let Some(value) = row.strip_prefix("clockFrequency:") && frequency.is_none() {
+                frequency = Some(number(value.trim()).map_err(|error| entry.error(&error))?);
+                continue;
+            }
+            let (pin, destination) = row.split_once("->").ok_or_else(|| entry.error("expected watchdog wiring"))?;
+            let (target, source) = destination.split_once('@').ok_or_else(|| entry.error("expected watchdog PLIC destination"))?;
+            let source = number(source.trim()).map_err(|error| entry.error(&error))?;
+            let (_, sources) = plic_config.filter(|(plic, _)| plic.name == target.trim())
+                .ok_or_else(|| entry.error("unknown watchdog PLIC destination"))?;
+            if irq.is_some() || !matches!(pin.trim(), "" | "IRQ") || !(1..=sources).contains(&source) {
+                return Err(entry.error("invalid watchdog PLIC source"));
+            }
+            irq = machine.bus.plic_index(target.trim()).map(|index| (index, source));
+        }
+        let frequency = frequency.filter(|frequency| *frequency != 0)
+            .ok_or_else(|| entry.error("watchdog requires a positive clock frequency"))?;
+        machine.bus.map_andes_watchdog(crate::andes_watchdog::AndesWatchdog::new(
+            entry.address()?, entry.name.clone(), frequency, irq,
+        )).map_err(|error| entry.error(&error))?;
     }
     let mut gpio_indices = HashMap::new();
     let mut gpio_routes = Vec::new();

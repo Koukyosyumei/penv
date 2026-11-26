@@ -553,6 +553,8 @@ pub struct Bus {
     andes_pit: Vec<crate::andes_pit::AndesPit>,
     andes_gpio: Vec<crate::andes_gpio::AndesGpio>,
     andes_gpio_routes: Vec<(usize, u8, usize, u8)>,
+    andes_watchdogs: Vec<crate::andes_watchdog::AndesWatchdog>,
+    pub(crate) andes_reset_requested: bool,
     sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
@@ -2969,6 +2971,9 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.andes_watchdogs.iter().any(|watchdog| overlaps_range(start, end, watchdog.base, crate::andes_watchdog::AndesWatchdog::SIZE)) {
+            return true;
+        }
         if self.andes_gpio.iter().any(|gpio| overlaps_range(start, end, gpio.base, crate::andes_gpio::AndesGpio::SIZE)) {
             return true;
         }
@@ -3395,6 +3400,21 @@ impl Bus {
         self.register_plic("plic", Plic::new(base, sources, outputs).with_priorities(priorities))
     }
 
+    pub(crate) fn map_andes_watchdog(&mut self, watchdog: crate::andes_watchdog::AndesWatchdog) -> Result<(), String> {
+        let start = u64::from(watchdog.base);
+        let end = start + u64::from(crate::andes_watchdog::AndesWatchdog::SIZE);
+        if watchdog.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping Andes watchdog at {start:#010x}"));
+        }
+        self.andes_watchdogs.push(watchdog);
+        Ok(())
+    }
+
+    pub(crate) fn andes_watchdog_irq(&self, name: &str) -> Option<bool> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        Some(self.andes_watchdogs.iter().find(|watchdog| watchdog.name == name)?.interrupt())
+    }
+
     pub(crate) fn map_andes_gpio(&mut self, gpio: crate::andes_gpio::AndesGpio) -> Result<usize, String> {
         let start = u64::from(gpio.base);
         let end = start + u64::from(crate::andes_gpio::AndesGpio::SIZE);
@@ -3455,8 +3475,11 @@ impl Bus {
         Ok(())
     }
 
-    pub(crate) fn plic_register(&self, name: &str, offset: u32) -> Option<u32> {
+    pub(crate) fn named_word_register(&self, name: &str, offset: u32) -> Option<u32> {
         let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        if let Some(watchdog) = self.andes_watchdogs.iter().find(|watchdog| watchdog.name == name) {
+            return (offset < crate::andes_watchdog::AndesWatchdog::SIZE).then(|| watchdog.base + offset);
+        }
         let (_, plic) = self.plics.iter().find(|(registered, _)| registered == name)?;
         (u64::from(offset) < plic.size).then(|| plic.base + offset)
     }
@@ -5788,6 +5811,12 @@ impl Bus {
             }
         }
         let step_rate = self.step_hz();
+        for watchdog in &mut self.andes_watchdogs {
+            self.andes_reset_requested |= watchdog.tick(step_rate);
+            if let Some((controller, source)) = watchdog.irq {
+                self.plics[controller].1.set_line(source, watchdog.interrupt());
+            }
+        }
         for pit in &mut self.andes_pit {
             pit.tick(step_rate);
             if let Some((controller, source)) = pit.irq {
@@ -6750,6 +6779,9 @@ impl Bus {
         {
             return Ok(clic.read(offset, N));
         }
+        if N == 4 && let Some(watchdog) = self.andes_watchdogs.iter().find(|watchdog| watchdog.contains(address)) {
+            return Ok(watchdog.read(address));
+        }
         if N == 4 && let Some(gpio) = self.andes_gpio.iter().find(|gpio| gpio.contains(address)) {
             return Ok(gpio.read(address));
         }
@@ -7627,6 +7659,10 @@ impl Bus {
             && let Some(offset) = clic.offset(address, width)
         {
             clic.write(offset, width, value);
+            return Ok(());
+        }
+        if width == 4 && let Some(watchdog) = self.andes_watchdogs.iter_mut().find(|watchdog| watchdog.contains(address)) {
+            watchdog.write(address, value);
             return Ok(());
         }
         if width == 4

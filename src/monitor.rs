@@ -551,8 +551,9 @@ enum Action {
     ExecutionMode(String, Option<bool>),
     AddCpuHook(String, Option<u32>, CpuHook),
     NvicLog(String),
-    PeripheralWrite(String, u32, u32),
-    PeripheralRead(String, u32),
+    PeripheralWrite(String, u32, u32, u32),
+    PeripheralRead(String, u32, u32),
+    WatchdogIrq(String),
     SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
@@ -586,6 +587,19 @@ enum Action {
     ClearUartTesterReport(Option<usize>),
     WriteUartLine(String, String, &'static [u8]),
     WriteTesterUart(Option<usize>, String, &'static [u8], Option<bool>, Option<bool>),
+}
+
+fn peripheral_access_width(method: &str) -> u32 {
+    if method.ends_with("ByteUsingDoubleWord") { 1 }
+    else if method.ends_with("WordUsingDoubleWord") { 2 }
+    else { 4 }
+}
+
+fn peripheral_word_access(offset: u32, width: u32) -> Result<(u32, u32, u32), String> {
+    if offset % width != 0 {
+        return Err(format!("misaligned peripheral register {offset:#x}"));
+    }
+    Ok((offset & !3, (offset & 3) * 8, u32::MAX >> (32 - width * 8)))
 }
 
 struct BusScalar {
@@ -724,7 +738,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
-                    | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::CreateUartTester(..)
+                    | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::WatchdogIrq(_) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
@@ -1171,21 +1185,38 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::NvicLog(target) => machine.bus.enable_nvic_log(target).map(|()| None),
-            Action::PeripheralRead(target, offset) => {
-                let address = machine.bus.plic_register(target, *offset)
+            Action::WatchdogIrq(target) => {
+                let value = machine.bus.andes_watchdog_irq(target)
+                    .ok_or_else(|| format!("unknown Andes watchdog {target:?}"))?;
+                writeln!(output.reply(), "{}", if value { "True" } else { "False" })
+                    .map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::PeripheralRead(target, offset, width) => {
+                let (aligned, shift, mask) = peripheral_word_access(*offset, *width)?;
+                let address = machine.bus.named_word_register(target, aligned)
                     .ok_or_else(|| format!("unknown peripheral register {target} {offset:#x}"))?;
                 let value = machine.bus.read_scalar::<4>(address, true).map_err(|error| error.to_string())?;
-                writeln!(output.reply(), "0x{value:08x}").map(|()| None).map_err(|error| error.to_string())
+                writeln!(output.reply(), "0x{:01$x}", (value >> shift) & mask, (*width * 2) as usize)
+                    .map(|()| None).map_err(|error| error.to_string())
             }
-            Action::PeripheralWrite(target, offset, value) => {
-                if let Some(address) = machine.bus.trivial_uart_register(target, *offset) {
+            Action::PeripheralWrite(target, offset, value, width) => {
+                let (aligned, shift, mask) = peripheral_word_access(*offset, *width)?;
+                if let Some(address) = machine.bus.named_word_register(target, aligned) {
+                    let value = if *width == 4 {
+                        *value
+                    } else {
+                        let prior = machine.bus.read_scalar::<4>(address, true).map_err(|error| error.to_string())?;
+                        (prior & !(mask << shift)) | ((*value & mask) << shift)
+                    };
+                    machine.bus.write_scalar(address, 4, value, &mut output, true)
+                        .map(|()| None).map_err(|error| error.to_string())
+                } else if *width != 4 {
+                    Err(format!("unknown peripheral register {target} {offset:#x}"))
+                } else if let Some(address) = machine.bus.trivial_uart_register(target, *offset) {
                     machine.bus.write_scalar(address, 4, *value, &mut io::sink(), true)
                         .map(|()| None).map_err(|error| error.to_string())
                 } else {
-                    let address = match machine.bus.plic_register(target, *offset) {
-                        Some(address) => address,
-                        None => machine.bus.nvic_register_address(target, *offset)?,
-                    };
+                    let address = machine.bus.nvic_register_address(target, *offset)?;
                     machine.bus.write_scalar(address, 4, *value, &mut output, true)
                         .map(|()| None).map_err(|error| error.to_string())
                 }
@@ -4553,14 +4584,14 @@ fn execute(
             ))
         }
         ["logLevel", "-1", target] => Some(Action::NvicLog(resolve(target)?.to_owned())),
-        [target, "ReadDoubleWord", offset] => Some(Action::PeripheralRead(
-            resolve(target)?.into(), crate::parse_address(resolve(offset)?)?,
-        )),
-        [target, "WriteDoubleWord", offset, value] => Some(Action::PeripheralWrite(
-            resolve(target)?.to_owned(),
-            crate::parse_address(resolve(offset)?)?,
-            crate::parse_address(resolve(value)?)?,
-        )),
+        [target, method @ ("ReadDoubleWord" | "ReadByteUsingDoubleWord" | "ReadWordUsingDoubleWord"), offset] =>
+            Some(Action::PeripheralRead(resolve(target)?.into(), crate::parse_address(resolve(offset)?)?, peripheral_access_width(method))),
+        [target, method @ ("WriteDoubleWord" | "WriteByteUsingDoubleWord" | "WriteWordUsingDoubleWord"), offset, value] =>
+            Some(Action::PeripheralWrite(
+                resolve(target)?.into(), crate::parse_address(resolve(offset)?)?,
+                crate::parse_address(resolve(value)?)?, peripheral_access_width(method),
+            )),
+        [target, "IRQ", "IsSet"] => Some(Action::WatchdogIrq(resolve(target)?.into())),
         ["emulation", "SynchroniseQuantum"] => Some(Action::SynchroniseQuantum),
         [target, operation @ ("Pause" | "Resume" | "IsPaused")] => {
             let cpu = resolve(target)?;
@@ -4702,7 +4733,7 @@ fn execute(
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)
-                        | Action::PeripheralWrite(..) | Action::PeripheralRead(..)
+                        | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::WatchdogIrq(_)
                         | Action::CreateUartTester(..)
                         | Action::DefaultUartTester(_)
                         | Action::ClearUartTesterReport(_)

@@ -2145,7 +2145,7 @@ impl Machine {
             if let Some(code) = self.bus.rv64_test_exit {
                 return Ok((Stop::TestExit(code), retired));
             }
-            if self.bus.rv64_devices.reset_requested {
+            if self.bus.rv64_devices.reset_requested || std::mem::take(&mut self.bus.andes_reset_requested) {
                 return Ok((Stop::Reset, retired));
             }
             if hart.monitor_paused {
