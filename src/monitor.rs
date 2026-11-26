@@ -3709,11 +3709,11 @@ fn drive_networked_tester_watch(
             let steps = nanos.saturating_mul(u128::from(peer.bus.monitor_step_hz())) / 1_000_000_000;
             if steps != 0 {
                 peer.set_monitor_active(true);
-                let (_, _) = run_until_deadline(peer, u64::try_from(steps).unwrap_or(u64::MAX),
+                run_until_deadline(peer, u64::try_from(steps).unwrap_or(u64::MAX),
                     &mut io::sink(), |_, _| false)?;
-                if pause && stop == Stop::OutputMatch {
-                    peer.set_monitor_active(false);
-                }
+            }
+            if pause && stop == Stop::OutputMatch {
+                peer.set_monitor_active(false);
             }
         }
         if stop != Stop::Limit || remaining <= quantum {
