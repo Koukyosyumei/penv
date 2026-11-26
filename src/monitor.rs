@@ -4053,7 +4053,9 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                     .ok_or_else(|| error("expected quoted inline REPL"))?;
                 inner.replace("\\\"", "\"")
             };
-            if state.boot.started || !state.boot.runtime.is_empty() {
+            if state.boot.started || state.boot.runtime.iter().any(|command| {
+                !matches!(command.action, Action::EmulationSeed(_))
+            }) {
                 let action = if state.boot.multiple_machines {
                     Action::PlatformFragment(source, origin.to_owned(), root.to_owned())
                 } else {
