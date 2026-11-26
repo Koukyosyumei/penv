@@ -1875,12 +1875,11 @@ fn run_commands<'a>(
                 };
                 writeln!(output.reply(), "{message}").map(|()| None).map_err(|error| error.to_string())
             }
-            Action::UartIdle(timeout, tester, pause) => {
-                let (machine, tester) = session.uart_machine(machine, *tester)?;
+            Action::UartIdle(timeout, tester, pause) => session.with_uart_peers(machine, *tester, |machine, tester, peers| {
                 let cycles = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?;
                 let start = machine.elapsed_steps();
                 let limit = cycles.min(budget);
-                let (stop, count) = wait_for_uart_idle(machine, tester, cycles, *pause, budget, &mut output)?;
+                let (stop, count) = wait_for_uart_idle(machine, tester, cycles, *pause, budget, peers, &mut output)?;
                 retired += count;
                 budget -= machine.elapsed_steps().wrapping_sub(start);
                 match stop {
@@ -1888,7 +1887,7 @@ fn run_commands<'a>(
                     Stop::OutputMatch => Err("UART was not idle".into()),
                     _ => Err(format!("UART idle interval ended before completion ({stop:?})")),
                 }
-            }
+            }),
             Action::SetQuantum(duration) => {
                 machine.monitor_quantum = *duration;
                 Ok(None)
@@ -3211,9 +3210,9 @@ pub fn serve(
                 frame(&mut output, "OK", &[])
             }
             (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps, tester, pause), .. }]) => {
-                let result = session.uart_machine(machine, *tester).and_then(|(machine, tester)| {
+                let result = session.with_uart_peers(machine, *tester, |machine, tester, peers| {
                     let cycles = duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?;
-                    wait_for_uart_idle(machine, tester, cycles, *pause, u64::MAX, &mut bytes)
+                    wait_for_uart_idle(machine, tester, cycles, *pause, u64::MAX, peers, &mut bytes)
                 });
 
                 match result {
@@ -3658,6 +3657,7 @@ fn wait_for_uart_idle(
     cycles: u64,
     pause: Option<bool>,
     budget: u64,
+    peers: &mut [&mut Machine],
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
     let (id, previous) = machine.bus.uart_activity(tester)?;
@@ -3665,11 +3665,10 @@ fn wait_for_uart_idle(
     if limit != 0 {
         machine.set_monitor_active(true);
     }
-    let result = run_until_deadline(machine, limit, output, |bus, _| bus.uart_activity_changed(id, previous))?;
-    if limit == cycles && result.0 == Stop::Limit && pause.unwrap_or(machine.bus.default_uart_pause) {
-        machine.set_monitor_active(false);
-    }
-    Ok(result)
+    let pause_at = (limit == cycles && pause.unwrap_or(machine.bus.default_uart_pause)).then_some(Stop::Limit);
+    run_with_switched_peers(machine, limit, pause_at, peers, |machine, steps| {
+        run_until_deadline(machine, steps, output, |bus, _| bus.uart_activity_changed(id, previous))
+    })
 }
 
 fn drive_uart_watch(
@@ -3693,8 +3692,23 @@ fn drive_networked_tester_watch(
     peers: &mut [&mut Machine],
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
+    run_with_switched_peers(machine, budget, pause.then_some(Stop::OutputMatch), peers,
+        |machine, steps| drive_tester_watch(machine, watch, steps, output))
+}
+
+fn run_with_switched_peers(
+    machine: &mut Machine,
+    budget: u64,
+    pause_at: Option<Stop>,
+    peers: &mut [&mut Machine],
+    mut run: impl FnMut(&mut Machine, u64) -> Result<(Stop, u64), String>,
+) -> Result<(Stop, u64), String> {
     if peers.is_empty() {
-        return drive_tester_watch(machine, watch, budget, pause, output);
+        let result = run(machine, budget)?;
+        if Some(&result.0) == pause_at.as_ref() {
+            machine.set_monitor_active(false);
+        }
+        return Ok(result);
     }
     let start = machine.elapsed_steps();
     let start_ns = machine.monitor_elapsed_ns();
@@ -3703,7 +3717,7 @@ fn drive_networked_tester_watch(
     let mut retired = 0;
     loop {
         let remaining = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
-        let (stop, count) = drive_tester_watch(machine, watch, remaining.min(quantum), pause, output)?;
+        let (stop, count) = run(machine, remaining.min(quantum))?;
         retired += count;
         let elapsed = machine.monitor_elapsed_ns().saturating_sub(start_ns);
         for (peer, &peer_start) in peers.iter_mut().zip(&peer_starts) {
@@ -3716,11 +3730,14 @@ fn drive_networked_tester_watch(
                 run_until_deadline(peer, u64::try_from(steps).unwrap_or(u64::MAX),
                     &mut io::sink(), |_, _| false)?;
             }
-            if pause && stop == Stop::OutputMatch {
-                peer.set_monitor_active(false);
-            }
         }
         if stop != Stop::Limit || remaining <= quantum {
+            if Some(&stop) == pause_at.as_ref() {
+                machine.set_monitor_active(false);
+                for peer in peers.iter_mut() {
+                    peer.set_monitor_active(false);
+                }
+            }
             return Ok((stop, retired));
         }
     }
@@ -3730,17 +3747,12 @@ fn drive_tester_watch(
     machine: &mut Machine,
     watch: UartWatch,
     budget: u64,
-    pause: bool,
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
     if budget != 0 && !machine.bus.stm32_uart_matched(watch) {
         machine.set_monitor_active(true);
     }
-    let result = drive_uart_watch(machine, watch, budget, output)?;
-    if pause && result.0 == Stop::OutputMatch {
-        machine.set_monitor_active(false);
-    }
-    Ok(result)
+    drive_uart_watch(machine, watch, budget, output)
 }
 
 fn run_uart_watch(
@@ -7824,11 +7836,35 @@ greet "hello world"
         assert_eq!(machine.elapsed_steps(), 10);
 
         machine.bus.default_uart_pause = true;
-        assert_eq!(wait_for_uart_idle(&mut machine, Some(id), 10, None, 5, &mut output).unwrap().0, Stop::Limit);
+        assert_eq!(wait_for_uart_idle(&mut machine, Some(id), 10, None, 5, &mut [], &mut output).unwrap().0, Stop::Limit);
         assert!(!machine.primary.monitor_paused);
-        assert_eq!(wait_for_uart_idle(&mut machine, Some(id), 10, None, 10, &mut output).unwrap().0, Stop::Limit);
+        assert_eq!(wait_for_uart_idle(&mut machine, Some(id), 10, None, 10, &mut [], &mut output).unwrap().0, Stop::Limit);
         assert!(machine.primary.monitor_paused);
         assert_eq!(machine.elapsed_steps(), 25);
+    }
+
+    #[test]
+    fn uart_idle_advances_and_pauses_switched_peer_at_deadline() {
+        let mut machine = Machine::without_default_ram();
+        let mut peer = Machine::without_default_ram();
+        machine.cpu_less = true;
+        peer.cpu_less = true;
+        machine.bus.map_trivial_uart(0x1000, "uart0").unwrap();
+        let tester = machine.bus.create_uart_tester("uart0", false, None, false).unwrap();
+        let mut output = io::sink();
+        let interval = machine.bus.monitor_step_hz() / 1_000;
+        run_until_deadline(&mut peer, interval, &mut output, |_, _| false).unwrap();
+
+        let (stop, _) = wait_for_uart_idle(
+            &mut machine, Some(tester), 3 * interval, Some(true), u64::MAX,
+            &mut [&mut peer], &mut output,
+        ).unwrap();
+
+        assert_eq!(stop, Stop::Limit);
+        assert_eq!(machine.elapsed_steps(), 3 * interval);
+        assert_eq!(peer.elapsed_steps(), 4 * interval);
+        assert!(machine.primary.monitor_paused);
+        assert!(peer.primary.monitor_paused);
     }
 
     #[test]
