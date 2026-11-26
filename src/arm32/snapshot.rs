@@ -27,6 +27,10 @@ impl Cpu {
         write_words(output, &self.interrupt_inputs.map(u64::from))?;
         write_words(output, &self.fault_status.map(u64::from))?;
         write_words(output, &self.auxiliary_fault_status.map(u64::from))?;
+        write_words(output, &self.translation_tables)?;
+        write_words(output, &[self.physical_address_register])?;
+        write_words(output, &[self.translation_control, self.context_id].map(u64::from))?;
+        write_words(output, &self.auxiliary_attributes.map(u64::from))?;
         write_words(output, &self.fault_address.map(u64::from))?;
         write_words(output, &[u64::from(self.hpfar)])?;
         self.thumb.save_snapshot(output)?;
@@ -88,6 +92,12 @@ impl Cpu {
         self.fault_status = read_u32s(input)?;
         if version >= 12 {
             self.auxiliary_fault_status = read_u32s(input)?;
+        }
+        if version >= 13 {
+            self.translation_tables = read_words(input)?;
+            [self.physical_address_register] = read_words(input)?;
+            [self.translation_control, self.context_id] = read_u32s(input)?;
+            self.auxiliary_attributes = read_u32s(input)?;
         }
         self.fault_address = read_u32s(input)?;
         if version >= 5 {

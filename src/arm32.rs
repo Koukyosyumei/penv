@@ -460,6 +460,11 @@ pub(crate) struct Cpu {
     sleep: Sleep,
     fault_status: [u32; 3],
     auxiliary_fault_status: [u32; 2],
+    translation_tables: [u64; 2],
+    physical_address_register: u64,
+    translation_control: u32,
+    auxiliary_attributes: [u32; 2],
+    context_id: u32,
     fault_address: [u32; 4],
     hpfar: u32,
     debug_status: u32,
@@ -507,6 +512,11 @@ impl Cpu {
             sleep: Sleep::Awake,
             fault_status: [0; 3],
             auxiliary_fault_status: [0; 2],
+            translation_tables: [0; 2],
+            physical_address_register: 0,
+            translation_control: 0,
+            auxiliary_attributes: [0; 2],
+            context_id: 0,
             fault_address: [0; 4],
             hpfar: 0,
             debug_status: 0,
@@ -707,6 +717,10 @@ impl Cpu {
             "hcptr" => 0x0081_0041,
             "hstr" => 0x0081_0061,
             "cpacr" => 0x0001_0040,
+            "ttbcr" => 0x0002_0040,
+            "amair0" => 0x000a_0003,
+            "amair1" => 0x000a_0023,
+            "contextidr" => 0x000d_0020,
             "adfsr" => 0x0005_0001,
             "aifsr" => 0x0005_0021,
             "dfsr" => 0x0005_0000,
@@ -837,6 +851,12 @@ impl Cpu {
             0x0081_0021 if v8r => (&mut self.hdcr, u32::MAX),
             0x0081_0041 if v8r => (&mut self.hcptr, u32::MAX),
             0x0081_0061 if v8r => (&mut self.hstr, u32::MAX),
+            // R52 uses the MPU for address checks. Xen still saves and
+            // restores these CP15 registers through its shared AArch32 path.
+            0x0002_0040 if v8r => (&mut self.translation_control, u32::MAX),
+            0x000a_0003 if v8r => (&mut self.auxiliary_attributes[0], u32::MAX),
+            0x000a_0023 if v8r => (&mut self.auxiliary_attributes[1], u32::MAX),
+            0x000d_0020 if v8r => (&mut self.context_id, u32::MAX),
             0x0005_0001 if v8r => (&mut self.auxiliary_fault_status[0], u32::MAX),
             0x0005_0021 if v8r => (&mut self.auxiliary_fault_status[1], u32::MAX),
             0x0005_0000 if v8r => (&mut self.fault_status[0], u32::MAX),
@@ -1867,6 +1887,26 @@ impl Cpu {
                         && let Some(register) = self.banked_register(instruction, registers)
                     {
                         *register = value;
+                    } else {
+                        next = self.undefined(address.wrapping_add(4), registers);
+                    }
+                }
+                _ if self.is_v8r() && matches!(instruction & 0x0fe0_0f0f, 0x0c40_0f02 | 0x0c40_0f07) => {
+                    let operation = (instruction >> 4) & 15;
+                    let target = match (instruction & 15, operation) {
+                        (2, 0 | 1) => Some(&mut self.translation_tables[operation as usize]),
+                        (7, 0) => Some(&mut self.physical_address_register),
+                        _ => None,
+                    };
+                    if let Some(target) = target
+                        && self.cpsr & 31 != 0x10 && rd != 15 && rn != 15 && rd != rn
+                    {
+                        if instruction & (1 << 20) != 0 {
+                            registers[rd] = *target as u32;
+                            registers[rn] = (*target >> 32) as u32;
+                        } else {
+                            *target = u64::from(registers[rd]) | (u64::from(registers[rn]) << 32);
+                        }
                     } else {
                         next = self.undefined(address.wrapping_add(4), registers);
                     }
