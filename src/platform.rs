@@ -2530,12 +2530,8 @@ fn load_platform(
             nvic.enable_fpu();
             nvic.configure_mpu(if cortex_m7 { 16 } else { 8 });
         }
-        machine
-            .bus
-            .nvic
-            .as_mut()
-            .unwrap()
-            .set_external_lines(irq_lines as usize);
+        let nvic_lines = (irq_lines as usize).max(machine.bus.renesas_icu_output_count());
+        machine.bus.nvic.as_mut().unwrap().set_external_lines(nvic_lines);
         if let Some(controller) = nvic.filter(|controller| controller.registration.is_some()) {
             machine.bus.set_nvic_name(controller.name.clone());
         }

@@ -37,6 +37,10 @@ impl Icu {
         })
     }
 
+    pub(crate) fn output_count(&self) -> usize {
+        self.links.len()
+    }
+
     pub(crate) fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

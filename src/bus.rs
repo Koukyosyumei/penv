@@ -4706,6 +4706,10 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn renesas_icu_output_count(&self) -> usize {
+        self.renesas_ra_icu.as_ref().map_or(0, crate::renesas_ra_icu::Icu::output_count)
+    }
+
     pub(crate) fn drive_renesas_ra_event(&mut self, target: &str, event: usize, asserted: bool) -> bool {
         if let Some(icu) = self.renesas_ra_icu.as_mut().filter(|icu| icu.name == target) {
             icu.set_event(event, asserted);
