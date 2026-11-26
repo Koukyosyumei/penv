@@ -2409,6 +2409,33 @@ impl Hart {
             .ok_or(BusError::Denied(address))
     }
 
+    fn rv32_vector_transfer(
+        &mut self,
+        instruction: u32,
+        run: impl FnOnce(&mut Self, &mut crate::rv32_vector::Rv32Vector)
+            -> Result<(), crate::rv32_vector::TransferError<Fault>>,
+    ) -> Result<(), Fault> {
+        use crate::rv32_vector::TransferError;
+
+        if !self.csr.vectors_active() {
+            return Err(Fault::Illegal(instruction));
+        }
+        let mut vector = self.csr.vector_bootstrap.take().ok_or(Fault::Illegal(instruction))?;
+        let result = run(self, &mut vector);
+        self.csr.vector_bootstrap = Some(vector);
+        match result {
+            Err(TransferError::Illegal) => Err(Fault::Illegal(instruction)),
+            Err(TransferError::Memory(error)) => {
+                self.csr.vectors_dirty();
+                Err(error)
+            }
+            Ok(()) => {
+                self.csr.vectors_dirty();
+                Ok(())
+            }
+        }
+    }
+
     fn vector_doubleword(&mut self, bus: &mut Bus, address: u32, value: Option<u64>) -> Result<u64, Fault> {
         let (permission, access) = if value.is_some() {
             (crate::pmp::WRITE, Access::Store)
@@ -2993,30 +3020,22 @@ impl Hart {
         };
         let result = match insn & 0x7f {
             0x07 | 0x27 if bitmanip.has_vector_execution() && matches!(funct3, 0 | 5 | 6 | 7) => {
-                if !self.csr.vectors_active() {
-                    return Err(illegal());
-                }
-                let mut vector = self.csr.vector_bootstrap.take().ok_or_else(illegal)?;
-                let result = vector.transfer(insn, a, |address, width, value| {
-                    if width == 8 {
-                        return self.vector_doubleword(bus, address, value);
-                    }
-                    if let Some(value) = value {
-                        self.store(bus, address, width, value as u32, output)?;
-                        return Ok(0);
-                    }
-                    match width {
-                        1 => self.load::<1>(bus, address).map(u64::from),
-                        2 => self.load::<2>(bus, address).map(u64::from),
-                        4 => self.load::<4>(bus, address).map(u64::from),
-                        _ => unreachable!(),
-                    }
-                });
-                self.csr.vector_bootstrap = Some(vector);
-                self.csr.vectors_dirty();
-                result.map_err(|error| match error {
-                    crate::rv32_vector::TransferError::Illegal => illegal(),
-                    crate::rv32_vector::TransferError::Memory(error) => error,
+                self.rv32_vector_transfer(insn, |hart, vector| {
+                    vector.transfer(insn, a, |address, width, value| {
+                        if width == 8 {
+                            return hart.vector_doubleword(bus, address, value);
+                        }
+                        if let Some(value) = value {
+                            hart.store(bus, address, width, value as u32, output)?;
+                            return Ok(0);
+                        }
+                        match width {
+                            1 => hart.load::<1>(bus, address).map(u64::from),
+                            2 => hart.load::<2>(bus, address).map(u64::from),
+                            4 => hart.load::<4>(bus, address).map(u64::from),
+                            _ => unreachable!(),
+                        }
+                    })
                 })?;
                 None
             }
@@ -3063,18 +3082,10 @@ impl Hart {
             0x5b if (bitmanip.xandesvsintload && matches!(insn & 0xfdf0_707f, 0x0820_405b | 0x0830_405b))
                 || (bitmanip.xandesvsinth && insn & 0xfff0_707f == 0x0a00_405b) =>
             {
-                if !self.csr.vectors_active() {
-                    return Err(illegal());
-                }
-                let mut vector = self.csr.vector_bootstrap.take().ok_or_else(illegal)?;
-                let result = vector.andes_int4_load(insn, a, |address| {
-                    self.load::<1>(bus, address).map(|byte| byte as u8)
-                });
-                self.csr.vector_bootstrap = Some(vector);
-                self.csr.vectors_dirty();
-                result.map_err(|error| match error {
-                    crate::rv32_vector::TransferError::Illegal => illegal(),
-                    crate::rv32_vector::TransferError::Memory(error) => error,
+                self.rv32_vector_transfer(insn, |hart, vector| {
+                    vector.andes_int4_load(insn, a, |address| {
+                        hart.load::<1>(bus, address).map(|byte| byte as u8)
+                    })
                 })?;
                 None
             }
