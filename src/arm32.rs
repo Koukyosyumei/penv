@@ -1,4 +1,6 @@
 //! AArch32 integer execution and interworking for ARMv7-A and ARMv7-R.
+mod pmsa;
+
 use std::io::Write;
 
 use crate::{
@@ -249,6 +251,7 @@ pub(crate) struct Cpu {
     hvbar: u32,
     hcr: u32,
     elr_hyp: u32,
+    pmsa: Option<[pmsa::Pmsa; 2]>,
     pub(crate) timer: Option<GenericTimer>,
 }
 
@@ -273,6 +276,8 @@ impl Cpu {
             hvbar: 0,
             hcr: 0,
             elr_hyp: 0,
+            pmsa: matches!(profile, Profile::RealTimeV8)
+                .then(|| [pmsa::Pmsa::new(16), pmsa::Pmsa::new(16)]),
             timer: None,
         }
     }
@@ -283,6 +288,21 @@ impl Cpu {
 
     pub(crate) fn is_v8r(&self) -> bool {
         matches!(self.profile, Profile::RealTimeV8)
+    }
+
+    pub(crate) fn configure_pmsa(
+        &mut self,
+        regions: usize,
+        hypervisor_regions: usize,
+    ) -> Result<(), String> {
+        if regions > 32 || hypervisor_regions > 32 {
+            return Err("Cortex-R52 supports at most 32 region selectors per MPU".into());
+        }
+        self.pmsa = Some([
+            pmsa::Pmsa::new(regions),
+            pmsa::Pmsa::new(hypervisor_regions),
+        ]);
+        Ok(())
     }
 
     pub(crate) fn monitor_exception_level(&self) -> &'static str {
@@ -299,7 +319,20 @@ impl Cpu {
         name: &str,
         value: Option<u64>,
     ) -> Result<Option<u64>, String> {
-        let key = match name.to_ascii_lowercase().as_str() {
+        let canonical = name.to_ascii_lowercase();
+        let value = value
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|_| "system register value exceeds 32 bits")?;
+        if let Some((bank, register)) = pmsa::Register::named(&canonical)
+            && let Some(pmsa) = self.pmsa.as_mut()
+        {
+            return pmsa[bank]
+                .access(register, value)
+                .map(|value| value.map(u64::from))
+                .ok_or_else(|| format!("invalid access to {name:?}"));
+        }
+        let key = match canonical.as_str() {
             "sctlr" => 0x0001_0000,
             "vbar" => 0x000c_0000,
             "hsctlr" => 0x0081_0000,
@@ -314,18 +347,17 @@ impl Cpu {
             }
             _ => return Err(format!("unknown AArch32 system register {name:?}")),
         };
-        self.access_cp15(
-            key,
-            value
-                .map(u32::try_from)
-                .transpose()
-                .map_err(|_| "system register value exceeds 32 bits")?,
-        )
-        .map(|reply| reply.map(u64::from))
-        .ok_or_else(|| format!("unknown AArch32 system register {name:?}"))
+        self.access_cp15(key, value)
+            .map(|reply| reply.map(u64::from))
+            .ok_or_else(|| format!("unknown AArch32 system register {name:?}"))
     }
 
     fn access_cp15(&mut self, key: u32, value: Option<u32>) -> Option<Option<u32>> {
+        if let Some((bank, register)) = pmsa::Register::decode(key)
+            && let Some(pmsa) = self.pmsa.as_mut()
+        {
+            return pmsa[bank].access(register, value);
+        }
         let v8r = self.is_v8r();
         let (register, mask) = match key {
             0x0001_0000 => (&mut self.sctlr, u32::MAX),

@@ -944,7 +944,8 @@ impl Machine {
         }
         let hart = self.named_hart(name)?;
         if let Some(cpu) = &hart.arm32 {
-            return Ok((Some(hart.slot), cpu.profile.triple(), "+v7".into()));
+            let features = if cpu.is_v8r() { "+v8r" } else { "+v7" };
+            return Ok((Some(hart.slot), cpu.profile.triple(), features.into()));
         }
         if let Some(thumb) = &hart.thumb {
             let (triple, features) = if thumb.cortex_m55 {

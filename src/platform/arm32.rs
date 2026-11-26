@@ -36,14 +36,25 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
             &[
                 "cpuType",
                 "numberOfMPURegions",
+                "mpuRegionsCount",
+                "mpuHyperRegionsCount",
                 "cpuId",
                 "genericInterruptController",
             ],
         )?;
         let mut affinity = hart as u32;
+        let mut regions = 16;
+        let mut hypervisor_regions = 16;
         for &(key, value) in &fields {
             match key {
                 "cpuId" => affinity = number(value).map_err(|error| entry.error(&error))?,
+                "mpuRegionsCount" => {
+                    regions = number(value).map_err(|error| entry.error(&error))? as usize
+                }
+                "mpuHyperRegionsCount" => {
+                    hypervisor_regions =
+                        number(value).map_err(|error| entry.error(&error))? as usize
+                }
                 "genericInterruptController"
                     if !controller.is_some_and(|gic| gic.name == value) =>
                 {
@@ -69,9 +80,16 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
             ("CPU.ARMv8R", "cortex-r52") if controller.is_some() => Profile::RealTimeV8,
             _ => return Err(entry.error("unsupported AArch32 CPU type")),
         };
+        let mut processor = Cpu::new(profile);
+        if processor.is_v8r() {
+            processor
+                .configure_pmsa(regions, hypervisor_regions)
+                .map_err(|error| entry.error(&error))?;
+        }
         let cpu = machine.hart_mut(hart);
         cpu.name = Some(entry.name.clone());
-        cpu.arm32 = Some(Box::new(Cpu::new(profile)));
+        cpu.configure_reset_vector(0);
+        cpu.arm32 = Some(Box::new(processor));
         machine.bus.guest_cpu_names.push(entry.name.clone());
     }
     let mut mapped = false;

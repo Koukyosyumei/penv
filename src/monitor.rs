@@ -4996,6 +4996,12 @@ fn execute(
             Some(Action::MonitorSelectMachine(unquote(resolve(name)?).to_owned()))
         }
         ["logLevel"] => Some(Action::ReadLogLevels),
+        ["machine", "LoadPlatformDescription", value] if boot.started && boot.multiple_machines => {
+            let path = platform_path(value, script, root, variables)?;
+            let source = std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+            let origin = path.parent().unwrap_or(Path::new("."));
+            Some(Action::PlatformFragment(source, origin.to_owned(), root.to_owned()))
+        }
         ["machine", "LoadPlatformDescriptionFromString", value] if boot.started => {
             let source = monitor_string(resolve(value)?)
                 .ok_or("expected quoted inline REPL")?;
