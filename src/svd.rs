@@ -318,3 +318,42 @@ impl Svd {
         found.then_some(value)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Svd;
+    use crate::bus::{Bus, UnhandledAccess};
+
+    #[test]
+    fn bus_uses_svd_reset_values_for_unmapped_accesses() {
+        let svd = Svd::parse(
+            r#"<device><name>test</name><description>test</description><size>32</size>
+                <peripherals>
+                    <peripheral><name>original</name><baseAddress>0x1000</baseAddress>
+                        <registers><register><name>reg%s</name><addressOffset>4</addressOffset>
+                            <dim>2</dim><dimIncrement>4</dimIncrement>
+                            <resetValue>0x12345678</resetValue>
+                        </register></registers>
+                    </peripheral>
+                    <peripheral derivedFrom="original"><name>copy</name>
+                        <baseAddress>0x2000</baseAddress>
+                    </peripheral>
+                </peripherals></device>"#,
+        )
+        .unwrap();
+        let mut bus = Bus::default();
+        bus.svd.push(svd);
+        let mut sink = std::io::sink();
+        assert_eq!(bus.read::<4>(0x1004).unwrap(), 0x1234_5678);
+        bus.write(0x1004, 4, 0, &mut sink).unwrap();
+        assert_eq!(bus.read::<2>(0x1006).unwrap(), 0x1234);
+        assert_eq!(bus.read::<4>(0x2008).unwrap(), 0x1234_5678);
+        assert!(bus.read::<4>(0x200c).is_err());
+        bus.map_ram(0x2000, 0x100).unwrap();
+        assert_eq!(bus.read::<4>(0x2004).unwrap(), 0);
+        bus.unhandled_access = Some(UnhandledAccess::DoNotReport);
+        assert_eq!(bus.read::<4>(0x1004).unwrap(), 0);
+        bus.unhandled_access = Some(UnhandledAccess::ThrowException);
+        assert!(bus.read::<4>(0x1004).is_err());
+    }
+}
