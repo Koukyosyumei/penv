@@ -271,6 +271,7 @@ pub(crate) struct Cpu {
     hcr: u32,
     cpacr: u32,
     fpexc: u32,
+    vfp_high_words: [u32; 32],
     affinity: u32,
     elr_hyp: u32,
     pmsa: Option<[pmsa::Pmsa; 2]>,
@@ -285,6 +286,7 @@ impl Cpu {
     pub(crate) fn new(profile: Profile) -> Self {
         let mut thumb = Thumb::new(None);
         thumb.thumb2 = true;
+        thumb.arm_interworking = true;
         Self {
             profile,
             cpsr: if matches!(profile, Profile::RealTimeV8) {
@@ -304,6 +306,7 @@ impl Cpu {
             hcr: 0,
             cpacr: 0,
             fpexc: 0x700,
+            vfp_high_words: [0; 32],
             affinity: 0,
             elr_hyp: 0,
             pmsa: matches!(profile, Profile::RealTimeV8)
@@ -1018,6 +1021,81 @@ impl Cpu {
             .map_err(|error| error.to_string())
     }
 
+    fn vfp_memory_transfer(
+        &mut self,
+        instruction: u32,
+        pc: u32,
+        registers: &mut [u32; 32],
+        bus: &mut Bus,
+        slot: usize,
+        output: &mut impl Write,
+    ) -> Result<Option<u32>, String> {
+        let rn = ((instruction >> 16) & 15) as usize;
+        let vd = ((instruction >> 12) & 15) as usize;
+        let extension = ((instruction >> 22) & 1) as usize;
+        let double = instruction & (1 << 8) != 0;
+        let first = if double {
+            (16 * extension + vd) * 2
+        } else {
+            vd * 2 + extension
+        };
+        let immediate = instruction & 255;
+        let bytes = immediate * 4;
+        let up = instruction & (1 << 23) != 0;
+        let pre = instruction & (1 << 24) != 0;
+        let writeback = instruction & (1 << 21) != 0;
+        let load = instruction & (1 << 20) != 0;
+        let base = Self::reg(registers, rn, pc);
+        let updated = if up {
+            base.wrapping_add(bytes)
+        } else {
+            base.wrapping_sub(bytes)
+        };
+        let (count, mut address) = if pre && !writeback {
+            (1 + usize::from(double), updated)
+        } else if rn != 15
+            && ((!pre && up) || (pre && !up && writeback))
+            && (!double || immediate.is_multiple_of(2))
+        {
+            (immediate as usize, if up { base } else { updated })
+        } else {
+            return Ok(Some(self.undefined(pc.wrapping_add(4), registers)));
+        };
+        if count == 0 || first + count > if double { 64 } else { 32 } {
+            return Ok(Some(self.undefined(pc.wrapping_add(4), registers)));
+        }
+        let access = if load {
+            pmsa::Access::Read
+        } else {
+            pmsa::Access::Write
+        };
+        for index in first..first + count {
+            if let Some(vector) = self.check_protection(address, 4, access, pc, registers) {
+                return Ok(Some(vector));
+            }
+            if load {
+                let value = self.load(bus, slot, address, 4)?;
+                if index < 32 {
+                    self.thumb.vfp_words_mut()[index] = value;
+                } else {
+                    self.vfp_high_words[index - 32] = value;
+                }
+            } else {
+                let value = if index < 32 {
+                    self.thumb.vfp_words_mut()[index]
+                } else {
+                    self.vfp_high_words[index - 32]
+                };
+                self.store(bus, slot, address, 4, value, output)?;
+            }
+            address = address.wrapping_add(4);
+        }
+        if writeback {
+            registers[rn] = updated;
+        }
+        Ok(None)
+    }
+
     pub(crate) fn step(
         &mut self,
         pc: &mut u32,
@@ -1063,19 +1141,6 @@ impl Cpu {
                 return Ok(Step::Trap);
             }
             let raw = self.load(bus, slot, *pc, 2)?;
-            if raw & 0xff07 == 0x4700 {
-                let reg = ((raw >> 3) & 15) as usize;
-                let target = if reg == 15 {
-                    pc.wrapping_add(4)
-                } else {
-                    registers[reg]
-                };
-                if raw & 0x80 != 0 {
-                    registers[14] = pc.wrapping_add(2) | 1;
-                }
-                *pc = self.exchange(target);
-                return Ok(Step::Retired);
-            }
             if matches!(raw & 0xffc0, 0xe800 | 0xe980) {
                 if let Some(vector) = self.check_protection(
                     pc.wrapping_add(2),
@@ -1096,8 +1161,12 @@ impl Cpu {
                 }
             }
             self.thumb.set_apsr(self.cpsr);
+            self.thumb.arm_branch_taken = false;
             let retired = self.thumb.step(pc, registers, bus, output)?;
             self.cpsr = (self.cpsr & !FLAGS) | (self.thumb.apsr() & FLAGS);
+            if self.thumb.arm_branch_taken {
+                self.cpsr &= !T;
+            }
             return Ok(if retired {
                 Step::Retired
             } else {
@@ -1120,6 +1189,8 @@ impl Cpu {
             if instruction & 0xfe5f_ffe0 == 0xf84d_0500 || instruction & 0xfe50_ffff == 0xf810_0a00
             {
                 next = self.arm_exception_frame(instruction, next, registers, bus, slot, output)?;
+            } else if instruction == 0xf57f_f01f {
+                bus.take_reservation64(slot);
             } else if instruction & 0xfff1_fe20 == 0xf100_0000 {
                 if self.cpsr & 31 != 0x10 {
                     let mut status = self.cpsr;
@@ -1145,6 +1216,75 @@ impl Cpu {
             let rn = ((instruction >> 16) & 15) as usize;
             let rd = ((instruction >> 12) & 15) as usize;
             match instruction {
+                _ if matches!(instruction & 0x0ff0_f0f0, 0x0710_f010 | 0x0730_f010) => {
+                    let lhs = (instruction & 15) as usize;
+                    let rhs = ((instruction >> 8) & 15) as usize;
+                    if [rn, lhs, rhs].contains(&15) {
+                        next = self.undefined(next, registers);
+                    } else if registers[rhs] == 0 {
+                        registers[rn] = 0;
+                    } else if instruction & (1 << 21) != 0 {
+                        registers[rn] = registers[lhs] / registers[rhs];
+                    } else {
+                        registers[rn] =
+                            (registers[lhs] as i32).wrapping_div(registers[rhs] as i32) as u32;
+                    }
+                }
+                _ if instruction & 0x0f80_0ff0 == 0x0180_0f90 => {
+                    let load = instruction & (1 << 20) != 0;
+                    let source = (instruction & 15) as usize;
+                    let width = [4, 8, 1, 2][((instruction >> 21) & 3) as usize];
+                    let first = if load { rd } else { source };
+                    if rn == 15
+                        || rd == 15
+                        || (load != (source == 15))
+                        || width == 8 && (first & 1 != 0 || first > 12)
+                    {
+                        *pc = self.undefined(next, registers);
+                        return Ok(Step::Retired);
+                    }
+                    let target = registers[rn];
+                    let access = if load {
+                        pmsa::Access::Read
+                    } else {
+                        pmsa::Access::Write
+                    };
+                    if let Some(vector) =
+                        self.check_protection(target, width, access, address, registers)
+                    {
+                        *pc = vector;
+                        return Ok(Step::Trap);
+                    }
+                    if !target.is_multiple_of(width as u32) {
+                        return Err(format!("unaligned ARM exclusive access at {target:#010x}"));
+                    }
+                    let physical = u64::from(target);
+                    if load {
+                        registers[rd] = self.load(bus, slot, target, width.min(4))?;
+                        if width == 8 {
+                            registers[rd + 1] = self.load(bus, slot, target.wrapping_add(4), 4)?;
+                        }
+                        bus.reserve64(slot, physical, physical, width);
+                    } else {
+                        let reservation = bus.take_reservation64(slot);
+                        let succeeded =
+                            bus.matches_reservation64(slot, reservation, physical, physical, width);
+                        if succeeded {
+                            self.store(bus, slot, target, width.min(4), registers[source], output)?;
+                            if width == 8 {
+                                self.store(
+                                    bus,
+                                    slot,
+                                    target.wrapping_add(4),
+                                    4,
+                                    registers[source + 1],
+                                    output,
+                                )?;
+                            }
+                        }
+                        registers[rd] = u32::from(!succeeded);
+                    }
+                }
                 _ if matches!(
                     instruction & 0x0fe0_0070,
                     0x07a0_0050 | 0x07e0_0050 | 0x07c0_0010
@@ -1317,7 +1457,18 @@ impl Cpu {
                             || !user && (self.cpacr >> 20) & 0xf == 5);
                     if !enabled {
                         next = self.undefined(next, registers);
-                    } else if (high & 0xfe00 != 0xec00 || high & 0xffe0 == 0xec40) && {
+                    } else if high & 0xfe00 == 0xec00 && high & 0xffe0 != 0xec40 {
+                        if let Some(vector) = self.vfp_memory_transfer(
+                            instruction,
+                            address,
+                            registers,
+                            bus,
+                            slot,
+                            output,
+                        )? {
+                            next = vector;
+                        }
+                    } else if {
                         self.thumb.set_apsr(self.cpsr);
                         self.thumb.execute_fpu(
                             high,

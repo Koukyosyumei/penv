@@ -75,6 +75,8 @@ pub struct Thumb {
     greater_equal: u32,
     fp: [u32; 32],
     fpscr: u32,
+    pub(crate) arm_interworking: bool,
+    pub(crate) arm_branch_taken: bool,
     fp_active: bool,
     active_exception: u8,
     active_exceptions: ActiveExceptions,
@@ -1141,6 +1143,10 @@ impl Thumb {
     }
 
     fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
+        if self.arm_interworking {
+            self.arm_branch_taken = target & 1 == 0;
+            return Ok(target & if self.arm_branch_taken { !3 } else { !1 });
+        }
         let basic_target = if self.trustzone && target & 0xffffff82 == 0xffffff80 {
             target | 0x71
         } else if (self.cortex_m33 || self.cortex_m55) && target & 0xffff_ffa1 == 0xffff_ffa0 {
@@ -1573,6 +1579,10 @@ impl Thumb {
         (&self.fp, self.fpscr)
     }
 
+    pub(crate) fn vfp_words_mut(&mut self) -> &mut [u32; 32] {
+        &mut self.fp
+    }
+
     pub(crate) fn debug_step(
         &mut self,
         pc: &mut u32,
@@ -1915,14 +1925,18 @@ impl Thumb {
                 let rm = ((inst >> 3) & 15) as usize;
                 let target = if rm == 15 { architectural_pc } else { r[rm] };
                 if inst & 0x80 != 0 {
-                    if target & 1 == 0 {
+                    if self.arm_interworking {
+                        r[14] = next | 1;
+                        next = self.instruction_branch(target, r, bus)?;
+                    } else if target & 1 == 0 {
                         return Err(format!(
                             "branch target {target:#010x} does not select Thumb state"
                         )
                         .into());
+                    } else {
+                        r[14] = next | 1;
+                        next = target & !1;
                     }
-                    r[14] = next | 1;
-                    next = target & !1;
                 } else {
                     next = self.instruction_branch(target, r, bus)?;
                 }
@@ -2134,7 +2148,8 @@ impl Thumb {
             0xf000..=0xf7ff => {
                 let low = bus.thumb_fetch(next)?;
                 let link = low & 0xd000 == 0xd000;
-                if link || (self.thumb2 && low & 0xd000 == 0x9000) {
+                let exchange = self.arm_interworking && low & 0xd001 == 0xc000;
+                if link || exchange || (self.thumb2 && low & 0xd000 == 0x9000) {
                     let sign = (inst >> 10) & 1;
                     let i1 = 1 ^ (((low >> 13) & 1) ^ sign);
                     let i2 = 1 ^ (((low >> 11) & 1) ^ sign);
@@ -2144,10 +2159,15 @@ impl Thumb {
                         | ((inst & 0x3ff) << 12)
                         | ((low & 0x7ff) << 1);
                     let offset = (((offset << 7) as i32) >> 7) as u32;
-                    if link {
+                    if link || exchange {
                         r[14] = architectural_pc | 1;
                     }
-                    next = architectural_pc.wrapping_add(offset);
+                    next = if exchange {
+                        self.arm_branch_taken = true;
+                        (architectural_pc & !3).wrapping_add(offset)
+                    } else {
+                        architectural_pc.wrapping_add(offset)
+                    };
                 } else if self.thumb2 && low & 0xd000 == 0x8000 && (inst >> 6) & 15 < 14 {
                     let offset = ((inst & 0x400) << 10)
                         | ((low & 0x800) << 8)
