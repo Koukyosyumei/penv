@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 const ENABLE: u32 = 1;
 const TX_READY: u32 = 1 << 1;
 const RX_READY: u32 = 1 << 2;
@@ -19,7 +21,7 @@ pub struct Stm32I2c {
     pub dma_tx: u8,
     registers: [u32; 11],
     status: u32,
-    targets: Vec<(u32, Eeprom)>,
+    targets: Vec<(u32, Target)>,
     addressed: Option<usize>,
     remaining: u32,
     reading: bool,
@@ -79,6 +81,53 @@ impl Eeprom {
     }
 }
 
+enum Target {
+    Eeprom(Eeprom),
+    Fram(Rc<RefCell<Fram>>, bool),
+}
+
+pub(crate) struct Fram(Eeprom);
+
+impl Fram {
+    pub(crate) fn new() -> Self {
+        const SIZE: usize = 128 * 1024;
+        let mut memory = Eeprom::new(SIZE, 16, true, SIZE);
+        memory.data.fill(0);
+        Self(memory)
+    }
+
+    pub(crate) fn set_write_protected(&mut self, protected: bool) {
+        self.0.writable = !protected;
+    }
+}
+
+impl Target {
+    fn start_write(&mut self) {
+        match self {
+            Self::Eeprom(memory) => memory.start_write(),
+            Self::Fram(memory, high) => {
+                let mut memory = memory.borrow_mut();
+                memory.0.start_write();
+                memory.0.address_latch = usize::from(*high);
+            }
+        }
+    }
+
+    fn read(&mut self) -> u8 {
+        match self {
+            Self::Eeprom(memory) => memory.read(),
+            Self::Fram(memory, _) => memory.borrow_mut().0.read(),
+        }
+    }
+
+    fn write(&mut self, value: u8) {
+        match self {
+            Self::Eeprom(memory) => memory.write(value),
+            Self::Fram(memory, _) => memory.borrow_mut().0.write(value),
+        }
+    }
+}
+
 impl Stm32I2c {
     pub const SIZE: u32 = 0x400;
 
@@ -98,6 +147,14 @@ impl Stm32I2c {
     }
 
     pub fn attach(&mut self, address: u32, target: Eeprom) -> Result<(), String> {
+        self.attach_target(address, Target::Eeprom(target))
+    }
+
+    pub(crate) fn attach_fram(&mut self, address: u32, fram: Rc<RefCell<Fram>>, high: bool) -> Result<(), String> {
+        self.attach_target(address, Target::Fram(fram, high))
+    }
+
+    fn attach_target(&mut self, address: u32, target: Target) -> Result<(), String> {
         if address >= 1024 || self.targets.iter().any(|&(other, _)| other == address) {
             return Err(format!(
                 "invalid or duplicate I²C target address {address:#x}"
@@ -254,5 +311,35 @@ impl Stm32I2c {
         self.status |= STOPPED;
         self.addressed = None;
         self.remaining = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mb85rc1mt_relays_share_address_and_write_protection() {
+        let memory = Rc::new(RefCell::new(Fram::new()));
+        let mut low = Target::Fram(Rc::clone(&memory), false);
+        let mut high = Target::Fram(Rc::clone(&memory), true);
+
+        low.start_write();
+        for byte in [0xff, 0xff, 0xab, 0xcd] {
+            low.write(byte);
+        }
+        low.start_write();
+        for byte in [0xff, 0xff] {
+            low.write(byte);
+        }
+        assert_eq!(low.read(), 0xab);
+        assert_eq!(high.read(), 0xcd);
+
+        memory.borrow_mut().set_write_protected(true);
+        high.start_write();
+        for byte in [0, 0, 0xef] {
+            high.write(byte);
+        }
+        assert_eq!(high.read(), 0xcd);
     }
 }

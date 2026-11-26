@@ -5,6 +5,8 @@ mod stm32f0;
 mod scoped_nvic;
 
 use std::{
+    cell::RefCell,
+    rc::Rc,
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
@@ -637,6 +639,8 @@ fn load_platform(
     let mut stm32_i2cs = Vec::new();
     let mut stm32_cans = Vec::new();
     let mut i2c_eeproms = Vec::new();
+    let mut i2c_frams = HashMap::new();
+    let mut i2c_fram_relays = Vec::new();
     let mut stm32_adc = None;
     let mut stm32_regular_adcs = Vec::new();
     let mut stm32_rtc = None;
@@ -917,6 +921,14 @@ fn load_platform(
             "SPI.STP08ShiftRegister" => spi_shifts.push(entry),
             "CAN.STMCAN" => stm32_cans.push(entry),
             "I2C.STM32F7_I2C" => stm32_i2cs.push(entry),
+            "I2C.MB85RC1MT" => {
+                keys(entry, &[])?;
+                if entry.registration.is_some() {
+                    return Err(entry.error("MB85RC1MT backing device has no bus registration"));
+                }
+                i2c_frams.insert(entry.name.as_str(), Rc::new(RefCell::new(crate::stm32_i2c::Fram::new())));
+            }
+            "I2C.MB85RC1MTLo" | "I2C.MB85RC1MTHi" => i2c_fram_relays.push(entry),
             "Memory.GenericI2cEeprom" => i2c_eeproms.push(entry),
             "Timers.STM32F4_RTC" => {
                 if stm32_rtc.replace(entry).is_some() {
@@ -1495,6 +1507,14 @@ fn load_platform(
                         for (&output, input) in outputs.iter().zip(inputs) {
                             machine.bus.route_gpio_pin(port.base, output, base, input);
                         }
+                    } else if let Some(fram) = i2c_frams.get(target) {
+                        let [pin] = outputs.as_slice() else {
+                            return Err(entry.error("expected one FRAM write-protect source"));
+                        };
+                        if irq_index(inputs, 1).is_err() {
+                            return Err(entry.error("FRAM write protection requires GPIO input zero"));
+                        }
+                        machine.bus.wire_fram_write_protect(port.base, *pin, Rc::clone(fram));
                     } else if gpio_leds.iter().any(|led| led.name == target) {
                         if inputs.trim() != "0"
                             || outputs.len() != 1
@@ -1831,6 +1851,20 @@ fn load_platform(
             let address = number(address.trim()).map_err(|e| eeprom.error(&e))?;
             eeproms.entry(target).or_default().push((eeprom, address));
         }
+        let mut fram_relays = HashMap::<_, Vec<_>>::new();
+        for relay in i2c_fram_relays {
+            let (controller, address) = relay.registration.as_deref()
+                .and_then(|registration| registration.split_once(char::is_whitespace))
+                .filter(|(name, _)| stm32_i2cs.iter().any(|i2c| i2c.name == *name))
+                .ok_or_else(|| relay.error("expected STM32 I²C controller and address"))?;
+            let address = number(address.trim()).map_err(|error| relay.error(&error))?;
+            let options = keys(relay, &["mb85rc1mt"])?;
+            let [(_, parent)] = options.as_slice() else {
+                return Err(relay.error("expected MB85RC1MT backing device"));
+            };
+            let fram = i2c_frams.get(parent).ok_or_else(|| relay.error("unknown MB85RC1MT backing device"))?;
+            fram_relays.entry(controller).or_default().push((relay, address, Rc::clone(fram)));
+        }
         for i2c in stm32_i2cs {
             let mut device = Stm32I2c::new(i2c.address()?);
             for (_, text) in &i2c.body {
@@ -1873,6 +1907,10 @@ fn load_platform(
                 device
                     .attach(address, i2c_eeprom(entry)?)
                     .map_err(|e| entry.error(&e))?;
+            }
+            for (relay, address, fram) in fram_relays.remove(i2c.name.as_str()).unwrap_or_default() {
+                device.attach_fram(address, fram, relay.model == "I2C.MB85RC1MTHi")
+                    .map_err(|error| relay.error(&error))?;
             }
             machine
                 .bus

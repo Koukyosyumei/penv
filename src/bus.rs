@@ -489,6 +489,7 @@ pub struct Bus {
     nrf_leds: Vec<Option<Rc<RefCell<GpioLed>>>>,
     gpio_buttons: Vec<Option<GpioButton>>,
     gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
+    gpio_fram_write_protect: Vec<(u32, u8, Rc<RefCell<crate::stm32_i2c::Fram>>)>,
     gpio_links: Vec<(u32, u8, u32, u8)>,
     led_events: bool,
     stm32_timers: Vec<Stm32Timer>,
@@ -4953,6 +4954,15 @@ impl Bus {
         self.refresh_gpio_wiring();
     }
 
+    pub(crate) fn wire_fram_write_protect(
+        &mut self,
+        port: u32,
+        pin: u8,
+        fram: Rc<RefCell<crate::stm32_i2c::Fram>>,
+    ) {
+        self.gpio_fram_write_protect.push((port, pin, fram));
+    }
+
     pub(crate) fn refresh_gpio_wiring(&mut self) {
         if !self.gpio_links.is_empty() {
             for port in &mut self.stm32_gpios {
@@ -4968,6 +4978,12 @@ impl Bus {
                     port.wired_inputs |= 1 << input;
                 }
             }
+        }
+        for (base, pin, fram) in &self.gpio_fram_write_protect {
+            let high = self.stm32_gpios.iter().any(|port| {
+                port.base == *base && port.driven_pins() & (1 << pin) != 0
+            });
+            fram.borrow_mut().set_write_protected(high);
         }
         let previous = self.gpio_exti_levels;
         self.gpio_exti_levels = self
