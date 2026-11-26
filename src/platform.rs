@@ -679,22 +679,31 @@ fn load_platform(
                     ram = true;
                     continue;
                 }
-                let addresses = entry.addresses()?;
-                let length = number(size).map_err(|e| entry.error(&e))? as usize;
-                if entry.model == "Memory.ArrayMemory" {
-                    machine.bus.map_array_memory_views(&addresses, length)
+                let length = number(size).map_err(|e| entry.error(&e))?;
+                let registrations = memory_registrations(entry, length)?;
+                let (first_address, first_size, _) = registrations[0];
+                let addresses: Vec<_> = registrations.iter().map(|&(address, _, _)| address).collect();
+                if registrations.iter().any(|&(_, size, offset)| size != length || offset != 0) {
+                    let backing = machine.bus.allocate_ram_backing(length as usize)
+                        .map_err(|error| entry.error(&error))?;
+                    for (address, size, offset) in registrations {
+                        if u64::from(address) + u64::from(size) > 1 << 32 {
+                            return Err(entry.error("memory window exceeds RV32 address space"));
+                        }
+                        machine.bus.map_alias64(backing, u64::from(address), size as usize, offset as usize, 0, false)
+                            .map_err(|error| entry.error(&error))?;
+                        machine.bus.register_traceable_memory(&entry.name, &[address], size);
+                    }
                 } else {
-                    machine.bus.map_ram_views(&addresses, length)
+                    if entry.model == "Memory.ArrayMemory" {
+                        machine.bus.map_array_memory_views(&addresses, length as usize)
+                    } else {
+                        machine.bus.map_ram_views(&addresses, length as usize)
+                    }.map_err(|error| entry.error(&error))?;
+                    machine.bus.register_traceable_memory(&entry.name, &addresses, length);
                 }
-                .map_err(|e| entry.error(&e))?;
-                machine.bus.register_traceable_memory(
-                    &entry.name, &addresses, number(size).map_err(|e| entry.error(&e))?,
-                );
                 if entry.model == "Memory.MappedMemory" {
-                    memory_bases.insert(
-                        entry.name.as_str(),
-                        (addresses[0], number(size).map_err(|e| entry.error(&e))?),
-                    );
+                    memory_bases.insert(entry.name.as_str(), (first_address, first_size));
                 }
                 ram = true;
             }
@@ -2896,6 +2905,45 @@ fn load_platform(
     Ok(machine)
 }
 
+fn memory_registrations(entry: &Entry, length: u32) -> Result<Vec<(u32, u32, u32)>, String> {
+    let Some(registrations) = entry.registration_list() else {
+        return Ok(vec![(entry.address()?, length, 0)]);
+    };
+    if registrations.is_empty() {
+        return Err(entry.error("expected sysbus memory registrations"));
+    }
+    let parse = |value: &str| number(value.trim()).map_err(|error| entry.error(&error));
+    registrations.into_iter().map(|registration| {
+        let address = registration.strip_prefix("sysbus").filter(|text| text.starts_with(char::is_whitespace))
+            .ok_or_else(|| entry.error("expected sysbus memory registration"))?.trim();
+        if let Some(range) = address.strip_prefix('<').and_then(|text| text.strip_suffix('>')) {
+            let (base, size) = range.split_once(',').and_then(|(base, size)| Some((base, size.trim().strip_prefix('+')?)))
+                .ok_or_else(|| entry.error("expected memory registration <base, +size>"))?;
+            return Ok((parse(base)?, parse(size)?, 0));
+        }
+        if let Some(body) = address.strip_prefix("new Bus.BusRangeRegistration") {
+            let body = body.trim().strip_prefix('{').and_then(|text| text.strip_suffix('}'))
+                .ok_or_else(|| entry.error("expected memory registration properties"))?;
+            let mut address = None;
+            let mut size = None;
+            let mut offset = None;
+            for (key, value) in object_fields(body).map_err(|error| entry.error(error))? {
+                match key {
+                    "address" if address.is_none() => address = Some(parse(value)?),
+                    "size" if size.is_none() => size = Some(parse(value)?),
+                    "offset" if offset.is_none() => offset = Some(parse(value)?),
+                    _ => return Err(entry.error("unsupported or duplicate memory registration property")),
+                }
+            }
+            return match (address, size) {
+                (Some(address), Some(size)) => Ok((address, size, offset.unwrap_or(0))),
+                _ => Err(entry.error("memory range registration requires address and size")),
+            };
+        }
+        Ok((parse(address)?, length, 0))
+    }).collect()
+}
+
 fn sysbus_range(entry: &Entry, default_size: u32) -> Result<(u32, u32), String> {
     let registration = entry
         .registration
@@ -3778,6 +3826,31 @@ fn keys_in<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rv32_memory_windows_share_backing_and_apply_bounds_and_offsets() {
+        let directory = std::env::temp_dir().join(format!("penv-rv32-window-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("platform.repl");
+        fs::write(&path, r#"cpu: CPU.RiscV32 @ sysbus
+    cpuType: "rv32i"
+    timeProvider: empty
+ram: Memory.MappedMemory @ {
+    sysbus 0x10000000;
+    sysbus <0x20000000, +0x200>;
+    sysbus new Bus.BusRangeRegistration { address: 0x30000000; size: 0x200; offset: 0x100 };
+}
+    size: 0x1000
+"#).unwrap();
+        let machine = load(&path, None, false);
+        fs::remove_dir_all(directory).unwrap();
+        let mut bus = machine.unwrap().bus;
+        bus.write(0x1000_0180, 4, 0x1234_5678, &mut std::io::sink()).unwrap();
+        assert_eq!(bus.read::<4>(0x2000_0180).unwrap(), 0x1234_5678);
+        assert_eq!(bus.read::<4>(0x3000_0080).unwrap(), 0x1234_5678);
+        assert!(bus.read::<4>(0x2000_0200).is_err());
+        assert!(bus.read::<4>(0x3000_0200).is_err());
+    }
 
     #[test]
     fn parses_multiple_inline_declarations_on_one_line() {

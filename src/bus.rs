@@ -3523,12 +3523,16 @@ impl Bus {
     }
 
     pub(crate) fn set_trace_memory(&mut self, name: &str, enabled: bool) -> Result<(), String> {
-        let (_, addresses, size) = self.traceable_memory.iter()
-            .find(|(registered, _, _)| registered == name)
-            .ok_or_else(|| format!("unsupported peripheral access logging target {name:?}"))?;
+        let mut views = self.traceable_memory.iter()
+            .filter(|(registered, _, _)| registered == name).peekable();
+        if views.peek().is_none() {
+            return Err(format!("unsupported peripheral access logging target {name:?}"));
+        }
         self.traced_memory.retain(|(_, _, registered)| registered != name);
         if enabled {
-            self.traced_memory.extend(addresses.iter().map(|&base| (base, *size, name.to_owned())));
+            self.traced_memory.extend(views.flat_map(|(_, addresses, size)| {
+                addresses.iter().map(move |&base| (base, *size, name.to_owned()))
+            }));
         }
         Ok(())
     }
