@@ -4054,7 +4054,8 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                 inner.replace("\\\"", "\"")
             };
             if state.boot.started || state.boot.runtime.iter().any(|command| {
-                !matches!(command.action, Action::EmulationSeed(_))
+                !is_console_action(&command.action)
+                    && !matches!(command.action, Action::EmulationSeed(_))
             }) {
                 let action = if state.boot.multiple_machines {
                     Action::PlatformFragment(source, origin.to_owned(), root.to_owned())

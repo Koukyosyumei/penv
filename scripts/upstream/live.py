@@ -767,8 +767,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             else:
                 self.proc.stdin.write((command + "\n").encode())
             status, value = self.receive()
-            if self.rust_monitor and status == "ASSET" and PUBLIC_ASSET.fullmatch(value):
+            downloaded = set()
+            while self.rust_monitor and status == "ASSET" and PUBLIC_ASSET.fullmatch(value):
+                if value in downloaded:
+                    raise RuntimeError(f"penv still requests the already fetched asset {value}")
                 self.fetch(value)
+                downloaded.add(value)
                 self.send_monitor_frame("PENV-COMMAND", command.encode())
                 status, value = self.receive()
         except (BrokenPipeError, RuntimeError) as exc:
