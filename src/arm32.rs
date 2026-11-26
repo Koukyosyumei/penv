@@ -136,10 +136,12 @@ mod tests {
     }
 
     #[test]
-    fn arm_auxiliary_registers_remain_distinct_after_snapshot_restore() {
+    fn arm_hyp_and_guest_registers_remain_distinct_after_snapshot_restore() {
         let mut cpu = Cpu::new(Profile::RealTimeV8);
         assert_eq!(cpu.monitor_system_register("ACTLR", Some(2)).unwrap(), None);
         assert_eq!(cpu.monitor_system_register("HACTLR", Some(4)).unwrap(), None);
+        assert_eq!(cpu.monitor_system_register("VPIDR", Some(0x410f_c090)).unwrap(), None);
+        assert_eq!(cpu.monitor_system_register("VMPIDR", Some(0x8000_0200)).unwrap(), None);
 
         let mut snapshot = Vec::new();
         cpu.save_snapshot(&mut snapshot).unwrap();
@@ -149,6 +151,10 @@ mod tests {
 
         assert_eq!(restored.monitor_system_register("ACTLR", None).unwrap(), Some(2));
         assert_eq!(restored.monitor_system_register("HACTLR", None).unwrap(), Some(4));
+        assert_eq!(restored.monitor_system_register("VPIDR", None).unwrap(), Some(0x410f_c090));
+        assert_eq!(restored.monitor_system_register("MPIDR", None).unwrap(), Some(0x8000_0000));
+        restored.set_cpsr(0x13, &mut [0; 32]).unwrap();
+        assert_eq!(restored.monitor_system_register("MPIDR", None).unwrap(), Some(0x8000_0200));
     }
 
     #[test]
