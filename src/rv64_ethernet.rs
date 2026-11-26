@@ -775,6 +775,25 @@ mod tests {
     }
 
     #[test]
+    fn local_switch_delivers_frames_in_order_without_sender_echo() {
+        let switch = LocalSwitch::default();
+        let sender = switch.connect();
+        let receiver = switch.connect();
+        let mut buffer = [0; MAX_FRAME];
+        sender.send(&[1, 2, 3]);
+        sender.send(&[4, 5]);
+        assert_eq!(sender.recv(&mut buffer), None);
+        assert_eq!(receiver.recv(&mut buffer), Some(3));
+        assert_eq!(&buffer[..3], [1, 2, 3]);
+        assert_eq!(receiver.recv(&mut buffer), Some(2));
+        assert_eq!(&buffer[..2], [4, 5]);
+        drop(receiver);
+        sender.send(&[6]);
+        let reconnected = switch.connect();
+        assert_eq!(reconnected.recv(&mut buffer), None);
+    }
+
+    #[test]
     fn ethernet_snapshot_preserves_dma_and_phy_state() {
         let mut ethernet = Ethernet::new(0x1002_0000, 5);
         ethernet.attach(0, Phy::default());
