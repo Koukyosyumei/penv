@@ -1790,6 +1790,8 @@ fn run() -> Result<ExitCode, String> {
         }
         if let Some(policy) = monitor_unhandled_access {
             machine.bus.unhandled_access = Some(policy);
+        } else if monitor_stdio && machine.is_cortex_m() {
+            machine.bus.unhandled_access = Some(bus::UnhandledAccess::Report);
         }
         // The pinned Renode BaseCPU starts at 100 MIPS unless the script
         // overrides it. Configure the CPU budget and SysTick from one rate.

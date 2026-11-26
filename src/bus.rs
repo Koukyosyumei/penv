@@ -2964,6 +2964,11 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.sifive_gpios.iter().any(|gpio| {
+            overlaps_range(start, end, gpio.base, crate::sifive_gpio::SiFiveGpio::SIZE)
+        }) {
+            return true;
+        }
         if self.translated_peripherals.iter().flat_map(|device| &device.ports)
             .any(|port| overlaps_range(start, end, port.base, port.length))
         {
@@ -4351,7 +4356,7 @@ impl Bus {
         {
             return Err(BusError::AddressError(address));
         }
-        if tagged || monitor || self.unhandled_access == Some(UnhandledAccess::DoNotReport) {
+        if tagged || monitor || matches!(self.unhandled_access, Some(UnhandledAccess::Report | UnhandledAccess::DoNotReport)) {
             let mask = u32::MAX >> (32 - width * 8);
             return Ok(tag.map_or(0, |tag| tag.default as u32 & mask));
         }
@@ -6500,7 +6505,7 @@ impl Bus {
             }
             Err(BusError::Unmapped(..)) => {
                 let value = self.unhandled_value(address, N, monitor)?;
-                if monitor {
+                if monitor || self.unhandled_access == Some(UnhandledAccess::Report) {
                     self.log_unmapped_monitor_access(address, N, None);
                 }
                 Ok(value)
@@ -7325,7 +7330,13 @@ impl Bus {
                 self.log_memory_access(true, address, width, value);
                 Ok(())
             }
-            Err(BusError::Unmapped(..)) => self.unhandled_value(address, width, false).map(|_| ()),
+            Err(BusError::Unmapped(..)) => {
+                self.unhandled_value(address, width, false)?;
+                if self.unhandled_access == Some(UnhandledAccess::Report) {
+                    self.log_unmapped_monitor_access(address, width, Some(value));
+                }
+                Ok(())
+            }
             result => result,
         }
     }
