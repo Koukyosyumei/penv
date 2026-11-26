@@ -59,6 +59,13 @@ impl LpTimer {
         *self = Self::new(self.base, self.clock, self.frequency, self.irq);
     }
 
+    pub fn set_frequency(&mut self, frequency: u32) {
+        if self.frequency != frequency {
+            self.frequency = frequency;
+            self.phase = 0;
+        }
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

@@ -5133,6 +5133,15 @@ impl Bus {
         {
             systick.set_frequency(rcc.systick_frequency());
         }
+        self.refresh_stm32l0_lptimer_clock();
+    }
+
+    fn refresh_stm32l0_lptimer_clock(&mut self) {
+        if let Some(rcc) = self.stm32l0_rcc.as_ref()
+            && let Some(timer) = self.h7_lptimers.iter_mut().find(|timer| Some(timer.base) == rcc.lptimer)
+        {
+            timer.set_frequency(rcc.lptimer_frequency());
+        }
     }
 
     pub(crate) fn map_stm32l0_flash(&mut self, flash: crate::stm32l0_flash::Stm32l0Flash) -> Result<(), String> {
@@ -7907,6 +7916,8 @@ impl Bus {
             rcc.write(address, value);
             if rcc.systick_frequency() != before {
                 self.refresh_stm32l0_clock();
+            } else {
+                self.refresh_stm32l0_lptimer_clock();
             }
             return Ok(());
         }

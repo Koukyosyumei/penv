@@ -1,6 +1,7 @@
 pub(crate) struct Stm32l0Rcc {
     pub base: u32,
     pub systick: bool,
+    pub lptimer: Option<u32>,
     registers: [u32; 21],
     msi_range: u32,
     pll_multiplier: u32,
@@ -11,7 +12,7 @@ pub(crate) struct Stm32l0Rcc {
 impl Stm32l0Rcc {
     pub const SIZE: u32 = 0x400;
 
-    pub fn new(base: u32, systick: bool, hse_frequency: u32) -> Self {
+    pub fn new(base: u32, systick: bool, hse_frequency: u32, lptimer: Option<u32>) -> Self {
         let mut registers = [0; 21];
         registers[0] = 0x100;
         registers[1] = 0xb000;
@@ -20,6 +21,7 @@ impl Stm32l0Rcc {
         Self {
             base,
             systick,
+            lptimer,
             hse_frequency,
             registers,
             msi_range: 5,
@@ -29,7 +31,7 @@ impl Stm32l0Rcc {
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new(self.base, self.systick, self.hse_frequency);
+        *self = Self::new(self.base, self.systick, self.hse_frequency, self.lptimer);
     }
 
     pub fn contains(&self, address: u32) -> bool {
@@ -62,6 +64,16 @@ impl Stm32l0Rcc {
             source
         } else {
             source >> ((hpre & 7) + 1)
+        }
+    }
+
+    pub fn lptimer_frequency(&self) -> u32 {
+        match (self.registers[0x4c / 4] >> 18) & 3 {
+            0 => 32_000_000,
+            1 => 37_000,
+            2 if self.registers[0] & 8 != 0 => 4_000_000,
+            2 => 16_000_000,
+            _ => 32_768,
         }
     }
 
@@ -125,7 +137,7 @@ mod tests {
 
     #[test]
     fn oscillator_ready_and_clock_status_follow_programmed_source_and_divider() {
-        let mut rcc = Stm32l0Rcc::new(0, true, 16_000_000);
+        let mut rcc = Stm32l0Rcc::new(0, true, 16_000_000, None);
         assert_eq!(rcc.read(0), 0x300);
         assert_eq!(rcc.systick_frequency(), 2_097_152);
         rcc.write(0, 0x109);

@@ -605,6 +605,7 @@ fn load_platform(
     let mut stm32l0_flash = None;
     let mut stm32l0_rcc = None;
     let mut stm32l0_power = None;
+    let mut low_power_timers = Vec::new();
     let mut flash_controller = None;
     let mut flash_chip = None;
     let mut uart = None;
@@ -926,6 +927,7 @@ fn load_platform(
                     return Err(entry.error("only one STM32L0 flash controller is supported"));
                 }
             }
+            crate::stm32h7_lptim::LpTimer::MODEL => low_power_timers.push(entry),
             "Analog.STM32_ADC" => stm32_regular_adcs.push(entry),
             "Analog.STM32F0_ADC" => {
                 if stm32_adc.replace(entry).is_some() {
@@ -983,8 +985,35 @@ fn load_platform(
         machine.bus.map_stm32l0_power(crate::stm32l0_power::Stm32l0Power::new(entry.address()?, line))
             .map_err(|error| entry.error(&error))?;
     }
+    for entry in &low_power_timers {
+        let mut frequency = None;
+        let mut irq = None;
+        for (_, text) in &entry.body {
+            if let Some(value) = text.strip_prefix("frequency:").filter(|_| frequency.is_none()) {
+                frequency = Some(number(value.trim()).map_err(|error| entry.error(&error))?);
+                continue;
+            }
+            let (pin, target, line) = crate::stm32h7_board_platform::wire(text)
+                .map_err(|error| entry.error(error))?;
+            if irq.is_some() || !matches!(pin, "" | "IRQ") {
+                return Err(entry.error("expected at most one LPTIM IRQ"));
+            }
+            irq = Some(if exti.is_some_and(|exti| exti.name == target) {
+                crate::stm32_uart::Stm32Irq::Exti(irq_index(line, 32).map_err(|error| entry.error(&error))?)
+            } else if nvic.is_some_and(|nvic| nvic.name == target) {
+                crate::stm32_uart::Stm32Irq::Nvic(irq_index(line, 240).map_err(|error| entry.error(&error))?)
+            } else {
+                return Err(entry.error("expected LPTIM IRQ connected to EXTI or NVIC"));
+            });
+        }
+        let frequency = frequency.filter(|value| *value > 0)
+            .ok_or_else(|| entry.error("expected nonzero LPTIM frequency"))?;
+        machine.bus.map_h7_lptim(crate::stm32h7_lptim::LpTimer::new(entry.address()?, None, frequency, irq))
+            .map_err(|error| entry.error(&error))?;
+    }
     if let Some(entry) = stm32l0_rcc {
         let mut systick = false;
+        let mut lptimer = None;
         let mut hse_frequency = 16_000_000;
         for (key, value) in keys(entry, &["systick", "rtc", "lptimer", "hseFrequency"])? {
             match key {
@@ -993,6 +1022,11 @@ fn load_platform(
                         return Err(entry.error("unknown RCC SysTick target"));
                     }
                     systick = true;
+                }
+                "lptimer" => {
+                    let timer = low_power_timers.iter().find(|timer| timer.name == value)
+                        .ok_or_else(|| entry.error("unknown RCC LPTIM target"))?;
+                    lptimer = Some(timer.address()?);
                 }
                 "hseFrequency" => {
                     hse_frequency = number(value).map_err(|error| entry.error(&error))?;
@@ -1005,7 +1039,7 @@ fn load_platform(
             }
         }
         machine.bus.map_stm32l0_rcc(crate::stm32l0_rcc::Stm32l0Rcc::new(
-            entry.address()?, systick, hse_frequency,
+            entry.address()?, systick, hse_frequency, lptimer,
         )).map_err(|error| entry.error(&error))?;
     }
     if let Some(entry) = stm32l0_flash {
