@@ -40,6 +40,7 @@ pub struct Boot {
     pub cpu_control: Vec<CpuControl>,
     pub platform: Option<PathBuf>,
     inline_repl: Vec<(PathBuf, String)>,
+    preserve_repl_contents: bool,
     multiple_machines: bool,
     pub generated_repl: Option<GeneratedRepl>,
     pub session: Session,
@@ -297,6 +298,7 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
 
 enum SnapshotPlatform {
     Inline(String),
+    Embedded(String),
     File(PathBuf),
 }
 
@@ -340,7 +342,7 @@ fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<Snap
         let platform = if repl.is_file() {
             SnapshotPlatform::File(repl)
         } else if rv64_version.is_some_and(|version| version >= 7) {
-            SnapshotPlatform::Inline(crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?)
+            SnapshotPlatform::Embedded(crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?)
         } else {
             return Err("unsupported snapshot platform path".into());
         };
@@ -778,7 +780,7 @@ impl Session {
             }
             let platform = read_text(input).map_err(|error| error.to_string())?;
             let [mips, quantum] = read_words(input).map_err(|error| error.to_string())?;
-            let mut boot = Boot::default();
+            let mut boot = Boot { preserve_repl_contents: true, ..Boot::default() };
             boot.inline_repl.push((root.to_owned(), platform));
             boot.materialize_platform()?;
             let path = boot.platform.as_ref().expect("materialized snapshot platform");
@@ -933,6 +935,10 @@ impl Boot {
             writeln!(file, "using {:?}", base.to_string_lossy()).map_err(|e| e.to_string())?;
         }
         for (origin, source) in &self.inline_repl {
+            if self.preserve_repl_contents {
+                file.write_all(source.as_bytes()).map_err(|error| error.to_string())?;
+                continue;
+            }
             for line in source.lines() {
                 let relative = line.trim_start().strip_prefix("using ")
                     .and_then(|value| value.trim().strip_prefix('"')?.strip_suffix('"'));
@@ -3409,7 +3415,7 @@ fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<St
     }
     let mut script = format!("mach create \"{name}\"\n");
     match repl {
-        Some(SnapshotPlatform::Inline(repl)) => {
+        Some(SnapshotPlatform::Inline(repl) | SnapshotPlatform::Embedded(repl)) => {
             if repl.contains('\n') {
                 script.push_str(&format!("machine LoadPlatformDescriptionFromString \"\"\"{repl}\"\"\"\n"));
             } else {
@@ -4592,6 +4598,10 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                 state.boot.session.machine = selected;
                 match repl {
                     Some(SnapshotPlatform::Inline(repl)) => state.boot.inline_repl.push((origin.to_owned(), repl)),
+                    Some(SnapshotPlatform::Embedded(repl)) => {
+                        state.boot.preserve_repl_contents = true;
+                        state.boot.inline_repl.push((origin.to_owned(), repl));
+                    }
                     Some(SnapshotPlatform::File(repl)) => state.boot.platform = Some(repl),
                     None => {}
                 }
@@ -7855,7 +7865,8 @@ emulation GetTimeSourceInfo
         let dir = GeneratedRepl(directory);
         let snapshot = dir.0.join("state.save");
         let platform = dir.0.join("board.repl");
-        fs::write(&platform, concat!(
+        fs::write(&platform, "using \"base.repl\" \n").unwrap();
+        fs::write(dir.0.join("base.repl"), concat!(
             "cpu: CPU.RiscV64 @ sysbus { cpuType: \"rv64gc\"; timeProvider: empty }\n",
             "ram: Memory.MappedMemory @ sysbus 0x80000000 { size: 0x1000 }\n",
         )).unwrap();
