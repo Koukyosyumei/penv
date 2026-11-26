@@ -81,6 +81,7 @@ pub struct Session {
     machine_cleared: bool,
     number_mode: NumberMode,
     allow_privates: bool,
+    seed: u32,
     memory_symbols: HashMap<String, std::collections::BTreeSet<(u64, u64)>>,
     named_machines: NamedMachines,
     python: Option<crate::cpu_python_hook::Hook>,
@@ -717,6 +718,7 @@ enum Action {
     TimeSourceInfo,
     EmulationIsStarted,
     SingleStepBlocking(Option<bool>),
+    EmulationSeed(Option<u32>),
     PhyRegister(String, u16),
     AdxlAxis(String, usize, i16),
     LiteXLedState(String),
@@ -1071,7 +1073,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
                     | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..) | Action::WaitForTesterLines(..)
                     | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..)
-                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -1488,6 +1490,15 @@ fn run_commands<'a>(
                     return Err("the platform has no CPU".into());
                 }
                 mode.print(machine.bus.monitor_step_hz() / 1_000_000 / u64::from(machine.monitor_cpu_rate_divisor()), 4, &mut output.output).map(|()| None)
+            }
+            Action::EmulationSeed(seed) => {
+                if let Some(seed) = seed {
+                    session.seed = *seed;
+                    Ok(None)
+                } else {
+                    writeln!(output.reply(), "{}", session.seed)
+                        .map(|()| None).map_err(|error| error.to_string())
+                }
             }
             Action::SingleStepBlocking(value) => {
                 if let Some(value) = value {
@@ -2717,7 +2728,10 @@ pub fn serve(
             reply.map_err(|error| error.to_string())?;
             continue;
         }
-        if let Some(result) = builtins.execute(machine, text) {
+        let mut words = text.split_whitespace();
+        let emulation_seed = words.next() == Some("emulation")
+            && matches!(words.next(), Some("SetSeed" | "GetSeed"));
+        if !emulation_seed && let Some(result) = builtins.execute(machine, text) {
             let reply = match result {
                 Ok(body) => frame(&mut output, "OK", body.as_bytes()),
                 Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
@@ -3787,7 +3801,7 @@ fn is_monitor_snapshot_action(action: &Action) -> bool {
 fn is_empty_machine_action(action: &Action) -> bool {
     is_console_action(action) || is_monitor_snapshot_action(action) || matches!(action,
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
-        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::RunFor(_) | Action::RunUntil(_)
+        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_) | Action::RunFor(_) | Action::RunUntil(_)
         | Action::RunToSyncPoint | Action::SetEmulationPaused(_)
         | Action::ClearMemory | Action::DescribeSnapshotPlatform | Action::InvalidPythonSource(..)
         | Action::RegisterPyDev(..) | Action::SetCrashOnAbort(..))
@@ -3858,7 +3872,7 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
             is_monitor_snapshot_action(&command.action) || matches!(command.action, Action::MonitorLog(_))))
         && boot.runtime.iter().all(|command|
             is_console_action(&command.action) || is_monitor_snapshot_action(&command.action)
-                || matches!(command.action, Action::MonitorLog(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_)))
+                || matches!(command.action, Action::MonitorLog(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_)))
     {
         boot.empty_machine = true;
         return Ok(boot);
@@ -5042,6 +5056,8 @@ fn execute(
             Some(Action::SingleStepBlocking(value.first()
                 .map(|value| resolve(value).and_then(parse_tester_bool)).transpose()?))
         }
+        ["emulation", "SetSeed", value] => Some(Action::EmulationSeed(Some(crate::parse_address(resolve(value)?)?))),
+        ["emulation", "GetSeed"] => Some(Action::EmulationSeed(None)),
         ["emulation", "IsStarted"] => Some(Action::EmulationIsStarted),
         ["TestMonitorUartIdle", timeout, args @ ..] => {
             let mut tester = None;
@@ -6268,7 +6284,7 @@ fn execute(
         let empty_machine_command = *machine && !boot.has_platform() && is_empty_machine_action(&action);
         if !empty_machine_command && !is_console_action(&action) && !is_monitor_snapshot_action(&action)
             && !matches!(action, Action::MonitorLog(_) | Action::EmulationIsStarted
-                | Action::AllowPrivates(_) | Action::SetCrashOnAbort(_) | Action::SingleStepBlocking(_))
+                | Action::AllowPrivates(_) | Action::SetCrashOnAbort(_) | Action::SingleStepBlocking(_) | Action::EmulationSeed(_))
             && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
@@ -6313,7 +6329,7 @@ fn execute(
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint
-                        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_)
+                        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_)
                         | Action::DescribeSnapshotPlatform
                         | Action::SaveMemory(..)
                         | Action::ClearMemory
@@ -6346,7 +6362,7 @@ fn execute(
     if boot.started || !static_image_after_cpu_state
         && !matches!(words, ["showAnalyzer", _]) && boot.runtime.iter().any(|entry|
         !is_console_action(&entry.action) && !is_log_capture_setup(&entry.action)
-            && !matches!(entry.action, Action::AllowPrivates(_) | Action::ExecutePython(_)
+            && !matches!(entry.action, Action::EmulationSeed(_) | Action::AllowPrivates(_) | Action::ExecutePython(_)
                 | Action::PythonAssignment(..) | Action::SetCrashOnAbort(_)))
     {
         if matches!(
@@ -6545,10 +6561,6 @@ fn execute(
                 hook.clone(),
                 file.clone(),
             ));
-        }
-        ["emulation", "SetSeed", value] => {
-            // None of the supported devices consume Renode's random seed.
-            crate::parse_address64(resolve(value)?)?;
         }
         ["emulation", "SetGlobalSerialExecution", "True"] => {
             // The interpreter already executes harts serially.
