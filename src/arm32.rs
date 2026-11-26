@@ -1043,6 +1043,18 @@ impl Cpu {
         Some(self.memory_fault(address, access, pc, hyp, reason, registers))
     }
 
+    fn record_transfer_syndrome(&mut self, instruction: u32, width: usize, sign_extend: bool) {
+        let status = &mut self.fault_status[2];
+        let register = (instruction >> 12) & 15;
+        let writeback = instruction & (1 << 24) == 0 || instruction & (1 << 21) != 0;
+        if *status >> 26 == 0x24 && register != 15 && !writeback {
+            *status |= (1 << 24)
+                | (width.trailing_zeros() << 22)
+                | (u32::from(sign_extend) << 21)
+                | (register << 16);
+        }
+    }
+
     fn memory_fault(
         &mut self,
         address: u32,
@@ -2353,6 +2365,9 @@ impl Cpu {
                         if let Some(vector) =
                             self.check_protection(transfer, width, access, address, registers)
                         {
+                            if !pair && self.cpsr & 31 == 0x1a {
+                                self.record_transfer_syndrome(instruction, width, load && kind >= 2);
+                            }
                             *pc = vector;
                             return Ok(Step::Trap);
                         }
@@ -2402,6 +2417,9 @@ impl Cpu {
                     if let Some(vector) =
                         self.check_protection(target, width, access, address, registers)
                     {
+                        if self.cpsr & 31 == 0x1a {
+                            self.record_transfer_syndrome(instruction, width, false);
+                        }
                         *pc = vector;
                         return Ok(Step::Trap);
                     }
