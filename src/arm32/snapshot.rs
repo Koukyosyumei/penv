@@ -26,6 +26,7 @@ impl Cpu {
         write_words(output, &self.thread_ids.map(u64::from))?;
         write_words(output, &self.interrupt_inputs.map(u64::from))?;
         write_words(output, &self.fault_status.map(u64::from))?;
+        write_words(output, &self.auxiliary_fault_status.map(u64::from))?;
         write_words(output, &self.fault_address.map(u64::from))?;
         write_words(output, &[u64::from(self.hpfar)])?;
         self.thumb.save_snapshot(output)?;
@@ -85,6 +86,9 @@ impl Cpu {
             *flag = read_bool(value)?;
         }
         self.fault_status = read_u32s(input)?;
+        if version >= 12 {
+            self.auxiliary_fault_status = read_u32s(input)?;
+        }
         self.fault_address = read_u32s(input)?;
         if version >= 5 {
             [self.hpfar] = read_u32s(input)?;
