@@ -2831,6 +2831,9 @@ impl Hart {
                 }
             }
             if !thumb.locked_up() {
+                if bus.apply_cpu_hooks(self.pc, output).map_err(|error| error.to_string())? {
+                    return Ok(Step::Stop(Stop::Paused));
+                }
                 for (_, hook) in self
                     .monitor_hooks
                     .iter()
