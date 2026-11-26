@@ -7089,7 +7089,7 @@ impl Bus {
         Ok(())
     }
 
-    pub(crate) fn load_arm_snapshot(&mut self, input: &mut impl Read, has_testers: bool) -> io::Result<()> {
+    pub(crate) fn load_arm_snapshot(&mut self, input: &mut impl Read, version: u8) -> io::Result<()> {
         use crate::snapshot::{invalid, read_bool, read_text, read_words};
         let [events, uart_count] = read_words(input)?;
         if uart_count != self.pl011_uarts.len() as u64 {
@@ -7097,7 +7097,7 @@ impl Bus {
         }
         let mut testers = Vec::new();
         let mut defaults = None;
-        if has_testers {
+        if version >= 2 {
             let [count, selected, has_timeout, timeout, echo, next_line, pause] = read_words(input)?;
             if count > uart_count || selected != u64::MAX && selected >= count {
                 return Err(invalid("invalid snapshot UART tester count or selection"));
@@ -7119,7 +7119,7 @@ impl Bus {
             }
         }
         let mut gic = self.arm_gic.as_ref().unwrap().clone();
-        gic.load_snapshot(input)?;
+        gic.load_snapshot(input, version)?;
         let mut uarts = self.pl011_uarts.clone();
         for uart in &mut uarts {
             uart.load_snapshot(input)?;

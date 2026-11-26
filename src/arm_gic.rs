@@ -107,6 +107,7 @@ struct CpuInterface {
     affinity: u32,
     private: [Interrupt; PRIVATE_INTERRUPTS],
     enabled_groups: u8,
+    split_eoi: bool,
     priority_mask: u8,
     binary_point: [u8; 2],
     active: Vec<(u16, u8)>,
@@ -124,6 +125,7 @@ impl CpuInterface {
             affinity,
             private,
             enabled_groups: 0,
+            split_eoi: false,
             priority_mask: 0,
             binary_point: [0; 2],
             active: Vec::new(),
@@ -288,8 +290,17 @@ impl Gic {
             .is_some_and(|(active, _)| *active == id)
         {
             interface.active.pop();
-            if let Some(interrupt) = self.interrupt_mut(cpu, usize::from(id)) {
-                interrupt.active = false;
+            if !interface.split_eoi {
+                self.deactivate(cpu, id);
+            }
+        }
+    }
+
+    fn deactivate(&mut self, cpu: usize, id: u16) {
+        if let Some(interrupt) = self.interrupt_mut(cpu, usize::from(id)) {
+            interrupt.active = false;
+            if let Some(index) = usize::from(id).checked_sub(PRIVATE_INTERRUPTS) {
+                self.update_shared_candidate(index);
             }
         }
     }
@@ -359,8 +370,17 @@ impl Gic {
                 }
                 u32::from(interface.enabled_groups >> group) & 1
             }
-            (0x000c_008c, None) => 0x400, // ICC_CTLR
-            (0x000c_008c, Some(value)) if value & 2 == 0 => return Some(None),
+            (0x000c_008c, None) => 0x400 | (u32::from(interface.split_eoi) << 1), // ICC_CTLR
+            (0x000c_008c, Some(value)) => {
+                interface.split_eoi = value & 2 != 0;
+                return Some(None);
+            }
+            (0x000c_002b, Some(value)) => {
+                if interface.split_eoi {
+                    self.deactivate(cpu, (value & 0x3ff) as u16); // ICC_DIR
+                }
+                return Some(None);
+            }
             (0x000c_00ac, value) => return Some(value.is_none().then_some(7)), // ICC_SRE
             (0x008c_00a9, value) => return Some(value.is_none().then_some(15)), // ICC_HSRE
             _ => return None,
@@ -410,6 +430,7 @@ impl Gic {
                 u64::from(cpu.affinity), u64::from(cpu.enabled_groups), u64::from(cpu.priority_mask),
                 u64::from(first), u64::from(second), u64::from(cpu.processor_sleep), cpu.active.len() as u64,
             ])?;
+            write_words(output, &[u64::from(cpu.split_eoi)])?;
             for &(id, priority) in &cpu.active {
                 write_words(output, &[u64::from(id), u64::from(priority)])?;
             }
@@ -420,7 +441,7 @@ impl Gic {
         Ok(())
     }
 
-    pub(crate) fn load_snapshot(&mut self, input: &mut impl Read) -> io::Result<()> {
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl Read, snapshot_version: u8) -> io::Result<()> {
         use crate::snapshot::{invalid, read_bool, read_words};
         let [version, cpus, shared, distributor] = read_words(input)?;
         let expected_version = if self.version == Version::V3 { 3 } else { 2 };
@@ -443,6 +464,7 @@ impl Gic {
             cpu.priority_mask = byte(mask)?;
             cpu.binary_point = [byte(first)?, byte(second)?];
             cpu.processor_sleep = read_bool(sleep)?;
+            cpu.split_eoi = snapshot_version >= 6 && read_bool(read_words::<1>(input)?[0])?;
             cpu.active.clear();
             for _ in 0..active {
                 let [id, priority] = read_words(input)?;
@@ -762,6 +784,23 @@ mod tests {
         assert_eq!(gic.read_cpu_interface(1, 0x18), 37);
         gic.set_shared(5, false);
         assert_eq!(gic.read_cpu_interface(1, 0x18), 1023);
+    }
+
+    #[test]
+    fn split_end_of_interrupt_keeps_the_source_active_until_deactivation() {
+        let mut gic = Gic::new(Version::V3, 32, &[0]).unwrap();
+        gic.write_distributor(0, 0, 2);
+        gic.write_redistributor(0, 0x1_0080, 1 << 27);
+        gic.write_redistributor(0, 0x1_0100, 1 << 27);
+        gic.set_cpu_groups(0, 2);
+        gic.set_priority_mask(0, 0xff);
+        gic.set_private(0, 27, true);
+        assert_eq!(gic.access_aarch32(0, 0x000c_008c, Some(2)), Some(None));
+        assert_eq!(gic.acknowledge(0, Some(1)), 27);
+        gic.end_interrupt(0, 27);
+        assert_eq!(gic.highest_pending(0, Some(1)), SPURIOUS_INTERRUPT);
+        assert_eq!(gic.access_aarch32(0, 0x000c_002b, Some(27)), Some(None));
+        assert_eq!(gic.highest_pending(0, Some(1)), 27);
     }
 
     #[test]

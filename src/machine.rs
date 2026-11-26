@@ -1783,7 +1783,7 @@ impl Machine {
             }
             let mut arm32 = self.primary.arm32.as_ref().unwrap().clone();
             arm32.load_snapshot(input, version)?;
-            self.bus.load_arm_snapshot(input, version >= 2)?;
+            self.bus.load_arm_snapshot(input, version)?;
             self.reset_monitor_time(steps, self.monitor_quantum);
             self.bus.monitor_clock_step = steps;
             self.bus.monitor_clock_ns = u128::from(ns_low) | (u128::from(ns_high) << 64);
