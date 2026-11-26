@@ -21,11 +21,12 @@ pub struct BitManip {
     pub xandesvdot: bool,
     pub xandesvpackfph: bool,
     pub xandesvsinth: bool,
+    pub vector: bool,
 }
 
 impl BitManip {
     pub(crate) fn has_vector_execution(self) -> bool {
-        self.xandesvsintload || self.xandesvbfhcvt || self.xandesvqmac
+        self.vector || self.xandesvsintload || self.xandesvbfhcvt || self.xandesvqmac
             || self.xandesvdot || self.xandesvpackfph || self.xandesvsinth
     }
 

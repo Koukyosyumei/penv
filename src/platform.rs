@@ -2051,7 +2051,7 @@ fn load_platform(
                             "xandesvdot" if !bitmanip.xandesvdot => bitmanip.xandesvdot = true,
                             "xandesvpackfph" if !bitmanip.xandesvpackfph => bitmanip.xandesvpackfph = true,
                             "xandesvsinth" if !bitmanip.xandesvsinth => bitmanip.xandesvsinth = true,
-                            "v" if bitmanip.has_vector_execution() => {}
+                            "v" if !bitmanip.vector => bitmanip.vector = true,
                             "xandesbfhcvt" if !bitmanip.xandesbfhcvt => {
                                 bitmanip.xandesbfhcvt = true
                             }
@@ -2072,6 +2072,7 @@ fn load_platform(
                     let (letters, suffix) = base.split_at(base.find('z').unwrap_or(base.len()));
                     let letters = letters.strip_prefix("rv32").unwrap_or("");
                     let letters = letters.replace('_', "");
+                    bitmanip.vector |= letters.contains('v');
                     let general = letters.contains('g');
                     let embedded = letters.contains('e');
                     let single = general || letters.contains('f') || bitmanip.xandesbfhcvt;
@@ -2085,7 +2086,7 @@ fn load_platform(
                     let ibex_legacy = ibex && base == "rv32imcu_zicsr_zifencei";
                     if !ibex_legacy
                         && (!(general || embedded || letters.contains('i'))
-                            || !letters.chars().all(|letter| "iemafdcgb".contains(letter))
+                            || !letters.chars().all(|letter| "iemafdcgbv".contains(letter))
                             || (embedded && !letters.chars().all(|letter| "emac".contains(letter)))
                             || !valid_suffix
                             || (double && !single))
@@ -3522,6 +3523,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zcb"
                     | "xandes"
                     | "xandesperf"
+                    | "v"
                     | "xandesbfhcvt"
                     | "zacas"
                     | "zaamo"
