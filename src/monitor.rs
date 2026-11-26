@@ -6288,7 +6288,7 @@ fn execute(
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)
                         | Action::AssertCpuValue(..)
-                        | Action::ReadCpuPc(_)
+                        | Action::ReadCpuPc(_) | Action::CpuHalted(..) | Action::CpuPaused(..)
                         | Action::ExecutionMode(..)
                         | Action::CpuPc(..)
                         | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuMips(..)
