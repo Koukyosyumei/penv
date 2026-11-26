@@ -6434,6 +6434,18 @@ impl Bus {
         Ok(UartWatch::Tester(id))
     }
 
+    pub(crate) fn watch_uart_tester_lines(
+        &mut self, id: Option<usize>, patterns: Vec<crate::uart::FailingUartPattern>, unfinished: bool,
+        first_only: Option<bool>,
+    ) -> Result<UartWatch, String> {
+        let first_only = first_only.unwrap_or(self.default_uart_next_line);
+        let (id, TesterHistory::Text(history)) = self.uart_tester(id)? else {
+            return Err("Attempt to wait for text on a tester configured in binary mode.".into());
+        };
+        history.begin_multiline_wait(patterns, unfinished, first_only);
+        Ok(UartWatch::Tester(id))
+    }
+
     pub(crate) fn uart_activity(&mut self, tester: Option<usize>) -> Result<(usize, u64), String> {
         let (id, TesterHistory::Text(history)) = self.uart_tester(tester)? else {
             return Err("unsupported idle check on a binary UART tester".into());

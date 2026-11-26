@@ -802,6 +802,7 @@ enum Action {
     DefaultUartTester(Option<usize>),
     DefaultUartTimeout(u64),
     WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool, Option<bool>, Option<bool>),
+    WaitForTesterLines(UartLineSequence),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>, Option<bool>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     ClearUartTesterReport(Option<usize>),
@@ -1012,7 +1013,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
                     | Action::PythonAssignment(..) | Action::ExecutePython(..)
                     | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
-                    | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..)
+                    | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..) | Action::WaitForTesterLines(..)
                     | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..)
                     | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
@@ -2037,6 +2038,17 @@ fn run_commands<'a>(
                     }
                 })
             }
+            Action::WaitForTesterLines(sequence) => {
+                let elapsed = machine.elapsed_steps();
+                let (stop, count, matched) = sequence.wait(machine, budget, &mut output)?;
+                retired += count;
+                budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(elapsed));
+                if stop == Stop::OutputMatch && matched.is_some() {
+                    Ok(None)
+                } else {
+                    Err(format!("Terminal tester failed! UART line sequence was not received ({stop:?})"))
+                }
+            }
             Action::WaitForUart(target, pattern, end, timeout) => {
                 let start = machine.elapsed_steps();
                 let limit = timeout.map(|duration| duration_cycles(
@@ -2732,6 +2744,18 @@ pub fn serve(
                     Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
             }
+            (Ok(()), [RuntimeCommand { action: Action::WaitForTesterLines(sequence), .. }]) => {
+                match sequence.wait(machine, u64::MAX, &mut bytes) {
+                    Ok((Stop::OutputMatch, _, Some((line, Some(timestamp))))) =>
+                        frame(&mut output, "MATCHTIMEDUART", format!("{timestamp}\t{}", uart_capture_payload(&line, None)).as_bytes()),
+                    Ok((Stop::OutputMatch, _, Some((line, None)))) =>
+                        frame(&mut output, "MATCH", line.as_bytes()),
+                    Ok((Stop::Limit, _, _)) =>
+                        frame(&mut output, "FAIL", b"Terminal tester failed! UART line sequence was not received (Limit)"),
+                    Ok((stop, _, _)) => frame(&mut output, "STOP", format!("{stop:?}").as_bytes()),
+                    Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+                }
+            }
             (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups, first_only, pause), .. }]) => {
                 let result = uart_wait_cycles(machine, *id, *timeout).and_then(|cycles| {
                     let watch = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode, *first_only)?;
@@ -3052,6 +3076,41 @@ fn uart_wait_cycles(machine: &Machine, id: Option<usize>, timeout: Option<u64>) 
         None => machine.bus.uart_tester_timeout(id)?,
     };
     duration_cycles(timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
+}
+
+#[derive(Clone)]
+struct UartLineSequence {
+    tester: Option<usize>,
+    patterns: Vec<crate::uart::FailingUartPattern>,
+    timeout: Option<u64>,
+    unfinished: bool,
+    first_only: Option<bool>,
+    pause: Option<bool>,
+}
+
+impl UartLineSequence {
+    fn wait(
+        &self, machine: &mut Machine, budget: u64, output: &mut impl Write,
+    ) -> Result<(Stop, u64, Option<(String, Option<u128>)>), String> {
+        let cycles = uart_wait_cycles(machine, self.tester, self.timeout)?.min(budget);
+        let watch = machine.bus.watch_uart_tester_lines(
+            self.tester, self.patterns.clone(), self.unfinished, self.first_only,
+        )?;
+        let pause = self.pause.unwrap_or(machine.bus.default_uart_pause);
+        let result = drive_tester_watch(machine, watch, cycles, pause, output);
+        let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
+        let timestamp = if machine.bus.uart_tester_matched_unfinished_line(watch) {
+            Some(machine.monitor_elapsed_ns())
+        } else {
+            machine.bus.uart_tester_matched_timestamp(watch)
+        };
+        let matched = machine.bus.uart_tester_matched_line(watch).map(|line| (line, timestamp));
+        machine.bus.finish_stm32_uart_watch(watch);
+        if let Some(line) = failure {
+            return Err(format!("Terminal tester failed! Test failing entry has been found on UART: {line}"));
+        }
+        result.map(|(stop, count)| (stop, count, matched))
+    }
 }
 
 fn wait_for_uart_bytes(
@@ -5256,6 +5315,28 @@ fn execute(
                 options.pause,
             ))
         }
+        ["WaitForLinesOnUart", count, ..] => {
+            let prefix = text["WaitForLinesOnUart".len()..].trim_start();
+            let mut arguments = prefix[count.len()..].trim_start();
+            let count = count.parse::<usize>().ok().filter(|&count| count <= 1024)
+                .ok_or("invalid UART line sequence count")?;
+            let mut patterns = Vec::with_capacity(count);
+            for _ in 0..count {
+                let (pattern, remaining) = uart_text_argument(arguments, variables)?;
+                patterns.push(pattern);
+                arguments = remaining;
+            }
+            let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Line)?;
+            let patterns = patterns.into_iter().map(|pattern| {
+                let regex = options.regex.then(|| regex::Regex::new(&pattern)).transpose()
+                    .map_err(|error| format!("invalid UART text regex: {error}"))?;
+                Ok::<_, String>(crate::uart::FailingUartPattern { pattern, regex })
+            }).collect::<Result<_, _>>()?;
+            Some(Action::WaitForTesterLines(UartLineSequence {
+                tester: options.id, patterns, timeout: options.timeout,
+                unfinished: options.unfinished, first_only: options.first_only, pause: options.pause,
+            }))
+        }
         ["WaitForNextLineOnUart", ..] => {
             let args = text["WaitForNextLineOnUart".len()..].trim_start();
             let options = tester_wait_options(args, resolve, TesterOptionsKind::Line)?;
@@ -6028,6 +6109,7 @@ fn execute(
                         | Action::UartIdle(..)
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)
+                        | Action::WaitForTesterLines(..)
                         | Action::UsartWriteChar(..) | Action::WaitForMemory(..) | Action::BusFaultingProperty(..)
                         | Action::CheckMemory(..) | Action::AddMemorySymbol(..) | Action::ResolveMemorySymbols(..)
                         | Action::PeripheralLog(..)

@@ -437,6 +437,78 @@ impl FailingUartPattern {
     }
 }
 
+struct MultilineWait {
+    patterns: Vec<FailingUartPattern>,
+    candidates: Vec<usize>,
+    first_only: bool,
+    unfinished: bool,
+    lines_seen: usize,
+    line: Vec<u8>,
+    matched: Option<(String, bool)>,
+}
+
+impl MultilineWait {
+    fn finish_partial(&mut self) -> bool {
+        if !self.unfinished || self.matched.is_some() || self.line.is_empty() {
+            return false;
+        }
+        let last = self.patterns.len() - 1;
+        let allowed = self.candidates.contains(&last) || last == 0 && (!self.first_only || self.lines_seen == 0);
+        if !allowed {
+            return false;
+        }
+        let line = String::from_utf8_lossy(&self.line);
+        let pattern = &self.patterns[last];
+        let matches = if self.first_only {
+            pattern.regex.as_ref().map_or_else(
+                || line.starts_with(&pattern.pattern),
+                |regex| regex.find(&line).is_some_and(|found| found.start() == 0),
+            )
+        } else {
+            pattern.matches(&line)
+        };
+        if matches {
+            self.matched = Some((line.into_owned(), false));
+            return true;
+        }
+        false
+    }
+
+    fn push(&mut self, byte: u8, end: u8) -> bool {
+        if self.matched.is_some() || byte == 0 || (end == b'\n' && byte == b'\r') {
+            return false;
+        }
+        if byte != end && self.line.len() != UART_HISTORY_BYTES {
+            self.line.push(byte);
+        }
+        if byte != end {
+            return self.finish_partial();
+        }
+        let last = self.patterns.len() - 1;
+        let line = String::from_utf8_lossy(&self.line);
+        if (self.candidates.contains(&last) || last == 0 && (!self.first_only || self.lines_seen == 0))
+            && self.patterns[last].matches(&line)
+        {
+            self.matched = Some((line.into_owned(), true));
+            return true;
+        }
+        self.candidates.retain_mut(|index| {
+            if *index != last && self.patterns[*index].matches(&line) {
+                *index += 1;
+                true
+            } else {
+                false
+            }
+        });
+        if last != 0 && (!self.first_only || self.lines_seen == 0) && self.patterns[0].matches(&line) {
+            self.candidates.push(1);
+        }
+        self.lines_seen += 1;
+        self.line.clear();
+        false
+    }
+}
+
 #[derive(Default)]
 pub struct UartHistory {
     carriage_return: bool,
@@ -445,6 +517,7 @@ pub struct UartHistory {
     pub(crate) activity: u64,
     sgr: Vec<u8>,
     active: Option<UartLineMatch>,
+    multiline: Option<MultilineWait>,
     failures: Vec<FailingUartPattern>,
     failure: Option<String>,
 }
@@ -536,6 +609,7 @@ impl UartHistory {
         &mut self, pattern: &str, regex: Option<regex::Regex>, end: UartWaitMode, first_only: bool,
     ) {
         self.failure = None;
+        self.multiline = None;
         self.matched_timestamp = None;
         let mut matcher = UartLineMatch::new(pattern, regex, end, self.carriage_return, first_only);
         if self.check_failure() {
@@ -554,6 +628,36 @@ impl UartHistory {
             matcher.matched = true;
         }
         self.active = Some(matcher);
+    }
+
+    pub(crate) fn begin_multiline_wait(
+        &mut self, patterns: Vec<FailingUartPattern>, unfinished: bool, first_only: bool,
+    ) {
+        self.finish_wait();
+        let mut matcher = MultilineWait {
+            patterns,
+            candidates: Vec::new(),
+            first_only,
+            unfinished: false,
+            lines_seen: 0,
+            line: Vec::new(),
+            matched: None,
+        };
+        if matcher.patterns.is_empty() {
+            matcher.matched = Some((String::new(), true));
+        } else if !self.check_failure() {
+            let end = self.terminator();
+            if let Some(index) = self.unread.iter().position(|&(byte, _)| matcher.push(byte, end)) {
+                self.matched_timestamp = Some(self.unread[index].1);
+                self.unread.drain(..=index);
+            } else {
+                matcher.unfinished = unfinished;
+                if matcher.finish_partial() {
+                    self.unread.clear();
+                }
+            }
+        }
+        self.multiline = Some(matcher);
     }
 
     pub fn receive(&mut self, byte: u8) {
@@ -586,7 +690,10 @@ impl UartHistory {
     }
 
     fn receive_text_byte(&mut self, byte: u8, timestamp: u128) {
-        if byte == self.terminator() && self.active.is_some() && !self.matched() && !self.failures.is_empty() {
+        let end = self.terminator();
+        if byte == end && (self.active.is_some() || self.multiline.is_some())
+            && !self.matched() && !self.failures.is_empty()
+        {
             if self.unread.len() == UART_HISTORY_BYTES {
                 self.unread.pop_front();
             }
@@ -595,6 +702,14 @@ impl UartHistory {
                 return;
             }
             self.unread.pop_back();
+        }
+        if let Some(matcher) = &mut self.multiline
+            && self.failure.is_none()
+            && matcher.push(byte, end)
+        {
+            self.matched_timestamp = (byte == end).then_some(timestamp);
+            self.unread.clear();
+            return;
         }
         if let Some(matcher) = &mut self.active
             && self.failure.is_none()
@@ -618,6 +733,7 @@ impl UartHistory {
 
     pub fn matched(&self) -> bool {
         self.failure.is_some() || self.active.as_ref().is_some_and(|matcher| matcher.matched)
+            || self.multiline.as_ref().is_some_and(|matcher| matcher.matched.is_some())
     }
 
     pub(crate) fn suppress_match_captures(&self) -> bool {
@@ -626,6 +742,8 @@ impl UartHistory {
 
     pub(crate) fn matched_unfinished_line(&self) -> bool {
         self.active.as_ref().is_some_and(|active| active.matched && !active.matched_completed_line)
+            || self.multiline.as_ref().and_then(|matcher| matcher.matched.as_ref())
+                .is_some_and(|(_, completed)| !completed)
     }
 
     pub(crate) fn buffered_tail(&self) -> String {
@@ -640,12 +758,16 @@ impl UartHistory {
     }
 
     pub fn matched_line(&self) -> Option<String> {
+        if let Some((text, _)) = self.multiline.as_ref().and_then(|matcher| matcher.matched.as_ref()) {
+            return Some(text.clone());
+        }
         let matched = self.active.as_ref().filter(|active| active.matched)?;
         Some(String::from_utf8_lossy(&matched.line.iter().copied().collect::<Vec<_>>()).into_owned())
     }
 
     pub fn finish_wait(&mut self) {
         self.active = None;
+        self.multiline = None;
         self.failure = None;
         self.matched_timestamp = None;
     }
@@ -784,6 +906,25 @@ impl BinaryUartHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uart_line_sequences_require_consecutive_lines() {
+        let mut history = UartHistory::default();
+        let patterns = ["start", "value", "done"].map(|pattern| FailingUartPattern {
+            pattern: pattern.into(),
+            regex: None,
+        });
+        history.begin_multiline_wait(patterns.to_vec(), false, false);
+        for byte in b"start\nintervening\nvalue\ndone\nstart\nstart\nvalue\n" {
+            history.receive(*byte);
+        }
+        assert!(!history.matched());
+        for byte in b"done\r\n" {
+            history.receive_at(*byte, 41);
+        }
+        assert_eq!(history.matched_line().as_deref(), Some("done"));
+        assert_eq!(history.matched_timestamp(), Some(41));
+    }
 
     #[test]
     fn next_line_mismatch_keeps_both_buffered_lines() {

@@ -24,6 +24,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
         "Wait For Next Line On Uart": "wait_for_next_uart_line",
+        "Wait For Lines On Uart": "wait_for_uart_lines",
         "Wait For Bytes On Uart": "wait_for_uart_bytes",
         "PC Should Be Equal": "assert_program_counter",
         "Register Should Be Equal": "assert_cpu_register",
@@ -1014,6 +1015,26 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "matchNextLine" in options:
             command += f" matchNextLine={str(self.log_bool(options['matchNextLine'])).lower()}"
         return self.operation(command + self.uart_bool_option(options, "pauseEmulation"), uart_captures=True)
+
+    def wait_for_uart_lines(self, lines, *args):
+        if not self.rust_monitor or not isinstance(lines, (list, tuple)) or not all(
+                isinstance(line, str) for line in lines):
+            raise Unsupported("Wait For Lines On Uart requires a list of string patterns")
+        fields = ("timeout", "testerId", "treatAsRegex", "includeUnfinishedLine",
+                  "pauseEmulation", "matchFromNextLine")
+        options = self.log_options(args, set(fields), fields)
+        tester = self.parse_tester_id(options.get("testerId"))
+        arguments = [str(len(lines)), *("hex:" + line.encode().hex() for line in lines)]
+        if tester is not None:
+            arguments.append(f"testerId={tester}")
+        if "timeout" in options:
+            arguments.append(f"timeout={self.duration(options['timeout'])}")
+        for name in fields[2:]:
+            if name in options:
+                parameter = "matchNextLine" if name == "matchFromNextLine" else name
+                arguments.append(f"{parameter}={str(self.log_bool(options[name])).lower()}")
+        self.started = True
+        return self.operation("WaitForLinesOnUart " + " ".join(arguments), assertion=True, uart_captures=True)
 
     def wait_for_next_uart_line(self, *args):
         if not self.rust_monitor:
