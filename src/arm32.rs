@@ -1,5 +1,6 @@
 //! AArch32 integer execution and interworking for ARMv7-A and ARMv7-R.
 mod pmsa;
+mod snapshot;
 
 use std::io::Write;
 

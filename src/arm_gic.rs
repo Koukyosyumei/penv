@@ -1,6 +1,6 @@
 //! ARM interrupt distributor, private interrupt banks, and CPU arbitration.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, io::{self, Read, Write}};
 
 const PRIVATE_INTERRUPTS: usize = 32;
 pub(crate) const SPURIOUS_INTERRUPT: u16 = 1023;
@@ -68,11 +68,41 @@ impl Interrupt {
         self.asserted = asserted;
     }
 
+    fn save_snapshot(self, output: &mut impl Write) -> io::Result<()> {
+        let flags = u64::from(self.enabled)
+            | (u64::from(self.pending) << 1)
+            | (u64::from(self.active) << 2)
+            | (u64::from(self.asserted) << 3)
+            | (u64::from(self.edge) << 4);
+        crate::snapshot::write_words(output, &[
+            self.group as u64, u64::from(self.priority), u64::from(self.targets), self.route, flags,
+        ])
+    }
+
+    fn load_snapshot(input: &mut impl Read) -> io::Result<Self> {
+        let [group, priority, targets, route, flags] = crate::snapshot::read_words(input)?;
+        if group > 1 || flags > 31 {
+            return Err(crate::snapshot::invalid("invalid snapshot ARM interrupt state"));
+        }
+        Ok(Self {
+            group: group as usize,
+            priority: u8::try_from(priority).map_err(io::Error::other)?,
+            targets: u8::try_from(targets).map_err(io::Error::other)?,
+            route,
+            enabled: flags & 1 != 0,
+            pending: flags & 2 != 0,
+            active: flags & 4 != 0,
+            asserted: flags & 8 != 0,
+            edge: flags & 16 != 0,
+        })
+    }
+
     fn pending(self) -> bool {
         self.pending || self.asserted && !self.edge
     }
 }
 
+#[derive(Clone)]
 struct CpuInterface {
     affinity: u32,
     private: [Interrupt; PRIVATE_INTERRUPTS],
@@ -102,6 +132,7 @@ impl CpuInterface {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Gic {
     version: Version,
     distributor: u32,
@@ -363,6 +394,68 @@ impl Gic {
             }
         }
         true
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::write_words;
+        let version = if self.version == Version::V3 { 3 } else { 2 };
+        write_words(output, &[version, self.cpus.len() as u64, self.shared.len() as u64,
+            u64::from(self.distributor)])?;
+        for irq in &self.shared {
+            irq.save_snapshot(output)?;
+        }
+        for cpu in &self.cpus {
+            let [first, second] = cpu.binary_point;
+            write_words(output, &[
+                u64::from(cpu.affinity), u64::from(cpu.enabled_groups), u64::from(cpu.priority_mask),
+                u64::from(first), u64::from(second), u64::from(cpu.processor_sleep), cpu.active.len() as u64,
+            ])?;
+            for &(id, priority) in &cpu.active {
+                write_words(output, &[u64::from(id), u64::from(priority)])?;
+            }
+            for irq in &cpu.private {
+                irq.save_snapshot(output)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl Read) -> io::Result<()> {
+        use crate::snapshot::{invalid, read_bool, read_words};
+        let [version, cpus, shared, distributor] = read_words(input)?;
+        let expected_version = if self.version == Version::V3 { 3 } else { 2 };
+        if version != expected_version || cpus != self.cpus.len() as u64 || shared != self.shared.len() as u64 {
+            return Err(invalid("snapshot ARM interrupt controller differs from the platform"));
+        }
+        let distributor = u32::try_from(distributor).map_err(io::Error::other)?;
+        self.write_distributor(0, 0, distributor);
+        for index in 0..self.shared.len() {
+            self.shared[index] = Interrupt::load_snapshot(input)?;
+            self.update_shared_candidate(index);
+        }
+        let byte = |value| u8::try_from(value).map_err(io::Error::other);
+        for cpu in &mut self.cpus {
+            let [affinity, groups, mask, first, second, sleep, active] = read_words(input)?;
+            if affinity != u64::from(cpu.affinity) || active > u64::from(SPURIOUS_INTERRUPT) {
+                return Err(invalid("invalid snapshot ARM interrupt CPU interface"));
+            }
+            cpu.enabled_groups = byte(groups)?;
+            cpu.priority_mask = byte(mask)?;
+            cpu.binary_point = [byte(first)?, byte(second)?];
+            cpu.processor_sleep = read_bool(sleep)?;
+            cpu.active.clear();
+            for _ in 0..active {
+                let [id, priority] = read_words(input)?;
+                if id >= shared + PRIVATE_INTERRUPTS as u64 {
+                    return Err(invalid("invalid snapshot ARM active interrupt"));
+                }
+                cpu.active.push((id as u16, byte(priority)?));
+            }
+            for irq in &mut cpu.private {
+                *irq = Interrupt::load_snapshot(input)?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn read_window(&mut self, cpu: usize, kind: WindowKind, offset: u32) -> u32 {

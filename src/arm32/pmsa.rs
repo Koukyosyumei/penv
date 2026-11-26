@@ -88,6 +88,34 @@ pub(super) enum Fault {
 }
 
 impl Pmsa {
+    pub(super) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[self.implemented as u64, self.selector as u64])?;
+        write_words(output, &self.attributes.map(u64::from))?;
+        for region in &self.regions {
+            write_words(output, &[region.base, region.limit].map(u64::from))?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_words};
+        let [implemented, selector] = read_words(input)?;
+        if implemented != self.implemented as u64 || selector > 255 {
+            return Err(invalid("invalid snapshot ARM MPU configuration"));
+        }
+        self.selector = selector as usize;
+        let word = |value| u32::try_from(value).map_err(std::io::Error::other);
+        let [first, second] = read_words(input)?;
+        self.attributes = [word(first)?, word(second)?];
+        for region in &mut self.regions {
+            let [base, limit] = read_words(input)?;
+            region.base = word(base)?;
+            region.limit = word(limit)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn check(
         &self,
         address: u32,

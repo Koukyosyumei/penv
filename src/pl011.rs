@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, io::{self, Read, Write}};
 
 const RX_INTERRUPT: u16 = 1 << 4;
 const TX_INTERRUPT: u16 = 1 << 5;
@@ -9,6 +9,7 @@ pub(crate) enum InterruptRoute {
     Gic(u16),
 }
 
+#[derive(Clone)]
 pub(crate) struct Pl011 {
     pub(crate) base: u32,
     pub(crate) name: String,
@@ -85,6 +86,50 @@ impl Pl011 {
         };
         uart.update_rx_threshold();
         uart
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::{write_text, write_words};
+        write_text(output, &self.name)?;
+        write_words(output, &[
+            u64::from(self.base), u64::from(self.fifo_size), u64::from(self.control),
+            u64::from(self.line_control), u64::from(self.ir_low_power), u64::from(self.integer_baud),
+            u64::from(self.fractional_baud), u64::from(self.fifo_levels), u64::from(self.dma_control),
+            u64::from(self.irq_mask), u64::from(self.tx_pending), self.receive.len() as u64,
+        ])?;
+        let (first, second) = self.receive.as_slices();
+        output.write_all(first)?;
+        output.write_all(second)
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl Read) -> io::Result<()> {
+        use crate::snapshot::{invalid, read_bool, read_text, read_words};
+        let name = read_text(input)?;
+        let [base, fifo_size, control, line_control, ir_low_power, integer_baud, fractional_baud,
+            fifo_levels, dma_control, irq_mask, tx_pending, receive] = read_words(input)?;
+        if self.name != name || u64::from(self.base) != base || u64::from(self.fifo_size) != fifo_size {
+            return Err(invalid("snapshot PL011 differs from the platform"));
+        }
+        // Host input may queue multiple bytes before firmware drains the UART.
+        if receive > 16 * 1024 * 1024 {
+            return Err(invalid("snapshot PL011 input exceeds size limit"));
+        }
+        let byte = |value| u8::try_from(value).map_err(io::Error::other);
+        let halfword = |value| u16::try_from(value).map_err(io::Error::other);
+        self.control = halfword(control)?;
+        self.line_control = byte(line_control)?;
+        self.ir_low_power = byte(ir_low_power)?;
+        self.integer_baud = halfword(integer_baud)?;
+        self.fractional_baud = byte(fractional_baud)?;
+        self.fifo_levels = byte(fifo_levels)?;
+        self.dma_control = byte(dma_control)?;
+        self.irq_mask = halfword(irq_mask)?;
+        self.tx_pending = read_bool(tx_pending)?;
+        let mut bytes = vec![0; receive as usize];
+        input.read_exact(&mut bytes)?;
+        self.receive = bytes.into();
+        self.update_rx_threshold();
+        Ok(())
     }
 
     pub(crate) fn contains(&self, address: u32) -> bool {

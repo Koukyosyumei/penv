@@ -7043,6 +7043,84 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn supports_arm_snapshot(&self) -> bool {
+        self.aliases.is_empty() && self.rv64_reservations.iter().all(Option::is_none)
+            && self.pydevs.is_empty() && self.arm_gic.is_some()
+    }
+
+    pub(crate) fn save_arm_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[self.arm_events, self.pl011_uarts.len() as u64])?;
+        self.arm_gic.as_ref().unwrap().save_snapshot(output)?;
+        for uart in &self.pl011_uarts {
+            uart.save_snapshot(output)?;
+        }
+        write_words(output, &[self.regions.len() as u64])?;
+        let zero_page = [0; 4096];
+        for region in &self.regions {
+            write_words(output, &[region.base, region.bytes.len() as u64])?;
+            for (index, page) in region.bytes.chunks(zero_page.len()).enumerate() {
+                if page != &zero_page[..page.len()] {
+                    write_words(output, &[index as u64])?;
+                    output.write_all(page)?;
+                }
+            }
+            write_words(output, &[u64::MAX])?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_arm_snapshot(&mut self, input: &mut impl Read) -> io::Result<()> {
+        use crate::snapshot::{invalid, read_words};
+        let [events, uart_count] = read_words(input)?;
+        if uart_count != self.pl011_uarts.len() as u64 {
+            return Err(invalid("snapshot PL011 count differs from the platform"));
+        }
+        let mut gic = self.arm_gic.as_ref().unwrap().clone();
+        gic.load_snapshot(input)?;
+        let mut uarts = self.pl011_uarts.clone();
+        for uart in &mut uarts {
+            uart.load_snapshot(input)?;
+        }
+        let [regions] = read_words(input)?;
+        if regions != self.regions.len() as u64 {
+            return Err(invalid("snapshot RAM count differs from the platform"));
+        }
+        let mut contents = Vec::with_capacity(self.regions.len());
+        for region in &self.regions {
+            let [base, length] = read_words(input)?;
+            if base != region.base || length != region.bytes.len() as u64 {
+                return Err(invalid("snapshot RAM layout differs from the platform"));
+            }
+            let mut memory = vec![0; region.bytes.len()];
+            let mut next_page = 0;
+            loop {
+                let [index] = read_words(input)?;
+                if index == u64::MAX {
+                    break;
+                }
+                if index < next_page || index >= length.div_ceil(4096) {
+                    return Err(invalid("invalid snapshot RAM page"));
+                }
+                let offset = index as usize * 4096;
+                let end = memory.len().min(offset + 4096);
+                input.read_exact(&mut memory[offset..end])?;
+                next_page = index + 1;
+            }
+            contents.push(memory);
+        }
+        if input.read(&mut [0])? != 0 {
+            return Err(invalid("trailing snapshot data"));
+        }
+        for (region, contents) in self.regions.iter_mut().zip(contents) {
+            region.bytes = contents;
+        }
+        self.arm_events = events;
+        self.arm_gic = Some(gic);
+        self.pl011_uarts = uarts;
+        Ok(())
+    }
+
     pub fn save_memory(&self, output: &mut impl Write) -> io::Result<()> {
         output.write_all(&(self.regions.len() as u64).to_le_bytes())?;
         for region in &self.regions {

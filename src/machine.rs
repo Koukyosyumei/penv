@@ -1488,6 +1488,7 @@ impl Machine {
         input.read_exact(&mut header).map_err(|error| error.to_string())?;
         if Self::cpu_less_snapshot_format(&header).is_ok()
             || Self::cortex_snapshot_has_registers(&header).is_ok()
+            || &header == crate::snapshot::ARM32_MAGIC
             || &header == crate::snapshot::RV64_MAGIC
             || &header == crate::snapshot::CORTEX_MAGIC
         {
@@ -1722,6 +1723,83 @@ impl Machine {
         read().map_err(|error| error.to_string())
     }
 
+    pub(crate) fn arm32_snapshot_platform(&self) -> Result<&std::path::Path, String> {
+        if self.primary.arm32.as_ref().is_none_or(|cpu| !cpu.is_v8r())
+            || !self.secondary.is_empty() || !self.bus.supports_arm_snapshot()
+            || self.recorder.is_some() || !self.replay.is_empty() || !self.inputs.is_empty()
+            || !self.python_hooks.is_empty() || !self.halt_hooks.is_empty() || self.pc_trace.is_some()
+            || self.profile.is_some() || !self.uart_device_events.is_empty() || !self.reset_steps.is_empty()
+        {
+            return Err("unsupported snapshot platform or pending AArch32 operations".into());
+        }
+        self.monitor_platform.as_deref().ok_or_else(|| "unsupported snapshot platform without a REPL file".into())
+    }
+
+    fn write_arm32_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
+        use crate::snapshot::{ARM32_MAGIC, write_text, write_words};
+        let platform = self.arm32_snapshot_platform()?;
+        let mut write = || -> std::io::Result<()> {
+            output.write_all(ARM32_MAGIC)?;
+            write_text(output, &platform.to_string_lossy())?;
+            write_text(output, self.primary.name.as_deref().unwrap_or_default())?;
+            let nanos = self.monitor_elapsed_ns();
+            write_words(output, &[self.elapsed_steps(), nanos as u64, (nanos >> 64) as u64,
+                u64::from(self.monitor_active), u64::from(self.halted), u64::from(self.stop_when_halted),
+                u64::from(self.primary.monitor_paused), u64::from(self.primary.monitor_halted),
+                u64::from(self.primary.monitor_single_step), u64::from(self.monitor_single_step_blocking),
+                u64::from(self.cpu_paused), u64::from(self.cpu_halted), u64::from(self.cpu_clock_stopped),
+                u64::from(self.primary.pc_written), u64::from(self.primary.pc)])?;
+            write_words(output, &self.primary.registers.map(u64::from))?;
+            self.primary.arm32.as_ref().unwrap().save_snapshot(output)?;
+            self.bus.save_arm_snapshot(output)
+        };
+        write().map_err(|error| error.to_string())
+    }
+
+    fn read_arm32_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
+        use crate::snapshot::{invalid, read_bool, read_text, read_words};
+        let platform = self.arm32_snapshot_platform()?.to_owned();
+        let mut read = || -> std::io::Result<()> {
+            if std::path::Path::new(&read_text(input)?) != platform
+                || read_text(input)? != self.primary.name.as_deref().unwrap_or_default()
+            {
+                return Err(invalid("AArch32 snapshot platform is different"));
+            }
+            let [steps, ns_low, ns_high, active, halted, stop_when_halted, paused, hart_halted,
+                single_step, step_blocking, cpu_paused, cpu_halted, clock_stopped, pc_written, pc] =
+                read_words(input)?;
+            let halted = u8::try_from(halted).map_err(std::io::Error::other)?;
+            let [active, stop_when_halted, paused, hart_halted, single_step, step_blocking,
+                cpu_paused, cpu_halted, clock_stopped, pc_written] = [
+                    active, stop_when_halted, paused, hart_halted, single_step, step_blocking,
+                    cpu_paused, cpu_halted, clock_stopped, pc_written,
+                ].map(read_bool);
+            let flags = [active?, stop_when_halted?, paused?, hart_halted?, single_step?,
+                step_blocking?, cpu_paused?, cpu_halted?, clock_stopped?, pc_written?];
+            let pc = u32::try_from(pc).map_err(std::io::Error::other)?;
+            let mut registers = [0; 32];
+            for (destination, value) in registers.iter_mut().zip(read_words::<32>(input)?) {
+                *destination = u32::try_from(value).map_err(std::io::Error::other)?;
+            }
+            let mut arm32 = self.primary.arm32.as_ref().unwrap().clone();
+            arm32.load_snapshot(input)?;
+            self.bus.load_arm_snapshot(input)?;
+            self.reset_monitor_time(steps, self.monitor_quantum);
+            self.bus.monitor_clock_step = steps;
+            self.bus.monitor_clock_ns = u128::from(ns_low) | (u128::from(ns_high) << 64);
+            self.halted = halted;
+            [self.monitor_active, self.stop_when_halted, self.primary.monitor_paused,
+                self.primary.monitor_halted, self.primary.monitor_single_step, self.monitor_single_step_blocking,
+                self.cpu_paused, self.cpu_halted, self.cpu_clock_stopped, self.primary.pc_written] = flags;
+            self.primary.pc = pc;
+            self.primary.registers = registers;
+            self.primary.arm32 = Some(arm32);
+            self.boot_memory_cleared = false;
+            Ok(())
+        };
+        read().map_err(|error| error.to_string())
+    }
+
     pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
         if self.boot_memory_cleared {
             return Err("Load a boot snapshot after Clear".into());
@@ -1731,6 +1809,9 @@ impl Machine {
         }
         if self.primary.rv64.is_some() {
             return self.write_rv64_snapshot(output);
+        }
+        if self.primary.arm32.is_some() {
+            return self.write_arm32_snapshot(output);
         }
         if self.elapsed_steps() != 0 {
             return self.write_cortex_live_snapshot(output);
@@ -1774,6 +1855,9 @@ impl Machine {
         }
         let mut header = [0; 9];
         input.read_exact(&mut header).map_err(|error| error.to_string())?;
+        if &header == crate::snapshot::ARM32_MAGIC {
+            return self.read_arm32_snapshot(input);
+        }
         if &header == crate::snapshot::CORTEX_MAGIC {
             return self.read_cortex_live_snapshot(input);
         }

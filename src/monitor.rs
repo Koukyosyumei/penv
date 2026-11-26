@@ -303,8 +303,8 @@ fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<Snap
         let repl = crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?;
         return Ok(((!metadata.selected.is_empty()).then_some(metadata.selected), Some(SnapshotPlatform::Inline(repl))));
     }
-    if header.starts_with(crate::snapshot::RV64_MAGIC) {
-        let metadata = metadata.ok_or("RV64 snapshot requires monitor metadata")?;
+    if header.starts_with(crate::snapshot::RV64_MAGIC) || header.starts_with(crate::snapshot::ARM32_MAGIC) {
+        let metadata = metadata.ok_or("native CPU snapshot requires monitor metadata")?;
         if metadata.cpu_mips.is_none_or(|mips| mips == 0) {
             return Err("invalid RV64 snapshot rate".into());
         }
@@ -549,7 +549,7 @@ impl Session {
             let cpu_mips = match cpu_mips {
                 None => None,
                 Some(0) if machine.cpu_less => None,
-                Some(mips) if (machine.is_cortex_m() || machine.primary.rv64.is_some())
+                Some(mips) if (machine.is_cortex_m() || machine.primary.rv64.is_some() || machine.primary.arm32.is_some())
                     && mips != 0 && mips.checked_mul(1_000_000)
                         .and_then(|rate| rate.checked_mul(machine.monitor_cpu_rate_divisor())).is_some() => Some(mips),
                 _ => return Err("invalid snapshot CPU speed".into()),
@@ -2982,6 +2982,9 @@ fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<St
 fn snapshot_platform(machine: &Machine) -> Result<Option<SnapshotPlatform>, String> {
     if machine.is_cortex_m() && machine.elapsed_steps() != 0 {
         return machine.cortex_snapshot_platform().map(|repl| Some(SnapshotPlatform::Inline(repl)));
+    }
+    if machine.primary.arm32.is_some() {
+        return machine.arm32_snapshot_platform().map(|path| Some(SnapshotPlatform::File(path.to_owned())));
     }
     if !machine.cpu_less {
         return machine.rv64_snapshot_platform().map(|path| Some(SnapshotPlatform::File(path.to_owned())));
