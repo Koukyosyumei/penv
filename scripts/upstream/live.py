@@ -75,6 +75,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.default_tester = None
         self.led = None
         self.led_timeout = None
+        self.crash_on_abort_enabled = True
         self.buffer = b""
 
     states = None
@@ -85,7 +86,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
 
     def crash_on_abort(self, value):
         if self.rust_monitor:
-            self.operation(f"SetCrashOnAbort {str(self.log_bool(value)).lower()}")
+            self.crash_on_abort_enabled = self.log_bool(value)
+            if self.proc is not None:
+                self.operation(f"SetCrashOnAbort {str(self.crash_on_abort_enabled).lower()}")
         else:
             super().crash_on_abort(value)
 
@@ -671,7 +674,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             return
         startup = None
         if self.rust_monitor:
-            startup = ("\n".join(self.commands) + "\n").encode("utf-8")
+            commands = self.commands if self.crash_on_abort_enabled else [*self.commands, "SetCrashOnAbort false"]
+            startup = ("\n".join(commands) + "\n").encode("utf-8")
             (self.out / "boot.resc").write_bytes(startup)
         if not self.rust_monitor and not self.script and (not self.commands or not (self.platform or self.inline)):
             raise Unsupported("requires a single machine and platform")
