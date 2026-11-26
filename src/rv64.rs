@@ -589,7 +589,7 @@ impl Rv64 {
                     _ => return Err(illegal),
                 };
                 let address = lhs.wrapping_add(fields.immediate());
-                self.trace_stack_access(fields, address, width, false);
+                self.trace_stack_access(bus, fields, address, width, false);
                 let loaded = self.load(bus, address, width)?;
                 Some(if kind < 4 {
                     sign(loaded, width as u32 * 8)
@@ -604,7 +604,7 @@ impl Rv64 {
                 }
                 let immediate = ((instruction >> 25) << 5) | ((instruction >> 7) & 31);
                 let address = lhs.wrapping_add(sign(u64::from(immediate), 12));
-                self.trace_stack_access(fields, address, 1 << kind, true);
+                self.trace_stack_access(bus, fields, address, 1 << kind, true);
                 self.store(bus, address, 1 << kind, rhs, output)?;
                 None
             }
@@ -752,7 +752,15 @@ impl Rv64 {
         Ok(Step::Retired)
     }
 
-    fn trace_stack_access(&self, inst: Instruction, address: u64, width: usize, write: bool) {
+    fn trace_stack_access(&self, bus: &mut Bus, inst: Instruction, address: u64, width: usize, write: bool) {
+        if inst.rs1() == 2
+            && let Some(mut hook) = bus.stack_access_hooks.remove(&self.hart_id)
+        {
+            if let Err(error) = hook.execute_stack(bus, self.pc, address, width * 8, write) {
+                crate::monitor_log::record(3, &format!("Stack access hook: {error}"));
+            }
+            bus.stack_access_hooks.insert(self.hart_id, hook);
+        }
         if inst.rs1() == 2
             && let Some(name) = &self.stack_access_trace_name
         {
@@ -1089,7 +1097,7 @@ impl Rv64 {
             }
             return Ok(previous);
         }
-        self.trace_stack_access(inst, address, width, !load);
+        self.trace_stack_access(bus, inst, address, width, !load);
         let physical =
             self.translations
                 .translate(bus, &self.privilege, address, width, permission)?;

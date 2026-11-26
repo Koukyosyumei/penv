@@ -379,6 +379,7 @@ enum PeripheralRunState {
 pub struct Bus {
     monitor_log_level: Option<i8>,
     pub monitor_user_state: String,
+    pub(crate) stack_access_hooks: BTreeMap<usize, crate::cpu_python_hook::Hook>,
     traceable_memory: Vec<(String, Vec<u32>, u32)>,
     traced_memory: Vec<(u32, u32, String)>,
     #[cfg(test)]

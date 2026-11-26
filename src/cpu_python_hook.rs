@@ -49,7 +49,10 @@ scope = dict(machine=Machine(), cpu=cpu, self=cpu, LogLevel=level)
 program = compile(sys.argv[1], '<CPU address hook>', 'exec')
 print('ready', flush=True)
 for line in sys.stdin:
-    scope['pc'] = int(line)
+    fields = line.split()
+    scope['pc'] = int(fields[0])
+    if len(fields) == 4:
+        scope.update(address=int(fields[1]), width=int(fields[2]), is_write=fields[3] == 'true')
     try:
         with contextlib.redirect_stdout(sys.stderr):
             # RPCs must use the original stdout while ordinary prints go to stderr.
@@ -64,7 +67,8 @@ pub(crate) struct Hook {
     child: Child,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
-    symbols: PathBuf,
+    symbols: Option<PathBuf>,
+    logger: Option<String>,
 }
 
 pub(crate) fn symbol(file: &Path, name: &str) -> Result<u64, String> {
@@ -87,7 +91,7 @@ pub(crate) fn symbol(file: &Path, name: &str) -> Result<u64, String> {
 }
 
 impl Hook {
-    pub(crate) fn new(source: &str, symbols: PathBuf) -> Result<Self, String> {
+    pub(crate) fn new(source: &str, symbols: Option<PathBuf>, logger: Option<String>) -> Result<Self, String> {
         let mut child = Command::new("python3")
             .args(["-u", "-c", WORKER, source])
             .stdin(Stdio::piped())
@@ -101,6 +105,7 @@ impl Hook {
             input,
             output,
             symbols,
+            logger,
         };
         if hook.reply()? != "ready" {
             return Err("CPU Python hook failed to initialize".into());
@@ -122,7 +127,15 @@ impl Hook {
     }
 
     pub(crate) fn execute(&mut self, bus: &mut Bus, pc: u64) -> Result<(), String> {
-        writeln!(self.input, "{pc}").map_err(|e| e.to_string())?;
+        self.invoke(bus, format_args!("{pc}"))
+    }
+
+    pub(crate) fn execute_stack(&mut self, bus: &mut Bus, pc: u64, address: u64, width: usize, write: bool) -> Result<(), String> {
+        self.invoke(bus, format_args!("{pc} {address} {width} {write}"))
+    }
+
+    fn invoke(&mut self, bus: &mut Bus, arguments: std::fmt::Arguments<'_>) -> Result<(), String> {
+        writeln!(self.input, "{arguments}").map_err(|e| e.to_string())?;
         loop {
             let request = self.reply()?;
             let (kind, argument) = request.split_once(' ').unwrap_or((&request, ""));
@@ -137,7 +150,7 @@ impl Hook {
                     return Ok(());
                 }
                 "symbol" => decode(argument)
-                    .and_then(|name| symbol(&self.symbols, &name))
+                    .and_then(|name| symbol(self.symbols.as_deref().ok_or("no firmware ELF for symbol lookup")?, &name))
                     .map(|address| address.to_string()),
                 "byte" => argument
                     .parse::<u32>()
@@ -157,7 +170,12 @@ impl Hook {
                     .ok_or_else(|| "invalid log request".to_string())
                     .and_then(|(level, text)| {
                         let level = level.parse::<i8>().map_err(|e| e.to_string())?;
-                        emit(bus, level, &decode(text)?);
+                        let message = decode(text)?;
+                        if let Some(logger) = &self.logger {
+                            emit(bus, level, &format!("{logger}: {message}"));
+                        } else {
+                            emit(bus, level, &message);
+                        }
                         Ok(String::new())
                     }),
                 _ => Err(format!("unsupported CPU hook request {kind}")),

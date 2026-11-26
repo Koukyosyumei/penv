@@ -533,6 +533,7 @@ enum Action {
     CpuMips(u32),
     ReadCpuMips(NumberMode),
     TraceStackAccess(String),
+    AddStackAccessHook(String, String),
     VectorRegisterLength(String, u64),
     CpuCondition(String, u32),
     CpuXpsr(String),
@@ -912,6 +913,7 @@ fn run_commands<'a>(
                     .map(|()| None).map_err(|error| error.to_string())
             }),
             Action::VectorRegisterLength(cpu, bits) => machine.configure_rv64_vlen(cpu, *bits).map(|()| None),
+            Action::AddStackAccessHook(cpu, source) => machine.install_stack_access_hook(cpu, source).map(|()| None),
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
             Action::CpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
             Action::ReadCpuMips(mode) => {
@@ -3669,6 +3671,10 @@ fn execute(
         [cpu, "VectorRegisterLength", bits] if boot.started => Some(Action::VectorRegisterLength(
             cpu.trim_start_matches("sysbus.").to_owned(),
             crate::parse_address64(resolve(bits)?)?,
+        )),
+        [cpu, "AddPreStackAccessHook", source] => Some(Action::AddStackAccessHook(
+            resolve(cpu)?.trim_start_matches("sysbus.").to_owned(),
+            monitor_string(resolve(source)?).ok_or("expected quoted stack access hook source")?,
         )),
         ["TraceStackAccess", cpu] if boot.started => Some(Action::TraceStackAccess(
             cpu.trim_start_matches("sysbus.").to_owned(),

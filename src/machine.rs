@@ -509,6 +509,15 @@ impl Machine {
         vector.set_length(bits).map_err(str::to_owned)
     }
 
+    pub(crate) fn install_stack_access_hook(&mut self, name: &str, source: &str) -> Result<(), String> {
+        let index = self.rv64_hart_by_name(name)?;
+        let cpu = self.hart_mut(index).rv64.as_ref().expect("validated RV64 CPU");
+        let hart_id = cpu.hart_id;
+        let hook = crate::cpu_python_hook::Hook::new(source, self.monitor_firmware.clone(), Some(name.to_owned()))?;
+        self.bus.stack_access_hooks.insert(hart_id, hook);
+        Ok(())
+    }
+
     pub(crate) fn enable_rv64_stack_access_trace(&mut self, name: &str) -> Result<(), String> {
         let id = self.rv64_hart_by_name(name)?;
         self.hart_mut(id).rv64.as_mut().expect("validated RV64 CPU").stack_access_trace_name =
@@ -557,7 +566,7 @@ impl Machine {
         let index = std::iter::once(&self.primary).chain(&self.secondary)
             .position(|hart| hart.name.as_deref() == Some(name))
             .ok_or_else(|| format!("unknown hook CPU {name:?}"))?;
-        self.python_hooks.push((index, pc, crate::cpu_python_hook::Hook::new(source, file)?));
+        self.python_hooks.push((index, pc, crate::cpu_python_hook::Hook::new(source, Some(file), None)?));
         Ok(())
     }
 
