@@ -1,5 +1,7 @@
 //! ARM interrupt distributor, private interrupt banks, and CPU arbitration.
 
+use std::collections::BTreeSet;
+
 const PRIVATE_INTERRUPTS: usize = 32;
 pub(crate) const SPURIOUS_INTERRUPT: u16 = 1023;
 
@@ -104,6 +106,7 @@ pub(crate) struct Gic {
     version: Version,
     distributor: u32,
     shared: Vec<Interrupt>,
+    shared_candidates: BTreeSet<usize>,
     cpus: Vec<CpuInterface>,
 }
 
@@ -120,6 +123,7 @@ impl Gic {
             version,
             distributor: 0,
             shared: vec![Interrupt::default(); shared_count],
+            shared_candidates: BTreeSet::new(),
             cpus: affinities.iter().copied().map(CpuInterface::new).collect(),
         })
     }
@@ -149,8 +153,23 @@ impl Gic {
     }
 
     pub(crate) fn set_shared(&mut self, input: usize, asserted: bool) {
-        if let Some(interrupt) = self.shared.get_mut(input) {
+        if let Some(interrupt) = self.shared.get_mut(input)
+            && interrupt.asserted != asserted
+        {
             interrupt.set_input(asserted);
+            self.update_shared_candidate(input);
+        }
+    }
+
+    fn update_shared_candidate(&mut self, index: usize) {
+        if self
+            .shared
+            .get(index)
+            .is_some_and(|interrupt| interrupt.enabled && interrupt.pending())
+        {
+            self.shared_candidates.insert(index);
+        } else {
+            self.shared_candidates.remove(&index);
         }
     }
 
@@ -194,15 +213,11 @@ impl Gic {
             .iter()
             .enumerate()
             .filter(|(_, interrupt)| eligible(interrupt))
-            .chain(
-                self.shared
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, interrupt)| {
-                        (eligible(interrupt) && self.routed(cpu, interrupt))
-                            .then_some((index + PRIVATE_INTERRUPTS, interrupt))
-                    }),
-            )
+            .chain(self.shared_candidates.iter().filter_map(|&index| {
+                let interrupt = &self.shared[index];
+                (eligible(interrupt) && self.routed(cpu, interrupt))
+                    .then_some((index + PRIVATE_INTERRUPTS, interrupt))
+            }))
             .min_by_key(|(id, interrupt)| (interrupt.priority, *id))
             .map_or(SPURIOUS_INTERRUPT, |(id, _)| id as u16)
     }
@@ -224,6 +239,9 @@ impl Gic {
             interrupt.pending = false;
             interrupt.active = true;
             let priority = interrupt.priority;
+            if let Some(index) = usize::from(id).checked_sub(PRIVATE_INTERRUPTS) {
+                self.update_shared_candidate(index);
+            }
             self.cpus[cpu].active.push((id, priority));
         }
         id
@@ -427,6 +445,16 @@ impl Gic {
                 }
             }
             _ => return false,
+        }
+        let changed_range = match offset {
+            0x100..=0x2fc if word != 0 => Some((word * 32, 32)),
+            0xc00..=0xcfc if offset >= 0xc08 => Some((((offset - 0xc00) / 4) as usize * 16, 16)),
+            _ => None,
+        };
+        if let Some((first, count)) = changed_range {
+            for id in first..first + count {
+                self.update_shared_candidate(id - PRIVATE_INTERRUPTS);
+            }
         }
         true
     }

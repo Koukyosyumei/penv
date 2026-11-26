@@ -19,6 +19,13 @@ const I: u32 = 1 << 7;
 const A: u32 = 1 << 8;
 const FLAGS: u32 = N | Z | C | V;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sleep {
+    Awake,
+    Interrupt,
+    Event,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Profile {
     Application,
@@ -45,6 +52,24 @@ mod tests {
             .unwrap();
         assert_eq!(pc, 0x200);
         assert_eq!(cpu.cpsr() & (T | 31), T | 0x1a);
+    }
+
+    #[test]
+    fn arm_system_mode_can_restore_an_exception_frame() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        let mut output = Vec::new();
+        bus.write(0, 4, 0xf8bd_0a00, &mut output).unwrap(); // RFEIA sp!
+        bus.write(0x100, 4, 0x200, &mut output).unwrap();
+        bus.write(0x104, 4, 0x10 | T, &mut output).unwrap();
+        let mut registers = [0; 32];
+        cpu.set_cpsr(0x1f, &mut registers).unwrap();
+        registers[13] = 0x100;
+        let mut pc = 0;
+        cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output)
+            .unwrap();
+        assert_eq!((pc, cpu.cpsr(), registers[13]), (0x200, 0x10 | T, 0x108));
     }
 
     #[test]
@@ -276,6 +301,7 @@ pub(crate) struct Cpu {
     elr_hyp: u32,
     pmsa: Option<[pmsa::Pmsa; 2]>,
     interrupt_inputs: [bool; 2],
+    sleep: Sleep,
     fault_status: [u32; 3],
     fault_address: [u32; 4],
     debug_status: u32,
@@ -312,6 +338,7 @@ impl Cpu {
             pmsa: matches!(profile, Profile::RealTimeV8)
                 .then(|| [pmsa::Pmsa::new(16), pmsa::Pmsa::new(16)]),
             interrupt_inputs: [false; 2],
+            sleep: Sleep::Awake,
             fault_status: [0; 3],
             fault_address: [0; 4],
             debug_status: 0,
@@ -753,10 +780,10 @@ impl Cpu {
         output: &mut impl Write,
     ) -> Result<u32, String> {
         let current = Self::bank_for(self.cpsr).unwrap();
-        if current == 0 || current == 6 {
+        let load = instruction & (1 << 20) != 0;
+        if self.cpsr & 31 == 0x10 || current == 6 || !load && current == 0 {
             return Ok(self.undefined(next, registers));
         }
-        let load = instruction & (1 << 20) != 0;
         let before = instruction & (1 << 24) != 0;
         let increment = instruction & (1 << 23) != 0;
         let writeback = instruction & (1 << 21) != 0;
@@ -1126,6 +1153,16 @@ impl Cpu {
             .map_or((false, false), |gic| gic.cpu_inputs(slot));
         let fiq = self.interrupt_inputs[1] || gic_fiq;
         let irq = self.interrupt_inputs[0] || gic_irq;
+        if self.sleep != Sleep::Awake {
+            let event = self.sleep == Sleep::Event && bus.arm_events & (1 << slot) != 0;
+            if !event && !fiq && !irq {
+                return Ok(Step::Trap);
+            }
+            if event {
+                bus.arm_events &= !(1 << slot);
+            }
+            self.sleep = Sleep::Awake;
+        }
         if self.cpsr & F == 0 && fiq {
             *pc = self.exception(0x11, 0x1c, pc.wrapping_add(4), registers);
             return Ok(Step::AsynchronousException);
@@ -1216,6 +1253,14 @@ impl Cpu {
             let rn = ((instruction >> 16) & 15) as usize;
             let rd = ((instruction >> 12) & 15) as usize;
             match instruction {
+                _ if instruction & 0x0fff_fff0 == 0x0320_f000 => match instruction & 15 {
+                    2 if bus.arm_events & (1 << slot) != 0 => bus.arm_events &= !(1 << slot),
+                    2 => self.sleep = Sleep::Event,
+                    3 => self.sleep = Sleep::Interrupt,
+                    4 => bus.arm_events = u64::MAX,
+                    5 if self.is_v8r() => bus.arm_events |= 1 << slot,
+                    _ => {}
+                },
                 _ if matches!(instruction & 0x0ff0_f0f0, 0x0710_f010 | 0x0730_f010) => {
                     let lhs = (instruction & 15) as usize;
                     let rhs = ((instruction >> 8) & 15) as usize;

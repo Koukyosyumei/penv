@@ -474,6 +474,7 @@ pub struct Bus {
     miv_uart: Option<crate::uart::MiVUart>,
     pl011_uarts: Vec<crate::pl011::Pl011>,
     pub(crate) arm_gic: Option<crate::arm_gic::Gic>,
+    pub(crate) arm_events: u64,
     arm_gic_windows: Vec<crate::arm_gic::Window>,
     miv_gpios: Vec<crate::miv::Gpio>,
     miv_timers: Vec<crate::miv::Timer>,
