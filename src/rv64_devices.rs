@@ -42,6 +42,103 @@ pub struct Devices {
 }
 
 // Backing value for the CacheConfig_WayEnable Python peripheral in polarfire-soc.repl.
+pub(crate) struct UartSnapshot {
+    receive: VecDeque<u8>,
+    tx_control: u32,
+    rx_control: u32,
+    enable: u32,
+    divisor: u32,
+    scoped_bases: [Option<u32>; MAX_HARTS],
+}
+
+pub(crate) struct DeviceSnapshot {
+    uarts: Vec<UartSnapshot>,
+    lines: [u64; MAX_HARTS],
+    input_uart: usize,
+    reset_requested: bool,
+}
+
+impl Devices {
+    pub(crate) fn supports_snapshot(&self) -> bool {
+        self.plic.is_none() && self.ethernet.is_empty() && self.gems.is_empty()
+            && self.reset_generators.is_empty() && self.mpfs_i2c.is_empty() && self.mpfs_qspi.is_empty()
+            && self.mpfs_gpio.is_empty() && self.mpfs_usb.is_empty() && self.fire_ihc.is_none()
+            && self.mpfs_sd.is_empty() && self.mpfs_watchdogs.is_empty() && self.mpfs_spi.is_empty()
+            && self.mpfs_ddr.is_empty() && self.mpfs_sysreg.is_none() && self.mpfs_cache_way_enable.is_none()
+            && self.starlight_reset_pin.is_none()
+            && self.uarts.iter().all(|uart| matches!(uart.kind, UartKind::SiFive { .. }))
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::{invalid, write_text, write_words};
+        if !self.supports_snapshot() {
+            return Err(invalid("RV64 snapshot has unsupported peripheral state"));
+        }
+        write_words(output, &[self.uarts.len() as u64, self.input_uart as u64, u64::from(self.reset_requested)])?;
+        write_words(output, &self.lines)?;
+        for uart in &self.uarts {
+            let UartKind::SiFive { receive, tx_control, rx_control, enable, divisor } = &uart.kind else {
+                unreachable!("snapshot preflight checks UART type");
+            };
+            write_text(output, &uart.name)?;
+            write_words(output, &[
+                u64::from(uart.base), uart.harts, u64::from(*tx_control), u64::from(*rx_control),
+                u64::from(*enable), u64::from(*divisor), receive.len() as u64,
+            ])?;
+            write_words(output, &uart.scoped_bases.map(|base| base.map_or(1 << 32, u64::from)))?;
+            let (a, b) = receive.as_slices();
+            output.write_all(a)?;
+            output.write_all(b)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn read_snapshot(&self, input: &mut impl std::io::Read) -> io::Result<DeviceSnapshot> {
+        use crate::snapshot::{invalid, read_bool, read_text, read_words};
+        let [count, input_uart, reset] = read_words(input)?;
+        if !self.supports_snapshot() || count != self.uarts.len() as u64 || input_uart >= count.max(1) {
+            return Err(invalid("RV64 peripheral layout differs from the snapshot"));
+        }
+        let lines = read_words(input)?;
+        let mut uarts = Vec::with_capacity(self.uarts.len());
+        for uart in &self.uarts {
+            if read_text(input)? != uart.name {
+                return Err(invalid("RV64 UART name differs from the snapshot"));
+            }
+            let [base, harts, tx, rx, enable, divisor, length] = read_words(input)?;
+            if base != u64::from(uart.base) || harts != uart.harts || length > 1 << 20 {
+                return Err(invalid("invalid RV64 UART registration or receive buffer"));
+            }
+            let mut scoped_bases = [None; MAX_HARTS];
+            for base in &mut scoped_bases {
+                let [value] = read_words(input)?;
+                if value != 1 << 32 {
+                    *base = Some(u32::try_from(value).map_err(io::Error::other)?);
+                }
+            }
+            let mut receive = vec![0; length as usize];
+            input.read_exact(&mut receive)?;
+            let word = |value| u32::try_from(value).map_err(io::Error::other);
+            uarts.push(UartSnapshot { receive: receive.into(), tx_control: word(tx)?, rx_control: word(rx)?,
+                enable: word(enable)?, divisor: word(divisor)?, scoped_bases });
+        }
+        Ok(DeviceSnapshot { uarts, lines, input_uart: input_uart as usize, reset_requested: read_bool(reset)? })
+    }
+
+    pub(crate) fn restore_snapshot(&mut self, snapshot: DeviceSnapshot) {
+        self.lines = snapshot.lines;
+        self.input_uart = snapshot.input_uart;
+        self.reset_requested = snapshot.reset_requested;
+        for (uart, saved) in self.uarts.iter_mut().zip(snapshot.uarts) {
+            uart.scoped_bases = saved.scoped_bases;
+            uart.kind = UartKind::SiFive {
+                receive: saved.receive, tx_control: saved.tx_control, rx_control: saved.rx_control,
+                enable: saved.enable, divisor: saved.divisor,
+            };
+        }
+    }
+}
+
 pub struct MpfsCacheWayEnable {
     pub base: u32,
     value: u64,

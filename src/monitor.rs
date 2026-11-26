@@ -271,17 +271,36 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
     Ok(Some(SnapshotMetadata { selected, user_state, number_mode, machine_cleared, quantum, cpu_mips, variables, macros, aliases }))
 }
 
-fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<String>), String> {
+enum SnapshotPlatform {
+    Inline(String),
+    File(PathBuf),
+}
+
+fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<SnapshotPlatform>), String> {
     let mut input = open_snapshot_input(path)?;
-    let selected = match read_snapshot_metadata(&mut input)? {
+    let metadata = read_snapshot_metadata(&mut input)?;
+    let header = input.fill_buf().map_err(|error| error.to_string())?;
+    if header.starts_with(crate::snapshot::RV64_MAGIC) {
+        let metadata = metadata.ok_or("RV64 snapshot requires monitor metadata")?;
+        if metadata.cpu_mips.is_none_or(|mips| mips == 0) {
+            return Err("invalid RV64 snapshot rate".into());
+        }
+        input.consume(crate::snapshot::RV64_MAGIC.len());
+        let repl = PathBuf::from(crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?);
+        if !repl.is_absolute() || repl.extension().is_none_or(|extension| extension != "repl") || !repl.is_file() {
+            return Err("unsupported snapshot platform path".into());
+        }
+        return Ok(((!metadata.selected.is_empty()).then_some(metadata.selected), Some(SnapshotPlatform::File(repl))));
+    }
+    let selected = match metadata {
         Some(metadata) if metadata.cpu_mips == Some(0) => {
             (!metadata.selected.is_empty()).then_some(metadata.selected)
         }
         None => None,
-        Some(_) => return Err("unsupported snapshot platform bootstrap outside empty or TrivialUart CPU-less machines".into()),
+        Some(_) => return Err("unsupported snapshot platform format".into()),
     };
     let repl = Machine::read_cpu_less_snapshot_platform(&mut input)?
-        .map(|(address, uart)| trivial_uart_snapshot_repl(address, &uart))
+        .map(|(address, uart)| trivial_uart_snapshot_repl(address, &uart).map(SnapshotPlatform::Inline))
         .transpose()?;
     Ok((selected, repl))
 }
@@ -408,7 +427,9 @@ impl Session {
             let cpu_mips = match cpu_mips {
                 None => None,
                 Some(0) if machine.cpu_less => None,
-                Some(mips) if machine.is_cortex_m() && mips != 0 && mips.checked_mul(1_000_000).is_some() => Some(mips),
+                Some(mips) if (machine.is_cortex_m() || machine.primary.rv64.is_some())
+                    && mips != 0 && mips.checked_mul(1_000_000)
+                        .and_then(|rate| rate.checked_mul(machine.monitor_cpu_rate_divisor())).is_some() => Some(mips),
                 _ => return Err("invalid snapshot CPU speed".into()),
             };
             for key in ["global.CWD", "global.ORIGIN"] {
@@ -2391,7 +2412,7 @@ pub fn serve(
                         ((Stop::Limit, _), _) => {
                             let buffered = machine.bus.uart_tester_buffered_tail(watch).unwrap_or_default();
                             Ok(("FAIL", format!(
-                                "Terminal tester failed! UART line containing {expected:?} was not received (Limit)\nVirtual time: {} to {}\nBuffered UART tail: {buffered:?}",
+                                "InvalidOperationException: Terminal tester failed! UART line containing {expected:?} was not received (Limit)\nVirtual time: {} to {}\nBuffered UART tail: {buffered:?}",
                                 monitor_timestamp(started_at), monitor_timestamp(machine.monitor_elapsed_ns()),
                             )))
                         }
@@ -2442,8 +2463,8 @@ pub fn serve(
                     {
                         frame(&mut output, "REJECTED", error.as_bytes())
                     }
-                    Err(error) if error.starts_with("<monitor>:1: KeywordException: ") => {
-                        let message = error.strip_prefix("<monitor>:1: ").unwrap();
+                    Err(error) if error.starts_with("KeywordException: ") || error.starts_with("<monitor>:1: KeywordException: ") => {
+                        let message = error.strip_prefix("<monitor>:1: ").unwrap_or(&error);
                         frame(&mut output, "REJECTED", message.as_bytes())
                     }
                     Err(error) if error.starts_with("<monitor>:1: memory assertion did not match") => {
@@ -2482,22 +2503,30 @@ fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<St
         return Err("unsupported snapshot platform name for monitor bootstrap".into());
     }
     let mut script = format!("mach create \"{name}\"\n");
-    if let Some(repl) = repl {
-        script.push_str(&format!("machine LoadPlatformDescriptionFromString \"{repl}\"\n"));
+    match repl {
+        Some(SnapshotPlatform::Inline(repl)) => {
+            script.push_str(&format!("machine LoadPlatformDescriptionFromString \"{repl}\"\n"));
+        }
+        Some(SnapshotPlatform::File(repl)) => {
+            let repl = repl.to_str().filter(|path| !path.chars().any(|c| c.is_control() || matches!(c, '"' | '\\')))
+                .ok_or("unsupported snapshot platform path")?;
+            script.push_str(&format!("machine LoadPlatformDescription \"{repl}\"\n"));
+        }
+        None => {}
     }
     Ok(script)
 }
 
-fn snapshot_platform(machine: &Machine) -> Result<Option<String>, String> {
+fn snapshot_platform(machine: &Machine) -> Result<Option<SnapshotPlatform>, String> {
     if !machine.cpu_less {
-        return Err("unsupported snapshot platform bootstrap outside empty or TrivialUart CPU-less machines".into());
+        return machine.rv64_snapshot_platform().map(|path| Some(SnapshotPlatform::File(path.to_owned())));
     }
     if machine.empty_monitor {
         return Ok(None);
     }
     let (address, uart) = machine.bus.snapshot_trivial_uart()
         .map_err(|error| format!("unsupported snapshot platform: {error}"))?;
-    trivial_uart_snapshot_repl(address, uart).map(Some)
+    trivial_uart_snapshot_repl(address, uart).map(|repl| Some(SnapshotPlatform::Inline(repl)))
 }
 
 fn trivial_uart_snapshot_repl(address: u32, uart: &str) -> Result<String, String> {
@@ -3546,8 +3575,10 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                     .map_err(|e| error(&format!("{}: {e}", snapshot.display())))?;
                 state.machine = true;
                 state.boot.session.machine = selected;
-                if let Some(repl) = repl {
-                    state.boot.inline_repl.push((origin.to_owned(), repl));
+                match repl {
+                    Some(SnapshotPlatform::Inline(repl)) => state.boot.inline_repl.push((origin.to_owned(), repl)),
+                    Some(SnapshotPlatform::File(repl)) => state.boot.platform = Some(repl),
+                    None => {}
                 }
                 state.boot.runtime.push(RuntimeCommand {
                     line: line + 1, source: path.to_owned(), action: Action::LoadMemory(SnapshotPath::Fixed(snapshot)),

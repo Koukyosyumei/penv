@@ -146,6 +146,66 @@ pub struct Privilege {
 }
 
 impl Privilege {
+    pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        use crate::snapshot::write_words;
+        let mode = match self.mode { Mode::User => 0, Mode::Supervisor => 1, Mode::Machine => 3 };
+        write_words(output, &[
+            mode, self.menvcfg, self.senvcfg, self.status, self.satp, u64::from(self.fcsr),
+            self.medeleg, self.mideleg, self.enable, self.pending, self.platform_interrupts, self.injected,
+            self.counter_enable, self.supervisor_counter_enable, self.inhibit, self.cycle,
+            self.retired, self.time, u64::from(self.bpm.is_some()), self.bpm.unwrap_or(0),
+            u64::from(self.pmp.is_some()), u64::from(self.vector.is_some()),
+        ])?;
+        for trap in [&self.machine, &self.supervisor] {
+            write_words(output, &[u64::from(trap.vector.is_some()), trap.vector.unwrap_or(0),
+                trap.scratch, trap.epc, trap.cause, trap.value])?;
+        }
+        if let Some(pmp) = &self.pmp { pmp.save_snapshot(output)?; }
+        if let Some(vector) = &self.vector { vector.save_snapshot(output)?; }
+        Ok(())
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_bool, read_words};
+        let [mode, menvcfg, senvcfg, status, satp, fcsr, medeleg, mideleg, enable, pending,
+            platform_interrupts, injected, counter_enable, supervisor_counter_enable, inhibit,
+            cycle, retired, time, bpm_present, bpm, pmp_present, vector_present] = read_words(input)?;
+        if read_bool(pmp_present)? != self.pmp.is_some() || read_bool(vector_present)? != self.vector.is_some() {
+            return Err(invalid("snapshot CPU extensions differ from the platform"));
+        }
+        self.mode = match mode {
+            0 => Mode::User,
+            1 => Mode::Supervisor,
+            3 => Mode::Machine,
+            _ => return Err(invalid("invalid snapshot CPU mode")),
+        };
+        self.menvcfg = menvcfg;
+        self.senvcfg = senvcfg;
+        self.status = status;
+        self.satp = satp;
+        self.fcsr = u8::try_from(fcsr).map_err(std::io::Error::other)?;
+        self.medeleg = medeleg;
+        self.mideleg = mideleg;
+        self.enable = enable;
+        self.pending = pending;
+        self.platform_interrupts = platform_interrupts;
+        self.injected = injected;
+        self.counter_enable = counter_enable;
+        self.supervisor_counter_enable = supervisor_counter_enable;
+        self.inhibit = inhibit;
+        self.cycle = cycle;
+        self.retired = retired;
+        self.time = time;
+        self.bpm = read_bool(bpm_present)?.then_some(bpm);
+        for trap in [&mut self.machine, &mut self.supervisor] {
+            let [present, vector, scratch, epc, cause, value] = read_words(input)?;
+            *trap = Trap { vector: read_bool(present)?.then_some(vector), scratch, epc, cause, value };
+        }
+        if let Some(pmp) = &mut self.pmp { pmp.load_snapshot(input)?; }
+        if vector_present != 0 { self.vector = Some(Box::new(VectorState::load_snapshot(input)?)); }
+        Ok(())
+    }
+
     pub(crate) fn initialize_renode_reset_status(&mut self, floating_point: bool) {
         self.renode_menvcfg = self.levels != Levels::Machine;
         self.machine.vector.get_or_insert(u64::from(crate::csr::DEFAULT_MTVEC));
@@ -628,6 +688,36 @@ impl Pmp {
         let mut pmp = Self::new(entries, address_bits);
         pmp.allow_when_inactive = true;
         pmp
+    }
+
+    fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[
+            self.config.len() as u64, self.address_mask, self.active, self.mseccfg.map_or(256, u64::from),
+        ])?;
+        output.write_all(&self.config)?;
+        write_words(output, &self.address)
+    }
+
+    fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_words};
+        let [entries, mask, active, security] = read_words(input)?;
+        if entries != self.config.len() as u64 || mask != self.address_mask
+            || security > 256 || (security == 256) != self.mseccfg.is_none()
+        {
+            return Err(invalid("snapshot PMP configuration differs from the platform"));
+        }
+        input.read_exact(&mut self.config)?;
+        for address in &mut self.address {
+            let [value] = read_words(input)?;
+            if value & !mask != 0 {
+                return Err(invalid("invalid snapshot PMP address"));
+            }
+            *address = value;
+        }
+        self.active = active;
+        self.mseccfg = (security < 256).then_some(security as u8);
+        Ok(())
     }
 
     pub fn enable_smepmp(&mut self) {

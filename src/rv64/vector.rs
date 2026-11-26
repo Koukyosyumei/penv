@@ -22,6 +22,22 @@ impl Default for VectorState {
 }
 
 impl VectorState {
+    pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        crate::snapshot::write_words(output, &[self.bits, self.start, self.control, self.length, self.kind])?;
+        output.write_all(&self.registers)
+    }
+
+    pub(crate) fn load_snapshot(input: &mut impl std::io::Read) -> std::io::Result<Self> {
+        let [bits, start, control, length, kind] = crate::snapshot::read_words(input)?;
+        let mut state = Self::new(bits).map_err(crate::snapshot::invalid)?;
+        input.read_exact(&mut state.registers)?;
+        state.start = start;
+        state.control = control;
+        state.length = length;
+        state.kind = kind;
+        Ok(state)
+    }
+
     pub(crate) fn new(bits: u64) -> Result<Self, &'static str> {
         Self::validate_length(bits)?;
         Ok(Self {

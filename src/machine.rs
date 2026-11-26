@@ -145,6 +145,7 @@ pub struct Machine {
     elapsed_steps: u64,
     boot_memory_cleared: bool,
     pub(crate) monitor_firmware: Option<std::path::PathBuf>,
+    pub(crate) monitor_platform: Option<std::path::PathBuf>,
     pub(crate) monitor_quantum: u64,
     cpu_paused: bool,
     cpu_halted: bool,
@@ -431,6 +432,7 @@ impl Machine {
             monitor_single_step_blocking: true,
             boot_memory_cleared: false,
             monitor_firmware: None,
+            monitor_platform: None,
             monitor_quantum: DEFAULT_MONITOR_QUANTUM,
             cpu_paused: false,
             cpu_halted: false,
@@ -1369,7 +1371,10 @@ impl Machine {
     pub(crate) fn validate_boot_snapshot_header(input: &mut impl Read) -> Result<(), String> {
         let mut header = [0; 9];
         input.read_exact(&mut header).map_err(|error| error.to_string())?;
-        if Self::cpu_less_snapshot_format(&header).is_ok() || Self::cortex_snapshot_has_registers(&header).is_ok() {
+        if Self::cpu_less_snapshot_format(&header).is_ok()
+            || Self::cortex_snapshot_has_registers(&header).is_ok()
+            || &header == crate::snapshot::RV64_MAGIC
+        {
             Ok(())
         } else {
             Err("unknown snapshot format".into())
@@ -1423,12 +1428,111 @@ impl Machine {
         self.bus.uart_clock_step = steps;
     }
 
+    pub(crate) fn rv64_snapshot_platform(&self) -> Result<&std::path::Path, String> {
+        if self.primary.rv64.is_none() || !self.bus.supports_rv64_snapshot()
+            || self.recorder.is_some() || !self.replay.is_empty() || !self.inputs.is_empty()
+            || !self.python_hooks.is_empty() || !self.halt_hooks.is_empty() || self.pc_trace.is_some()
+            || self.profile.is_some() || !self.uart_device_events.is_empty() || !self.external_cpus.is_empty()
+        {
+            return Err("unsupported snapshot platform or pending RV64 operations".into());
+        }
+        self.monitor_platform.as_deref().ok_or_else(|| "unsupported snapshot platform without a REPL file".into())
+    }
+
+    fn write_rv64_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
+        use crate::snapshot::{RV64_MAGIC, write_text, write_words};
+        let platform = self.rv64_snapshot_platform()?;
+        let mut write = || -> std::io::Result<()> {
+            output.write_all(RV64_MAGIC)?;
+            write_text(output, &platform.to_string_lossy())?;
+            write_text(output, &self.monitor_firmware.as_deref().map_or_else(
+                std::borrow::Cow::default, std::path::Path::to_string_lossy,
+            ))?;
+            let nanos = self.monitor_elapsed_ns();
+            write_words(output, &[self.hart_count() as u64, self.elapsed_steps(), nanos as u64, (nanos >> 64) as u64,
+                self.next_hart as u64, u64::from(self.halted), u64::from(self.monitor_active),
+                u64::from(self.monitor_single_step_blocking), u64::from(self.stop_when_halted),
+                u64::from(self.cpu_paused), u64::from(self.cpu_halted), u64::from(self.cpu_clock_stopped)])?;
+            for hart in std::iter::once(&self.primary).chain(&self.secondary) {
+                write_text(output, hart.name.as_deref().unwrap_or_default())?;
+                write_words(output, &[u64::from(hart.monitor_halted), u64::from(hart.monitor_paused),
+                    u64::from(hart.monitor_single_step)])?;
+                hart.rv64.as_ref().unwrap().save_snapshot(output)?;
+            }
+            self.bus.rv64_devices.save_snapshot(output)?;
+            self.bus.save_rv64_memory_snapshot(output)
+        };
+        write().map_err(|error| error.to_string())
+    }
+
+    fn read_rv64_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
+        use crate::snapshot::{RV64_MAGIC, invalid, read_bool, read_text, read_words};
+        let platform = self.rv64_snapshot_platform()?.to_owned();
+        let mut read = || -> std::io::Result<()> {
+            let mut header = [0; 9];
+            input.read_exact(&mut header)?;
+            if &header != RV64_MAGIC || std::path::Path::new(&read_text(input)?) != platform {
+                return Err(invalid("RV64 snapshot was created for a different platform"));
+            }
+            let firmware = read_text(input)?;
+            let [harts, steps, ns_low, ns_high, next, halted, active, single_step, stop_when_halted,
+                cpu_paused, cpu_halted, clock_stopped] = read_words(input)?;
+            if harts != self.hart_count() as u64 || next >= harts || halted >= 1 << harts {
+                return Err(invalid("invalid RV64 snapshot scheduler"));
+            }
+            let active = read_bool(active)?;
+            let single_step = read_bool(single_step)?;
+            let stop_when_halted = read_bool(stop_when_halted)?;
+            let cpu_paused = read_bool(cpu_paused)?;
+            let cpu_halted = read_bool(cpu_halted)?;
+            let clock_stopped = read_bool(clock_stopped)?;
+            let mut cpus = Vec::with_capacity(self.hart_count());
+            for hart in std::iter::once(&self.primary).chain(&self.secondary) {
+                if hart.name.as_deref().unwrap_or_default() != read_text(input)? {
+                    return Err(invalid("invalid CPU name in RV64 snapshot"));
+                }
+                let [halt, pause, single] = read_words(input)?;
+                let mut cpu = hart.rv64.as_ref().unwrap().clone();
+                cpu.load_snapshot(input)?;
+                cpus.push((cpu, read_bool(halt)?, read_bool(pause)?, read_bool(single)?));
+            }
+            let devices = self.bus.rv64_devices.read_snapshot(input)?;
+            self.bus.load_rv64_memory_snapshot(input)?;
+            for (hart, (cpu, halt, pause, single)) in std::iter::once(&mut self.primary)
+                .chain(&mut self.secondary).zip(cpus)
+            {
+                hart.rv64 = Some(cpu);
+                hart.monitor_halted = halt;
+                hart.monitor_paused = pause;
+                hart.monitor_single_step = single;
+            }
+            self.bus.rv64_devices.restore_snapshot(devices);
+            self.reset_monitor_time(steps, self.monitor_quantum);
+            self.bus.monitor_clock_step = steps;
+            self.bus.monitor_clock_ns = u128::from(ns_low) | (u128::from(ns_high) << 64);
+            self.next_hart = next as usize;
+            self.halted = halted as u8;
+            self.monitor_active = active;
+            self.monitor_single_step_blocking = single_step;
+            self.stop_when_halted = stop_when_halted;
+            self.cpu_paused = cpu_paused;
+            self.cpu_halted = cpu_halted;
+            self.cpu_clock_stopped = clock_stopped;
+            self.monitor_firmware = (!firmware.is_empty()).then(|| firmware.into());
+            Ok(())
+        };
+        read().map_err(|error| error.to_string())
+    }
+
     pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
         if self.boot_memory_cleared {
             return Err("Load a boot snapshot after Clear".into());
         }
         if self.cpu_less {
             return self.write_cpu_less_snapshot(output);
+        }
+        if self.primary.rv64.is_some() {
+            return self.write_rv64_snapshot(output);
         }
         self.check_memory_snapshot()?;
         (|| -> std::io::Result<()> {
@@ -1463,6 +1567,9 @@ impl Machine {
     pub(crate) fn read_boot_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
         if self.cpu_less {
             return self.read_cpu_less_snapshot(input);
+        }
+        if self.primary.rv64.is_some() {
+            return self.read_rv64_snapshot(input);
         }
         self.check_memory_snapshot()?;
         let mut load = || -> std::io::Result<_> {

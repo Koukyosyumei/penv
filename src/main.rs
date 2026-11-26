@@ -126,6 +126,7 @@ mod rv64_priv;
 mod rv64_starfive;
 mod rv64_vm;
 mod semihosting;
+mod snapshot;
 mod simulation;
 mod stm32_adc;
 mod stm32_can;
@@ -2316,6 +2317,7 @@ fn run() -> Result<ExitCode, String> {
     }
     let command_budget = max_steps.unwrap_or(if machine.cpu_less { u64::MAX } else { 10_000_000 });
     machine.monitor_firmware.clone_from(&path);
+    machine.monitor_platform.clone_from(&platform_path);
     if let Some(quantum) = monitor_quantum {
         machine.monitor_quantum = quantum;
     }

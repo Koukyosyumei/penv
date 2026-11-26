@@ -6510,6 +6510,77 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn supports_rv64_snapshot(&self) -> bool {
+        self.clint.is_none() && self.rv64_devices.supports_snapshot()
+            && self.rv64_tohost.is_none() && self.robot_tohost.is_none()
+            && self.policy_tags.is_empty() && self.pydevs.is_empty()
+            && self.riscv_machine_timer.is_none() && self.clic.is_none()
+            && self.translated_peripherals.is_empty()
+            && !self.traceable_memory.iter().any(|(_, addresses, _)| addresses.is_empty())
+    }
+
+    pub(crate) fn save_rv64_memory_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[self.aliases.len() as u64])?;
+        for alias in &self.aliases {
+            write_words(output, &[alias.base, alias.length as u64, alias.backing as u64,
+                alias.offset as u64, alias.harts, u64::from(alias.cluster)])?;
+        }
+        for reservation in self.rv64_reservations {
+            if let Some(r) = reservation {
+                write_words(output, &[1, r.guest, r.backing as u64, r.offset as u64, r.width as u64])?;
+            } else {
+                write_words(output, &[0; 5])?;
+            }
+        }
+        self.save_memory(output)
+    }
+
+    pub(crate) fn load_rv64_memory_snapshot(&mut self, input: &mut impl Read) -> io::Result<()> {
+        use crate::snapshot::{invalid, read_bool, read_words};
+        let [count] = read_words(input)?;
+        if count != self.aliases.len() as u64 {
+            return Err(invalid("RV64 snapshot contains a different RAM registration layout"));
+        }
+        let mut bases = Vec::with_capacity(self.aliases.len());
+        for alias in &self.aliases {
+            let [base, length, backing, offset, harts, cluster] = read_words(input)?;
+            if length != alias.length as u64 || backing != alias.backing as u64
+                || offset != alias.offset as u64 || harts != alias.harts || read_bool(cluster)? != alias.cluster
+                || base.checked_add(length).is_none() || (harts == 0 || alias.cluster) && base != alias.base
+            {
+                return Err(invalid("invalid RAM window in RV64 snapshot"));
+            }
+            bases.push(base);
+        }
+        for (index, alias) in self.aliases.iter().enumerate() {
+            if self.aliases[..index].iter().zip(&bases[..index]).any(|(other, &other_base)| {
+                alias.harts & other.harts != 0 && bases[index] < other_base + other.length as u64
+                    && other_base < bases[index] + alias.length as u64
+            }) {
+                return Err(invalid("overlapping CPU-scoped RAM windows in RV64 snapshot"));
+            }
+        }
+        let mut reservations = [None; crate::machine::MAX_HARTS];
+        for slot in &mut reservations {
+            let [present, guest, backing, offset, width] = read_words(input)?;
+            if read_bool(present)? {
+                let region = usize::try_from(backing).ok().and_then(|index| self.regions.get(index))
+                    .ok_or_else(|| invalid("invalid snapshot reservation backing"))?;
+                if !matches!(width, 4 | 8) || offset.checked_add(width).is_none_or(|end| end > region.bytes.len() as u64) {
+                    return Err(invalid("invalid snapshot reservation range"));
+                }
+                *slot = Some(Reservation64 { guest, backing: backing as usize, offset: offset as usize, width: width as usize });
+            }
+        }
+        self.restore_memory(input)?;
+        for (alias, base) in self.aliases.iter_mut().zip(bases) {
+            alias.base = base;
+        }
+        self.rv64_reservations = reservations;
+        Ok(())
+    }
+
     pub fn save_memory(&self, output: &mut impl Write) -> io::Result<()> {
         output.write_all(&(self.regions.len() as u64).to_le_bytes())?;
         for region in &self.regions {

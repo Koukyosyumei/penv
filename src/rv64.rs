@@ -65,6 +65,43 @@ pub struct Isa {
     bitmanip: bitmanip::Extensions,
 }
 
+impl Rv64 {
+    pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> std::io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[
+            self.pc, self.reset_vector, u64::from(self.reset_vector_configured),
+            u64::from(self.pc_follows_reset_vector), u64::from(self.waiting),
+            u64::from(self.wfi_as_nop), u64::from(self.allow_unaligned),
+        ])?;
+        crate::snapshot::write_text(output, &self.isa.llvm_features())?;
+        write_words(output, &self.registers)?;
+        write_words(output, &self.floating)?;
+        self.privilege.save_snapshot(output)
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_bool, read_text, read_words};
+        let [pc, reset_vector, reset_configured, follows, waiting, wfi_as_nop, unaligned] = read_words(input)?;
+        if read_text(input)? != self.isa.llvm_features() {
+            return Err(invalid("snapshot CPU ISA differs from the platform"));
+        }
+        self.pc = pc;
+        self.reset_vector = reset_vector;
+        self.reset_vector_configured = read_bool(reset_configured)?;
+        self.pc_follows_reset_vector = read_bool(follows)?;
+        self.waiting = read_bool(waiting)?;
+        self.wfi_as_nop = read_bool(wfi_as_nop)?;
+        self.allow_unaligned = read_bool(unaligned)?;
+        self.registers = read_words(input)?;
+        self.registers[0] = 0;
+        self.floating = read_words(input)?;
+        self.privilege.load_snapshot(input)?;
+        self.translations = TranslationCache::default();
+        self.atomic_trace = None;
+        Ok(())
+    }
+}
+
 impl Isa {
     pub fn parse(value: &str) -> Result<Self, String> {
         let normalized = value.to_ascii_lowercase();
