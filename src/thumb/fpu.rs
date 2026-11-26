@@ -66,11 +66,11 @@ impl Thumb {
         Ok(())
     }
 
-    pub(super) fn is_fpu_instruction(high: u32, low: u32) -> bool {
+    pub(crate) fn is_fpu_instruction(high: u32, low: u32) -> bool {
         matches!(high & 0xff00, 0xec00 | 0xed00 | 0xee00) && matches!(low & 0xf00, 0xa00 | 0xb00)
     }
 
-    pub(super) fn execute_fpu(
+    pub(crate) fn execute_fpu(
         &mut self,
         high: u32,
         low: u32,

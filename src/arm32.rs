@@ -253,6 +253,9 @@ pub(crate) struct Cpu {
     hactlr: u32,
     hvbar: u32,
     hcr: u32,
+    cpacr: u32,
+    fpexc: u32,
+    affinity: u32,
     elr_hyp: u32,
     pmsa: Option<[pmsa::Pmsa; 2]>,
     interrupt_inputs: [bool; 2],
@@ -283,6 +286,9 @@ impl Cpu {
             hactlr: 0,
             hvbar: 0,
             hcr: 0,
+            cpacr: 0,
+            fpexc: 0x700,
+            affinity: 0,
             elr_hyp: 0,
             pmsa: matches!(profile, Profile::RealTimeV8)
                 .then(|| [pmsa::Pmsa::new(16), pmsa::Pmsa::new(16)]),
@@ -300,6 +306,10 @@ impl Cpu {
 
     pub(crate) fn is_v8r(&self) -> bool {
         matches!(self.profile, Profile::RealTimeV8)
+    }
+
+    pub(crate) fn set_affinity(&mut self, affinity: u32) {
+        self.affinity = affinity;
     }
 
     pub(crate) fn drive_interrupt(&mut self, input: u32, asserted: bool) -> Result<(), String> {
@@ -412,11 +422,13 @@ impl Cpu {
             "hactlr" => 0x0081_0020,
             "hvbar" => 0x008c_0000,
             "hcr" => 0x0081_0021,
+            "cpacr" => 0x0001_0040,
             "dfsr" => 0x0005_0000,
             "ifsr" => 0x0005_0020,
             "hsr" => 0x0085_0002,
             "dfar" => 0x0006_0000,
             "id_mmfr0" => 0x0000_0081,
+            "mpidr" => 0x0000_00a0,
             "ifar" => 0x0006_0040,
             "hdfar" => 0x0086_0000,
             "hifar" => 0x0086_0040,
@@ -441,12 +453,21 @@ impl Cpu {
             return pmsa[bank].access(register, value);
         }
         let v8r = self.is_v8r();
-        if v8r && key == 0x0000_0081 {
-            return value.is_none().then_some(Some(0x0021_1040));
+        if v8r {
+            let read_only = match key {
+                0x0000_0000 => Some(0x411f_d132),
+                0x0000_0081 => Some(0x0021_1040),
+                0x0000_00a0 => Some(0x8000_0000 | self.affinity),
+                _ => None,
+            };
+            if let Some(reply) = read_only {
+                return value.is_none().then_some(Some(reply));
+            }
         }
         let (register, mask) = match key {
             0x0001_0000 => (&mut self.sctlr, u32::MAX),
             0x000c_0000 => (&mut self.vbar, !31),
+            0x0001_0040 => (&mut self.cpacr, 0xf0_0000),
             0x0081_0000 if v8r => (&mut self.hsctlr, u32::MAX),
             0x0081_0020 if v8r => (&mut self.hactlr, u32::MAX),
             // Renode retains word-aligned values in its AArch32 HVBAR model.
@@ -614,14 +635,13 @@ impl Cpu {
         } else {
             registers[14] = return_address;
         }
-        let base = if hypervisor {
-            self.hvbar
-        } else if control & (1 << 13) != 0 {
+        let base = if hypervisor { self.hvbar } else { self.vbar };
+        let high_vectors = if self.sctlr & (1 << 13) != 0 {
             0xffff_0000
         } else {
-            self.vbar
+            0
         };
-        base.wrapping_add(offset)
+        base.wrapping_add(high_vectors).wrapping_add(offset)
     }
 
     fn banked_register<'a>(
@@ -693,70 +713,107 @@ impl Cpu {
         if !load && opcode & 15 != 13 || load && low != 0xc000 {
             return Ok(None);
         }
-        let current = Self::bank_for(self.cpsr).unwrap();
-        if current == 0 {
-            return Ok(Some(self.undefined(pc.wrapping_add(4), registers)));
-        }
         let increment = opcode & 0x100 != 0;
-        let update = opcode & 0x20 != 0;
-        if load {
-            let index = (opcode & 15) as usize;
-            let base = registers[index];
-            let target = if increment {
-                base
-            } else {
-                base.wrapping_sub(8)
-            };
-            let address = self.load(bus, slot, target, 4)?;
-            let status = self.load(bus, slot, target.wrapping_add(4), 4)?;
-            if Self::bank_for(status).is_none() {
-                return Ok(Some(self.undefined(pc.wrapping_add(4), registers)));
-            }
-            if update {
-                registers[index] = if increment {
-                    base.wrapping_add(8)
-                } else {
-                    target
-                };
-            }
-            self.set_cpsr(status, registers)?;
-            return Ok(Some(address & if status & T == 0 { !3 } else { !1 }));
+        let encoded = (u32::from(!increment) << 24)
+            | (u32::from(increment) << 23)
+            | (u32::from(opcode & 0x20 != 0) << 21)
+            | (u32::from(load) << 20)
+            | ((opcode & 15) << 16)
+            | (low & 31);
+        self.arm_exception_frame(encoded, pc.wrapping_add(4), registers, bus, slot, output)
+            .map(Some)
+    }
+
+    fn arm_exception_frame(
+        &mut self,
+        instruction: u32,
+        next: u32,
+        registers: &mut [u32; 32],
+        bus: &mut Bus,
+        slot: usize,
+        output: &mut impl Write,
+    ) -> Result<u32, String> {
+        let current = Self::bank_for(self.cpsr).unwrap();
+        if current == 0 || current == 6 {
+            return Ok(self.undefined(next, registers));
         }
-        let Some(bank) = Self::bank_for(low) else {
-            return Ok(Some(self.undefined(pc.wrapping_add(4), registers)));
-        };
-        let base = if bank == current {
-            registers[13]
+        let load = instruction & (1 << 20) != 0;
+        let before = instruction & (1 << 24) != 0;
+        let increment = instruction & (1 << 23) != 0;
+        let writeback = instruction & (1 << 21) != 0;
+        let (base, bank, rn) = if load {
+            let rn = ((instruction >> 16) & 15) as usize;
+            if rn == 15 {
+                return Ok(self.undefined(next, registers));
+            }
+            (registers[rn], current, rn)
         } else {
-            self.banks[bank].sp
+            let Some(bank) = Self::bank_for(instruction) else {
+                return Ok(self.undefined(next, registers));
+            };
+            (
+                if bank == current {
+                    registers[13]
+                } else {
+                    self.banks[bank].sp
+                },
+                bank,
+                13,
+            )
         };
-        let target = if increment {
-            base
+        let updated = if increment {
+            base.wrapping_add(8)
         } else {
             base.wrapping_sub(8)
         };
-        self.store(bus, slot, target, 4, registers[14], output)?;
-        self.store(
-            bus,
-            slot,
-            target.wrapping_add(4),
-            4,
-            self.banks[current].spsr,
-            output,
-        )?;
-        if update {
-            let final_sp = if increment {
-                base.wrapping_add(8)
-            } else {
-                target
-            };
-            if bank == current {
-                registers[13] = final_sp;
-            } else {
-                self.banks[bank].sp = final_sp;
+        let low = if increment { base } else { updated };
+        let address = if before == increment {
+            low.wrapping_add(4)
+        } else {
+            low
+        };
+        let access = if load {
+            pmsa::Access::Read
+        } else {
+            pmsa::Access::Write
+        };
+        for target in [address, address.wrapping_add(4)] {
+            if let Some(vector) =
+                self.check_protection(target, 4, access, next.wrapping_sub(4), registers)
+            {
+                return Ok(vector);
             }
         }
-        Ok(Some(pc.wrapping_add(4)))
+        if load {
+            let pc = self.load(bus, slot, address, 4)?;
+            let status = self.load(bus, slot, address.wrapping_add(4), 4)?;
+            if Self::bank_for(status).is_none() {
+                return Ok(self.undefined(next, registers));
+            }
+            if writeback {
+                registers[rn] = updated;
+            }
+            self.set_cpsr(status, registers)?;
+            Ok(pc & if status & T == 0 { !3 } else { !1 })
+        } else {
+            self.store(bus, slot, address, 4, registers[14], output)?;
+            self.store(
+                bus,
+                slot,
+                address.wrapping_add(4),
+                4,
+                self.banks[current].spsr,
+                output,
+            )?;
+            if writeback {
+                if bank == current {
+                    registers[13] = updated;
+                } else {
+                    self.banks[bank].sp = updated;
+                }
+            }
+            Ok(next)
+        }
     }
 
     fn reg(registers: &[u32; 32], index: usize, address: u32) -> u32 {
@@ -1044,7 +1101,10 @@ impl Cpu {
             registers[14] = next;
             next = self.exchange(address.wrapping_add(8).wrapping_add(offset) | 1);
         } else if condition == 15 {
-            if instruction & 0xfff1_fe20 == 0xf100_0000 {
+            if instruction & 0xfe5f_ffe0 == 0xf84d_0500 || instruction & 0xfe50_ffff == 0xf810_0a00
+            {
+                next = self.arm_exception_frame(instruction, next, registers, bus, slot, output)?;
+            } else if instruction & 0xfff1_fe20 == 0xf100_0000 {
                 if self.cpsr & 31 != 0x10 {
                     let mut status = self.cpsr;
                     match (instruction >> 18) & 3 {
@@ -1069,6 +1129,62 @@ impl Cpu {
             let rn = ((instruction >> 16) & 15) as usize;
             let rd = ((instruction >> 12) & 15) as usize;
             match instruction {
+                _ if matches!(
+                    instruction & 0x0fe0_0070,
+                    0x07a0_0050 | 0x07e0_0050 | 0x07c0_0010
+                ) && rd != 15 =>
+                {
+                    let source = (instruction & 15) as usize;
+                    let lsb = (instruction >> 7) & 31;
+                    let width_field = (instruction >> 16) & 31;
+                    let insert = instruction & 0x40 == 0;
+                    if insert && width_field < lsb || !insert && width_field + lsb >= 32 {
+                        next = self.undefined(next, registers);
+                    } else if insert {
+                        let width = width_field - lsb + 1;
+                        let mask = (u32::MAX >> (32 - width)) << lsb;
+                        let field = if source == 15 {
+                            0
+                        } else {
+                            registers[source] << lsb
+                        };
+                        registers[rd] = (registers[rd] & !mask) | (field & mask);
+                    } else if source == 15 {
+                        next = self.undefined(next, registers);
+                    } else {
+                        let width = width_field + 1;
+                        let field = registers[source] << (32 - lsb - width);
+                        registers[rd] = if instruction & (1 << 22) != 0 {
+                            field >> (32 - width)
+                        } else {
+                            ((field as i32) >> (32 - width)) as u32
+                        };
+                    }
+                }
+                _ if instruction & 0x0fff_0ff0 == 0x016f_0f10 && rd != 15 => {
+                    registers[rd] = registers[(instruction & 15) as usize].leading_zeros();
+                }
+                _ if instruction & 0x0fff_0ff0 == 0x06bf_0f30 && rd != 15 => {
+                    registers[rd] = registers[(instruction & 15) as usize].swap_bytes();
+                }
+                _ if instruction & 0x0fc0_00f0 == 0x0000_0090 => {
+                    let lhs = (instruction & 15) as usize;
+                    let rhs = ((instruction >> 8) & 15) as usize;
+                    if [lhs, rhs, rn, rd].contains(&15) {
+                        next = self.undefined(next, registers);
+                    } else {
+                        let mut result = registers[lhs].wrapping_mul(registers[rhs]);
+                        if instruction & (1 << 21) != 0 {
+                            result = result.wrapping_add(registers[rd]);
+                        }
+                        registers[rn] = result;
+                        if instruction & (1 << 20) != 0 {
+                            self.cpsr = (self.cpsr & !(N | Z))
+                                | (result & N)
+                                | (u32::from(result == 0) * Z);
+                        }
+                    }
+                }
                 _ if instruction & 0x0f00_0000 == 0x0f00_0000 => {
                     if self.is_v8r() && self.cpsr & 31 == 0x1a {
                         self.fault_status[2] = (0x11 << 26) | (1 << 25) | (instruction & 0xffff);
@@ -1149,6 +1265,58 @@ impl Cpu {
                     };
                     if !handled {
                         next = self.undefined(address.wrapping_add(4), registers);
+                    }
+                }
+                _ if self.is_v8r()
+                    && instruction & 0x0fe0_0fff == 0x0ee0_0a10
+                    && matches!(rn, 0 | 5..=8) =>
+                {
+                    if self.cpsr & 31 == 0x10 || rd == 15 {
+                        next = self.undefined(next, registers);
+                    } else if instruction & (1 << 20) != 0 {
+                        registers[rd] = match rn {
+                            0 => 0x4103_4023,
+                            5 => 0x0000_0043,
+                            6 => 0x1211_1111,
+                            7 => 0x1011_0222,
+                            _ => self.fpexc,
+                        };
+                    } else if rn == 8 {
+                        self.fpexc = (registers[rd] & 0xc000_0000) | 0x700;
+                    } else {
+                        next = self.undefined(next, registers);
+                    }
+                }
+                _ if self.is_v8r()
+                    && Thumb::is_fpu_instruction(
+                        (instruction >> 16) & 0x0fff | 0xe000,
+                        instruction & 0xffff,
+                    ) =>
+                {
+                    let high = (instruction >> 16) & 0x0fff | 0xe000;
+                    let user = self.cpsr & 31 == 0x10;
+                    let enabled = self.fpexc & (1 << 30) != 0
+                        && (self.cpsr & 31 == 0x1a
+                            || (self.cpacr >> 20) & 0xf == 15
+                            || !user && (self.cpacr >> 20) & 0xf == 5);
+                    if !enabled {
+                        next = self.undefined(next, registers);
+                    } else if (high & 0xfe00 != 0xec00 || high & 0xffe0 == 0xec40) && {
+                        self.thumb.set_apsr(self.cpsr);
+                        self.thumb.execute_fpu(
+                            high,
+                            instruction & 0xffff,
+                            address.wrapping_add(8),
+                            registers,
+                            bus,
+                            output,
+                        )?
+                    } {
+                        self.cpsr = (self.cpsr & !FLAGS) | (self.thumb.apsr() & FLAGS);
+                    } else {
+                        return Err(format!(
+                            "unsupported A32 VFP instruction {instruction:#010x} at {address:#010x}"
+                        ));
                     }
                 }
                 _ if instruction & 0x0f00_0f10 == 0x0e00_0f10 => {
@@ -1355,6 +1523,75 @@ impl Cpu {
                         } else {
                             next = self.exchange(value);
                         }
+                    }
+                }
+                _ if instruction & 0x0e00_0090 == 0x0000_0090 && instruction & 0x60 != 0 => {
+                    let kind = (instruction >> 5) & 3;
+                    let load_bit = instruction & (1 << 20) != 0;
+                    let pair = !load_bit && kind >= 2;
+                    let load = load_bit || pair && kind == 2;
+                    if rd == 15 || pair && (rd & 1 != 0 || rd > 12) {
+                        *pc = self.undefined(next, registers);
+                        return Ok(Step::Retired);
+                    }
+                    let base = Self::reg(registers, rn, address);
+                    let offset = if instruction & (1 << 22) != 0 {
+                        ((instruction >> 4) & 0xf0) | (instruction & 15)
+                    } else {
+                        Self::reg(registers, (instruction & 15) as usize, address)
+                    };
+                    let updated = if instruction & (1 << 23) != 0 {
+                        base.wrapping_add(offset)
+                    } else {
+                        base.wrapping_sub(offset)
+                    };
+                    let pre = instruction & (1 << 24) != 0;
+                    let target = if pre { updated } else { base };
+                    let width = if pair {
+                        8
+                    } else if kind == 2 {
+                        1
+                    } else {
+                        2
+                    };
+                    let access = if load {
+                        pmsa::Access::Read
+                    } else {
+                        pmsa::Access::Write
+                    };
+                    if let Some(vector) =
+                        self.check_protection(target, width, access, address, registers)
+                    {
+                        *pc = vector;
+                        return Ok(Step::Trap);
+                    }
+                    if pair {
+                        if load {
+                            registers[rd] = self.load(bus, slot, target, 4)?;
+                            registers[rd + 1] = self.load(bus, slot, target.wrapping_add(4), 4)?;
+                        } else {
+                            self.store(bus, slot, target, 4, registers[rd], output)?;
+                            self.store(
+                                bus,
+                                slot,
+                                target.wrapping_add(4),
+                                4,
+                                registers[rd + 1],
+                                output,
+                            )?;
+                        }
+                    } else if load {
+                        let value = self.load(bus, slot, target, width)?;
+                        registers[rd] = match kind {
+                            2 => value as i8 as i32 as u32,
+                            3 => value as i16 as i32 as u32,
+                            _ => value,
+                        };
+                    } else {
+                        self.store(bus, slot, target, width, registers[rd], output)?;
+                    }
+                    if rn != 15 && (!pre || instruction & (1 << 21) != 0) {
+                        registers[rn] = updated;
                     }
                 }
                 _ if instruction & 0x0c00_0000 == 0x0400_0000

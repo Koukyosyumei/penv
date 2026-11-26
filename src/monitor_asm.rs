@@ -505,6 +505,7 @@ fn link_instructions(
         "thumbv8.1m.main-none-eabi" => Some((21, 77, ".thumb")),
         "armv7a-none-eabi" => Some((10, 65, ".arm")),
         "armv7r-none-eabi" => Some((10, 82, ".arm")),
+        "armv8r-none-eabi" => Some((15, 82, ".arm")),
         _ => None,
     }.map(|(arch, profile, mode)| format!(".eabi_attribute 6, {arch}\n.eabi_attribute 7, {profile}\n{mode}\n{source}"));
     let source = attributes.as_deref().unwrap_or(source);

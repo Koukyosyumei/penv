@@ -975,7 +975,7 @@ impl Machine {
         }
         let hart = self.named_hart(name)?;
         if let Some(cpu) = &hart.arm32 {
-            let features = if cpu.is_v8r() { "+v8r" } else { "+v7" };
+            let features = if cpu.is_v8r() { "+v8,+vfp4,+dsp" } else { "+v7" };
             return Ok((Some(hart.slot), cpu.profile.triple(), features.into()));
         }
         if let Some(thumb) = &hart.thumb {
@@ -1057,7 +1057,11 @@ impl Machine {
             return Ok((Stop::Limit, 0));
         }
         hart.monitor_single_step = true;
-        self.run_selected(steps, Some(index), output, |_, _| false)
+        let was_paused = hart.monitor_paused;
+        hart.monitor_paused = false;
+        let result = self.run_selected(steps, Some(index), output, |_, _| false);
+        self.hart_mut(index).monitor_paused |= was_paused;
+        result
     }
 
     pub(crate) fn monitor_symbol_address(&self, symbol: &str) -> Result<u64, String> {
