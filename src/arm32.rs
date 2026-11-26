@@ -92,6 +92,16 @@ mod tests {
     }
 
     #[test]
+    fn arm_mpu_type_registers_encode_their_region_counts_in_distinct_bytes() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        cpu.configure_pmsa(12, 16).unwrap();
+        assert_eq!(cpu.monitor_system_register("MPUIR", None).unwrap(), Some(12 << 8));
+        assert_eq!(cpu.monitor_system_register("HMPUIR", None).unwrap(), Some(16));
+        assert_eq!(cpu.access_cp15(0x0000_0080, None), Some(Some(12 << 8)));
+        assert_eq!(cpu.access_cp15(0x0080_0080, None), Some(Some(16)));
+    }
+
+    #[test]
     fn arm_generic_timer_distinguishes_count_offset_compare_and_mask() {
         let mut timer = GenericTimer::new(100_000_000, 100_000_000, [Some(30), Some(27), Some(26)]);
         assert_eq!(timer.read32(0x000e_0000, 0), Some(100_000_000));
