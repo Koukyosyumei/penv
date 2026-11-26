@@ -1471,8 +1471,10 @@ fn load_platform(
                     return Err(controller.error("NVIC bus point refers to the wrong CPU"));
                 }
                 address.ok_or_else(|| controller.error("missing NVIC bus point address"))?
-            } else {
+            } else if controller.registration.is_some() {
                 controller.address()?
+            } else {
+                crate::nvic::BASE
             };
             if base != crate::nvic::BASE {
                 return Err(controller.error("NVIC must be mapped at 0xe000e000"));
@@ -2411,8 +2413,12 @@ fn load_platform(
         }
         machine
             .bus
-            .map_nrf_nvic(priority.unwrap_or(if cortex_m4f { 0xe0 } else { 0xc0 }), uart_irq,
-                cortex_m4f && stm32f4_rcc.is_none())
+            .configure_cortex_m_nvic(
+                priority.unwrap_or(if cortex_m4f { 0xe0 } else { 0xc0 }),
+                uart_irq,
+                cortex_m4f && stm32f4_rcc.is_none(),
+                nvic.is_none_or(|controller| controller.registration.is_some()),
+            )
             .map_err(|e| entry.error(&e))?;
         if cortex_m7 || cortex_m4f && stm32f4_rcc.is_some() {
             let nvic = machine.bus.nvic.as_mut().unwrap();
@@ -2425,7 +2431,7 @@ fn load_platform(
             .as_mut()
             .unwrap()
             .set_external_lines(irq_lines as usize);
-        if let Some(controller) = nvic {
+        if let Some(controller) = nvic.filter(|controller| controller.registration.is_some()) {
             machine.bus.set_nvic_name(controller.name.clone());
         }
         machine.primary.name = Some(entry.name.clone());

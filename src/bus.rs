@@ -612,6 +612,7 @@ pub struct Bus {
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
     pub nvic: Option<Nvic>,
+    nvic_mapped: bool,
     scoped_nvics: BTreeMap<(usize, u32), Nvic>,
     nvic_name: Option<String>,
     external_nvic_levels: u32,
@@ -3437,7 +3438,7 @@ impl Bus {
                     .ranges()
                     .any(|(base, limit)| start < limit && base < end)
             })
-            || (self.nvic.is_some() && Nvic::overlaps(start, end))
+            || (self.nvic_mapped && Nvic::overlaps(start, end))
             || self.dwt.as_ref().is_some_and(|device| {
                 device
                     .ranges()
@@ -4176,7 +4177,22 @@ impl Bus {
         uart: Option<u8>,
         cortex_m4: bool,
     ) -> Result<(), String> {
-        self.map_nvic(mask, uart)?;
+        self.configure_cortex_m_nvic(mask, uart, cortex_m4, true)
+    }
+
+    pub(crate) fn configure_cortex_m_nvic(
+        &mut self,
+        mask: u8,
+        uart: Option<u8>,
+        cortex_m4: bool,
+        mapped: bool,
+    ) -> Result<(), String> {
+        if mapped {
+            self.map_nvic(mask, uart)?;
+        } else {
+            self.nvic = Some(Nvic::new(mask, uart));
+            self.nvic_mapped = false;
+        }
         if cortex_m4 {
             let nvic = self.nvic.as_mut().unwrap();
             nvic.enable_nrf_mpu();
@@ -4193,6 +4209,7 @@ impl Bus {
             return Err("Cortex-M NVIC registers overlap an existing mapping".into());
         }
         self.nvic = Some(Nvic::new(priority_mask, uart_irq));
+        self.nvic_mapped = true;
         Ok(())
     }
 
@@ -8279,7 +8296,7 @@ impl Bus {
         {
             return Ok(value);
         }
-        if address as usize & (N - 1) == 0
+        if self.nvic_mapped && address as usize & (N - 1) == 0
             && let Some(value) = self.nvic.as_ref().and_then(|nvic| nvic.read(address, N))
         {
             return Ok(value);
@@ -9327,7 +9344,7 @@ impl Bus {
                 return Ok(());
             }
         }
-        if address == VTOR && width == 4 {
+        if self.nvic_mapped && address == VTOR && width == 4 {
             let base = value & !0x7f;
             let mapped = self.read_ram::<4>(base).is_ok();
             if let Some(nvic) = self.nvic.as_mut() {
@@ -9337,10 +9354,7 @@ impl Bus {
                 return Ok(());
             }
         }
-        if self
-            .nvic
-            .as_mut()
-            .is_some_and(|nvic| nvic.write(address, width, value))
+        if self.nvic_mapped && self.nvic.as_mut().is_some_and(|nvic| nvic.write(address, width, value))
         {
             return Ok(());
         }
