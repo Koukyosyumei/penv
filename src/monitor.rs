@@ -2730,6 +2730,15 @@ pub fn serve(
                     {
                         frame(&mut output, "REJECTED", error.as_bytes())
                     }
+                    Err(error) if matches!(commands, [RuntimeCommand { action: Action::SymbolAddress(..), .. }])
+                        && error.strip_prefix("<monitor>:1: ").is_some_and(|message| {
+                            message.starts_with("Wrong index ")
+                                || message.starts_with("Could not find any address for symbol:")
+                                || message.starts_with("Found ") && message.contains(" possible addresses for the symbol")
+                        }) =>
+                    {
+                        frame(&mut output, "REJECTED", error.as_bytes())
+                    }
                     Err(error) if error.starts_with("KeywordException: ") || error.starts_with("<monitor>:1: KeywordException: ") => {
                         let message = error.strip_prefix("<monitor>:1: ").unwrap_or(&error);
                         frame(&mut output, "REJECTED", message.as_bytes())

@@ -1703,6 +1703,9 @@ impl Bus {
 
     pub fn set_step_hz(&mut self, rate: u32) {
         self.step_hz = Some(rate);
+        if let Some(clint) = &mut self.clint {
+            clint.set_scheduler_rate(rate);
+        }
         if let Some(timer) = &mut self.systick {
             timer.set_step_rate(rate);
         }
@@ -3614,7 +3617,11 @@ impl Bus {
                 "invalid or overlapping CLINT range at {base:#010x}"
             ));
         }
-        self.clint = Some(Clint::new(base, targets, frequency));
+        let mut clint = Clint::new(base, targets, frequency);
+        if let Some(rate) = self.step_hz {
+            clint.set_scheduler_rate(rate);
+        }
+        self.clint = Some(clint);
         Ok(())
     }
 
@@ -3663,6 +3670,10 @@ impl Bus {
         }
         self.miv_uart = Some(crate::uart::MiVUart::new(base, name.to_owned()));
         Ok(())
+    }
+
+    pub(crate) fn is_miv(&self) -> bool {
+        self.miv_uart.is_some()
     }
 
     pub(crate) fn map_miv_gpio(&mut self, gpio: crate::miv::Gpio) -> Result<(), String> {

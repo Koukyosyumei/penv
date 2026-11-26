@@ -10,6 +10,7 @@ pub struct Clint {
     pub base: u32,
     time: u64,
     frequency: u32,
+    steps_per_second: u32,
     fraction: u64,
     clock: Option<StepClock>,
     interrupts_connected: bool,
@@ -45,6 +46,7 @@ impl Clint {
             base,
             time: 0,
             frequency,
+            steps_per_second: Self::STEP_HZ,
             fraction: 0,
             clock: None,
             interrupts_connected: true,
@@ -68,7 +70,13 @@ impl Clint {
             divisor: steps_per_second,
             fraction: 0,
         });
-}
+    }
+
+    pub(crate) fn set_scheduler_rate(&mut self, rate: u32) {
+        self.fraction = (u128::from(self.fraction) * u128::from(rate)
+            / u128::from(self.steps_per_second)) as u64;
+        self.steps_per_second = rate;
+    }
 
     pub fn disconnect_interrupts(&mut self) {
         self.interrupts_connected = false;
@@ -78,10 +86,10 @@ impl Clint {
         if let Some(clock) = &mut self.clock {
             self.time = self.time.wrapping_add(clock.advance());
         } else {
-        let scaled = self.fraction + u64::from(self.frequency);
-        let step_hz = u64::from(Self::STEP_HZ);
-        self.time = self.time.wrapping_add(scaled / step_hz);
-        self.fraction = scaled % step_hz;
+            let scaled = self.fraction + u64::from(self.frequency);
+            let step_hz = u64::from(self.steps_per_second);
+            self.time = self.time.wrapping_add(scaled / step_hz);
+            self.fraction = scaled % step_hz;
         }
         if !self.interrupts_connected {
             return 0;
