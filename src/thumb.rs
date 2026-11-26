@@ -2286,6 +2286,10 @@ impl Thumb {
             0xe800..=0xefff | 0xf800..=0xffff if self.thumb2 => {
                 let low = bus.thumb_fetch(next)?;
                 next = architectural_pc;
+                if self.armv81m && inst & 0xfff0 == 0xea50 && self.execute_long_shift(inst, low, r) {
+                    *pc = next;
+                    return Ok(true);
+                }
                 if matches!(inst, 0xe92d | 0xe8bd)
                     && low.count_ones() >= 2
                     && low & (1 << 13) == 0

@@ -749,7 +749,7 @@ impl PredicateInstruction {
             scalar,
             floating,
             bits: if floating {
-                16 << ((high >> 12) & 1)
+                32 >> ((high >> 12) & 1)
             } else {
                 8 << ((high >> 4) & 3)
             },
@@ -1020,5 +1020,93 @@ impl Thumb {
             }
         }
         Ok(next)
+    }
+}
+
+impl Thumb {
+    pub(super) fn execute_long_shift(
+        &mut self,
+        high: u32,
+        low: u32,
+        registers: &mut [u32; 32],
+    ) -> bool {
+        let upper = (((low >> 9) & 7) * 2 + 1) as usize;
+        if upper >= 13 {
+            return false;
+        }
+        let lower = (high & 14) as usize;
+        let instruction = high << 16 | low;
+        let imm = ((low >> 6) & 3) | ((low >> 10) & 28);
+        let imm = if imm == 0 { 32 } else { imm as i32 };
+        let register = (low >> 12) as usize;
+        let immediate = match instruction & 0xfff1_813f {
+            0xea50_010f => Some((imm, false, false, None)),
+            0xea50_011f => Some((-imm, false, false, None)),
+            0xea50_012f => Some((-imm, true, false, None)),
+            0xea51_010f => Some((imm, false, false, Some(64))),
+            0xea51_011f => Some((-imm, false, true, None)),
+            0xea51_012f => Some((-imm, true, true, None)),
+            0xea51_013f => Some((imm, true, false, Some(64))),
+            _ => None,
+        };
+        let (shift, signed, rounding, saturate) = if let Some(config) = immediate {
+            config
+        } else {
+            if matches!(register, 13 | 15) || register == lower || register == upper {
+                return false;
+            }
+            let shift = i32::from(registers[register] as i8);
+            let saturation = if low & 0x80 != 0 { 48 } else { 64 };
+            match instruction & 0xfff1_017f {
+                0xea50_010d if low & 0x80 == 0 => (shift, false, false, None),
+                0xea50_012d if low & 0x80 == 0 => (-shift, true, false, None),
+                0xea51_010d => (shift, false, true, Some(saturation)),
+                0xea51_012d => (-shift, true, true, Some(saturation)),
+                _ => return false,
+            }
+        };
+        let input = u64::from(registers[lower]) | (u64::from(registers[upper]) << 32);
+        let value = if signed {
+            i128::from(input as i64)
+        } else {
+            i128::from(input)
+        };
+        let result = if shift < 0 {
+            let count = shift.unsigned_abs();
+            let width = saturate.unwrap_or(64);
+            if count > width || count == width && (!rounding || signed) {
+                if signed && !rounding && value < 0 {
+                    -1
+                } else {
+                    0
+                }
+            } else {
+                let bias = if rounding { 1i128 << (count - 1) } else { 0 };
+                (value + bias) >> count
+            }
+        } else if shift >= 64 {
+            if saturate.is_some() {
+                value.signum() * (1i128 << 64)
+            } else {
+                0
+            }
+        } else {
+            value << shift
+        };
+        let result = if let Some(bits) = saturate {
+            let (min, max) = if signed {
+                (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+            } else {
+                (0, (1i128 << bits) - 1)
+            };
+            let clamped = result.clamp(min, max);
+            self.saturation |= clamped != result;
+            clamped as u64
+        } else {
+            result as u64
+        };
+        registers[lower] = result as u32;
+        registers[upper] = (result >> 32) as u32;
+        true
     }
 }

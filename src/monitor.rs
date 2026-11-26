@@ -1639,8 +1639,12 @@ fn run_commands<'a>(
                     "ExecutedInstructions" => writeln!(output.reply(), "0x{:016X}", thumb.executed_instructions()),
                     "SecureState" => writeln!(output.reply(), "{}", if thumb.secure_state() { "True" } else { "False" }),
                     "GetItState" => writeln!(output.reply(), "{}", thumb.it_state()),
-                    "FPCAR" | "FPCCR" => {
-                        let address = if property == "FPCAR" { 0xe000_ef38 } else { 0xe000_ef34 };
+                    "FPCAR" | "FPCCR" | "FaultStatus" => {
+                        let address = match property.as_str() {
+                            "FPCAR" => 0xe000_ef38,
+                            "FPCCR" => 0xe000_ef34,
+                            _ => 0xe000_ed28,
+                        };
                         let value = machine.bus.read_scalar::<4>(address, true).map_err(|error| error.to_string())?;
                         writeln!(output.reply(), "0x{value:08x}")
                     }
@@ -6784,7 +6788,7 @@ fn execute(
                 .parse()
                 .map_err(|_| "expected NVIC Clocked true or false")?,
         )),
-        [target, property @ ("IsLockedUp" | "ExecutedInstructions" | "GetItState" | "FPCAR" | "FPCCR" | "SecureState")] => {
+        [target, property @ ("IsLockedUp" | "ExecutedInstructions" | "GetItState" | "FPCAR" | "FPCCR" | "FaultStatus" | "SecureState")] => {
             Some(Action::CpuStatus(resolve(target)?.trim_start_matches("sysbus.").into(), (*property).into()))
         }
         [target, "DoLazyFloatingPointStatePreservation", option @ ..] if option.len() <= 1 => Some(Action::CpuPreserveFp(
