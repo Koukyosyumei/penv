@@ -469,6 +469,60 @@ fn normalize_vector_memory_operand(line: &str) -> String {
     line.to_owned()
 }
 
+pub(crate) fn disassemble_source(
+    machine: &mut Machine, cpu: &str, address: u64, length: usize, requested_triple: &str,
+) -> Result<String, String> {
+    use std::fmt::Write;
+
+    let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
+    if requested_triple != "default" && requested_triple != triple
+        && triple.strip_suffix("-none-eabi") != Some(requested_triple)
+    {
+        return Err(format!("disassembler triple {requested_triple} is unavailable for {triple}"));
+    }
+    let bytes = match hart {
+        Some(hart) => machine.bus.cpu_ram64(hart, address, length),
+        None => machine.bus.ram64(address, length),
+    }.ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
+    let mut input = String::with_capacity(5 * bytes.len() + 1);
+    for byte in &bytes {
+        write!(input, "0x{byte:02x} ").unwrap();
+    }
+    input.push('\n');
+    let result = crate::llvm_mc_with_args(triple, &features, &["--disassemble", "--show-encoding"], &input)?;
+    if !result.status.success() {
+        return Err(String::from_utf8_lossy(&result.stderr).trim().to_owned());
+    }
+    let mut text = String::new();
+    let mut offset = 0;
+    for line in String::from_utf8_lossy(&result.stdout).lines() {
+        let Some((mnemonic, encoded)) = line.split_once("# encoding: [").or_else(|| line.split_once("@ encoding: [")) else {
+            continue;
+        };
+        let Some(opcode) = encoded.strip_suffix(']').and_then(|encoded| encoded.split(',')
+            .map(|byte| u8::from_str_radix(byte.trim().strip_prefix("0x")?, 16).ok())
+            .collect::<Option<Vec<_>>>()) else {
+            break;
+        };
+        if !bytes[offset..].starts_with(&opcode) {
+            break;
+        }
+        write!(text, "0x{:08x}:   ", address.wrapping_add(offset as u64)).unwrap();
+        let group = if triple.starts_with("thumb") { 2 } else { opcode.len() };
+        for chunk in opcode.chunks(group) {
+            for byte in chunk.iter().rev() {
+                write!(text, "{byte:02x}").unwrap();
+            }
+        }
+        writeln!(text, "\t{}", mnemonic.trim_end()).unwrap();
+        offset += opcode.len();
+    }
+    if offset < bytes.len() {
+        writeln!(text, "Disassembly error detected. The rest of the output was truncated.").unwrap();
+    }
+    Ok(text)
+}
+
 fn inline_encoding(text: &str) -> Result<Option<Vec<u8>>, String> {
     let mut image = Vec::new();
     for line in text.lines() {

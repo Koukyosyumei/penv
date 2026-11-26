@@ -405,10 +405,15 @@ fn llvm_mc(features: &str, mode: &str, input: &str) -> Result<std::process::Outp
 }
 
 fn llvm_mc_for(triple: &str, features: &str, mode: &str, input: &str) -> Result<std::process::Output, String> {
+    llvm_mc_with_args(triple, features, &[mode], input)
+}
+
+fn llvm_mc_with_args(triple: &str, features: &str, args: &[&str], input: &str) -> Result<std::process::Output, String> {
     use std::process::{Command, Stdio};
 
     let mut child = Command::new("llvm-mc")
-        .args([mode, &format!("--triple={triple}"), &format!("--mattr={features}")])
+        .args(args)
+        .args([format!("--triple={triple}"), format!("--mattr={features}")])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -1039,7 +1039,8 @@ enum Action {
     LoadMonitorElf(Asset, bool, PathBuf),
     LoadMonitorBinary(Asset, u64, PathBuf),
     LoadMonitorSymbols(Asset, PathBuf),
-    DisassembleBlock(String, u64, usize),
+    DisassembleBlock(String, u64, usize, String),
+    BusEndianness,
     BusWhatIsAt(u64, Option<String>),
     ExecutePython(String),
     InvalidPythonSource(String),
@@ -1562,25 +1563,13 @@ fn run_commands<'a>(
                 };
                 readback.map(|()| None)
             }
-            Action::DisassembleBlock(cpu, address, length) => {
-                let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
-                let bytes = match hart {
-                    Some(hart) => machine.bus.cpu_ram64(hart, *address, *length),
-                    None => machine.bus.ram64(*address, *length),
-                }.ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
-                use std::fmt::Write as _;
-                let mut input = String::with_capacity(5 * bytes.len());
-                for byte in bytes {
-                    write!(input, "0x{byte:02x} ").unwrap();
-                }
-                input.push('\n');
-                let result = crate::llvm_mc_for(triple, &features, "--disassemble", &input)?;
-                if !result.status.success() {
-                    return Err(String::from_utf8_lossy(&result.stderr).trim().to_owned());
-                }
-                output.reply().write_all(&result.stdout).map_err(|error| error.to_string())?;
-                Ok(None)
+            Action::DisassembleBlock(cpu, address, length, requested_triple) => {
+                crate::monitor_asm::disassemble_source(machine, cpu, *address, *length, requested_triple)
+                    .and_then(|text| output.reply().write_all(text.as_bytes()).map_err(|error| error.to_string()))
+                    .map(|()| None)
             }
+            Action::BusEndianness => writeln!(output.reply(), "LittleEndian")
+                .map(|()| None).map_err(|error| error.to_string()),
             Action::BusWhatIsAt(address, context) => {
                 let registration = if let Some(context) = context {
                     let hart = machine.monitor_bus_hart(context)?;
@@ -5250,6 +5239,25 @@ fn resolve_log_command(text: &str, variables: &HashMap<String, String>) -> Resul
     Ok(command)
 }
 
+fn assembly_option_triple<'a>(options: &[&'a str]) -> Result<&'a str, String> {
+    let triple = match options {
+        [] => "null",
+        [value] if value.eq_ignore_ascii_case("false") => "null",
+        [triple] => triple,
+        [triple, dialect] if dialect.eq_ignore_ascii_case("false") => triple,
+        _ => return Err("unsupported assembly options or alternate dialect".into()),
+    };
+    if triple == "null" {
+        Ok("default")
+    } else if let Some(value) = triple.strip_prefix("triple=") {
+        Ok(unquote(value))
+    } else if triple.starts_with('"') && triple.ends_with('"') {
+        Ok(unquote(triple))
+    } else {
+        Err("unsupported assembly triple".into())
+    }
+}
+
 fn requires_selected_machine(target: &str) -> bool {
     matches!(target, "machine" | "cpu" | "sysbus") || target.starts_with("sysbus.")
 }
@@ -5392,12 +5400,7 @@ fn execute(
             let source = source.strip_prefix("\"\"\"").and_then(|s| s.strip_suffix("\"\"\""))
                 .or_else(|| source.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
                 .ok_or("expected quoted AssembleBlock source")?;
-            let triple = match options {
-                [] | ["false"] | ["null"] | ["null", "false"] => "default",
-                [triple] | [triple, "false"] if triple.starts_with('"') && triple.ends_with('"') => unquote(triple),
-                [triple] if triple.starts_with("triple=") => unquote(&triple["triple=".len()..]),
-                _ => return Err("unsupported AssembleBlock triple or alternate dialect".into()),
-            };
+            let triple = assembly_option_triple(options)?;
             let token = resolve(address)?;
             let address = if let Some(expression) = token.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
                 let words = command_words(expression)?;
@@ -5726,16 +5729,17 @@ fn execute(
             };
             Some(Action::PythonHook(cpu, symbol, source))
         }
-        [target, "DisassembleBlock", address, length] => {
+        [target, "DisassembleBlock", address, length, options @ ..] => {
             let length = crate::parse_address(resolve(length)?)? as usize;
             if !(1..=65536).contains(&length) {
                 return Err("DisassembleBlock requires a length of 1 to 65536 bytes".into());
             }
             Some(Action::DisassembleBlock(
                 resolve(target)?.trim_start_matches("sysbus.").into(),
-                crate::parse_address64(resolve(address)?)?, length,
+                crate::parse_address64(resolve(address)?)?, length, assembly_option_triple(options)?.into(),
             ))
         }
+        ["sysbus", "Endianess"] => Some(Action::BusEndianness),
         ["sysbus", "WhatIsAt", address, context @ ..] if context.len() <= 1 => {
             Some(Action::BusWhatIsAt(
                 crate::parse_address64(resolve(address)?)?,
@@ -6787,7 +6791,7 @@ fn execute(
                 && !matches!(
                     action,
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
-                        | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
+                        | Action::DisassembleBlock(..) | Action::BusEndianness | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
                         | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
                         | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..)
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
