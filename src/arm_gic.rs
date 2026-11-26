@@ -207,6 +207,16 @@ impl Gic {
             .map_or(SPURIOUS_INTERRUPT, |(id, _)| id as u16)
     }
 
+    pub(crate) fn cpu_inputs(&self, cpu: usize) -> (bool, bool) {
+        match self.version {
+            Version::V2 => (self.highest_pending(cpu, None) != SPURIOUS_INTERRUPT, false),
+            Version::V3 => (
+                self.highest_pending(cpu, Some(1)) != SPURIOUS_INTERRUPT,
+                self.highest_pending(cpu, Some(0)) != SPURIOUS_INTERRUPT,
+            ),
+        }
+    }
+
     pub(crate) fn acknowledge(&mut self, cpu: usize, group: Option<usize>) -> u16 {
         let id = self.highest_pending(cpu, group);
         if id != SPURIOUS_INTERRUPT {

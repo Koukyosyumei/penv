@@ -267,6 +267,7 @@ pub(crate) enum Step {
     Retired,
     RetiredAndPaused,
     Trap,
+    AsynchronousException,
     Stop(Stop),
 }
 
@@ -692,6 +693,11 @@ impl Machine {
         Ok(if security { "NonSecure" } else { cpu.monitor_exception_level() })
     }
 
+    pub(crate) fn drive_arm_cpu_interrupt(&mut self, name: &str, input: u32, asserted: bool) -> Option<Result<(), String>> {
+        let hart = self.named_hart(name).ok()?;
+        Some(hart.arm32.as_mut()?.drive_interrupt(input, asserted))
+    }
+
     pub(crate) fn monitor_named_register(
         &mut self, name: &str, register: &str, value: Option<u64>,
     ) -> Result<Option<u64>, String> {
@@ -1015,12 +1021,12 @@ impl Machine {
         Ok(hart.monitor_halted)
     }
 
-    pub(crate) fn monitor_step_riscv(&mut self, name: &str, steps: u64, output: &mut impl Write)
+    pub(crate) fn monitor_step_native_cpu(&mut self, name: &str, steps: u64, output: &mut impl Write)
         -> Result<(Stop, u64), String>
     {
         let index = std::iter::once(&self.primary).chain(&self.secondary)
             .position(|hart| hart.name.as_deref() == Some(name) && hart.thumb.is_none())
-            .ok_or_else(|| format!("unknown RISC-V CPU {name:?}"))?;
+            .ok_or_else(|| format!("unknown CPU {name:?}"))?;
         let hart = self.hart_mut(index);
         if hart.monitor_halted {
             return Ok((Stop::Limit, 0));
@@ -2352,6 +2358,7 @@ impl Machine {
         let mut retired = 0;
         let ethernet_link = self.bus.has_rv64_ethernet_link();
         let mut remaining = limit;
+        let mut consecutive_asynchronous_entries = 0;
         while remaining != 0 {
             // Give newly delivered host events a regular scheduler cycle
             // before considering an idle span.
@@ -2631,6 +2638,7 @@ impl Machine {
             self.bus.guest_access = None;
             match step? {
                 Step::Retired => {
+                    consecutive_asynchronous_entries = 0;
                     retired += 1;
                     if index == 0
                         && let Some(profile) = &mut self.profile
@@ -2656,6 +2664,14 @@ impl Machine {
                 }
                 Step::RetiredAndPaused => return Ok((Stop::Paused, retired + 1)),
                 Step::Trap => {}
+                Step::AsynchronousException => {
+                    // A CPU stepping command counts instructions. IRQ and FIQ entry
+                    // may both happen before the next instruction can retire.
+                    if selected.is_some() && consecutive_asynchronous_entries < 2 {
+                        consecutive_asynchronous_entries += 1;
+                        remaining += 1;
+                    }
+                }
                 Step::Stop(stop) => {
                     if stop == Stop::Paused {
                         self.pause_cpu();

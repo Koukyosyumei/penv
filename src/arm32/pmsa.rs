@@ -72,7 +72,84 @@ pub(super) struct Pmsa {
     regions: Vec<Region>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Access {
+    Fetch,
+    Read,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Fault {
+    Translation = 4,
+    Permission = 12,
+    Alignment = 33,
+}
+
 impl Pmsa {
+    pub(super) fn check(
+        &self,
+        address: u32,
+        width: u32,
+        access: Access,
+        user: bool,
+        background: bool,
+        control: u32,
+    ) -> Result<(), Fault> {
+        let end = address.checked_add(width - 1).ok_or(Fault::Translation)?;
+        self.check_address(address, address, width, access, user, background, control)?;
+        if address >> 6 != end >> 6 {
+            self.check_address(end, address, width, access, user, background, control)?;
+        }
+        Ok(())
+    }
+
+    fn check_address(
+        &self,
+        address: u32,
+        start: u32,
+        width: u32,
+        access: Access,
+        user: bool,
+        background: bool,
+        control: u32,
+    ) -> Result<(), Fault> {
+        let mut matches = self.regions.iter().filter(|region| {
+            region.limit & 1 != 0 && ((region.base & !63)..=(region.limit | 63)).contains(&address)
+        });
+        let Some(region) = matches.next() else {
+            return if background {
+                Ok(())
+            } else {
+                Err(Fault::Permission)
+            };
+        };
+        if matches.next().is_some() {
+            return Err(Fault::Translation);
+        }
+        let permission = (region.base >> 1) & 3;
+        let readable = !user || permission & 1 != 0;
+        let writable = readable && permission & 2 == 0;
+        let execute_never = region.base & 1 != 0
+            || writable && control & (1 << 19) != 0
+            || !user && permission == 1 && control & (1 << 20) != 0;
+        let attr_index = ((region.limit >> 1) & 7) as usize;
+        let attr = (self.attributes[attr_index / 4] >> (8 * (attr_index % 4))) as u8;
+        let device = attr >> 4 == 0;
+        let permitted = match access {
+            Access::Fetch => readable && !execute_never && !device,
+            Access::Read => readable,
+            Access::Write => writable,
+        };
+        if !permitted {
+            return Err(Fault::Permission);
+        }
+        if device && !start.is_multiple_of(width) {
+            return Err(Fault::Alignment);
+        }
+        Ok(())
+    }
+
     pub(super) fn new(count: usize) -> Self {
         Self {
             selector: 0,
@@ -129,5 +206,40 @@ impl Pmsa {
             }
         };
         Some(value.is_none().then_some(reply))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arm_pmsa_checks_user_permissions_alignment_and_overlapping_regions() {
+        let mut pmsa = Pmsa::new(2);
+        pmsa.access(Register::Attribute(0), Some(0x0000_ff00));
+        pmsa.access(Register::Base(Some(0)), Some(0x1002));
+        pmsa.access(Register::Limit(Some(0)), Some(0x1003));
+        assert_eq!(pmsa.check(0x1000, 4, Access::Fetch, true, false, 0), Ok(()));
+        assert_eq!(pmsa.check(0x103f, 1, Access::Write, true, false, 0), Ok(()));
+        assert_eq!(
+            pmsa.check(0x103f, 2, Access::Read, true, false, 0),
+            Err(Fault::Permission)
+        );
+        pmsa.access(Register::Base(Some(1)), Some(0x1000));
+        pmsa.access(Register::Limit(Some(1)), Some(0x1001));
+        assert_eq!(
+            pmsa.check(0x1000, 4, Access::Read, false, true, 0),
+            Err(Fault::Translation)
+        );
+        pmsa.access(Register::Base(Some(1)), Some(0x1040));
+        pmsa.access(Register::Limit(Some(1)), Some(0x1041));
+        assert_eq!(
+            pmsa.check(0x1042, 4, Access::Read, false, true, 0),
+            Err(Fault::Alignment)
+        );
+        assert_eq!(
+            pmsa.check(0x1040, 4, Access::Read, true, false, 0),
+            Err(Fault::Permission)
+        );
     }
 }

@@ -14,7 +14,9 @@ const Z: u32 = 1 << 30;
 const C: u32 = 1 << 29;
 const V: u32 = 1 << 28;
 const T: u32 = 1 << 5;
+const F: u32 = 1 << 6;
 const I: u32 = 1 << 7;
+const A: u32 = 1 << 8;
 const FLAGS: u32 = N | Z | C | V;
 
 #[derive(Clone, Copy)]
@@ -96,7 +98,7 @@ mod tests {
         assert!(matches!(
             cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output)
                 .unwrap(),
-            Step::Trap
+            Step::AsynchronousException
         ));
         assert_eq!((pc, cpu.cpsr() & 31, registers[14]), (0x118, 0x12, 12));
         assert_eq!(bus.read::<4>(0x200c).unwrap(), 37);
@@ -252,6 +254,10 @@ pub(crate) struct Cpu {
     hcr: u32,
     elr_hyp: u32,
     pmsa: Option<[pmsa::Pmsa; 2]>,
+    interrupt_inputs: [bool; 2],
+    fault_status: [u32; 3],
+    fault_address: [u32; 4],
+    debug_status: u32,
     pub(crate) timer: Option<GenericTimer>,
 }
 
@@ -262,7 +268,7 @@ impl Cpu {
         Self {
             profile,
             cpsr: if matches!(profile, Profile::RealTimeV8) {
-                0x1da
+                Z | 0x1da
             } else {
                 0x1d3
             },
@@ -278,6 +284,10 @@ impl Cpu {
             elr_hyp: 0,
             pmsa: matches!(profile, Profile::RealTimeV8)
                 .then(|| [pmsa::Pmsa::new(16), pmsa::Pmsa::new(16)]),
+            interrupt_inputs: [false; 2],
+            fault_status: [0; 3],
+            fault_address: [0; 4],
+            debug_status: 0,
             timer: None,
         }
     }
@@ -288,6 +298,15 @@ impl Cpu {
 
     pub(crate) fn is_v8r(&self) -> bool {
         matches!(self.profile, Profile::RealTimeV8)
+    }
+
+    pub(crate) fn drive_interrupt(&mut self, input: u32, asserted: bool) -> Result<(), String> {
+        let level = self
+            .interrupt_inputs
+            .get_mut(input as usize)
+            .ok_or("expected CPU interrupt input 0 (IRQ) or 1 (FIQ)")?;
+        *level = asserted;
+        Ok(())
     }
 
     pub(crate) fn configure_pmsa(
@@ -333,11 +352,25 @@ impl Cpu {
                 .ok_or_else(|| format!("invalid access to {name:?}"));
         }
         let key = match canonical.as_str() {
+            "dbgdscrext" if self.is_v8r() => {
+                if let Some(value) = value {
+                    self.debug_status = value;
+                    return Ok(None);
+                }
+                return Ok(Some(u64::from(self.debug_status)));
+            }
             "sctlr" => 0x0001_0000,
             "vbar" => 0x000c_0000,
             "hsctlr" => 0x0081_0000,
             "hvbar" => 0x008c_0000,
             "hcr" => 0x0081_0021,
+            "dfsr" => 0x0005_0000,
+            "ifsr" => 0x0005_0020,
+            "hsr" => 0x0085_0002,
+            "dfar" => 0x0006_0000,
+            "ifar" => 0x0006_0040,
+            "hdfar" => 0x0086_0000,
+            "hifar" => 0x0086_0040,
             "rvbar" if self.is_v8r() => {
                 return if value.is_none() {
                     Ok(Some(0))
@@ -365,6 +398,13 @@ impl Cpu {
             0x0081_0000 if v8r => (&mut self.hsctlr, u32::MAX),
             0x008c_0000 if v8r => (&mut self.hvbar, !31),
             0x0081_0021 if v8r => (&mut self.hcr, u32::MAX),
+            0x0005_0000 if v8r => (&mut self.fault_status[0], u32::MAX),
+            0x0005_0020 if v8r => (&mut self.fault_status[1], u32::MAX),
+            0x0085_0002 if v8r => (&mut self.fault_status[2], u32::MAX),
+            0x0006_0000 if v8r => (&mut self.fault_address[0], u32::MAX),
+            0x0006_0040 if v8r => (&mut self.fault_address[1], u32::MAX),
+            0x0086_0000 if v8r => (&mut self.fault_address[2], u32::MAX),
+            0x0086_0040 if v8r => (&mut self.fault_address[3], u32::MAX),
             _ => return None,
         };
         if let Some(value) = value {
@@ -413,6 +453,74 @@ impl Cpu {
         self.exception(0x1b, 4, return_address, registers)
     }
 
+    fn check_protection(
+        &mut self,
+        address: u32,
+        width: usize,
+        access: pmsa::Access,
+        pc: u32,
+        registers: &mut [u32; 32],
+    ) -> Option<u32> {
+        let banks = self.pmsa.as_ref()?;
+        let hyp_mode = self.cpsr & 31 == 0x1a;
+        let user = self.cpsr & 31 == 0x10;
+        let stage1 = !hyp_mode && self.sctlr & 1 != 0;
+        let stage2 = if hyp_mode {
+            self.hsctlr & 1 != 0
+        } else {
+            self.hcr & 1 != 0
+        };
+        let check = |bank: usize, user: bool, background: bool, control| {
+            if access != pmsa::Access::Fetch
+                && control & 2 != 0
+                && !address.is_multiple_of(width as u32)
+            {
+                return Err(pmsa::Fault::Alignment);
+            }
+            banks[bank].check(address, width as u32, access, user, background, control)
+        };
+        let fault = if stage1
+            && let Err(fault) = check(0, user, !user && self.sctlr & (1 << 17) != 0, self.sctlr)
+        {
+            Some((false, fault))
+        } else if stage2
+            && let Err(fault) = check(
+                1,
+                !hyp_mode,
+                hyp_mode && self.hsctlr & (1 << 17) != 0,
+                self.hsctlr,
+            )
+        {
+            Some((true, fault))
+        } else {
+            None
+        };
+        let (hyp, reason) = fault?;
+        let instruction = access == pmsa::Access::Fetch;
+        let write = access == pmsa::Access::Write;
+        let offset = if instruction { 0x0c } else { 0x10 };
+        if hyp {
+            let ec = if instruction { 0x20 } else { 0x24 } | u32::from(hyp_mode);
+            self.fault_status[2] = (ec << 26)
+                | (u32::from(self.cpsr & T == 0) << 25)
+                | (u32::from(write) << 6)
+                | reason as u32;
+            self.fault_address[2 + usize::from(instruction)] = address;
+            let vector = if hyp_mode { offset } else { 0x14 };
+            Some(self.exception(0x1a, vector, pc, registers))
+        } else {
+            let index = usize::from(instruction);
+            self.fault_status[index] = (1 << 9) | (u32::from(write) << 11) | reason as u32;
+            self.fault_address[index] = address;
+            Some(self.exception(
+                0x17,
+                offset,
+                pc.wrapping_add(if instruction { 4 } else { 8 }),
+                registers,
+            ))
+        }
+    }
+
     fn exception(
         &mut self,
         mode: u32,
@@ -421,14 +529,40 @@ impl Cpu {
         registers: &mut [u32; 32],
     ) -> u32 {
         let status = self.cpsr;
-        let thumb_exceptions = (self.sctlr >> 25) & T;
-        let updated =
-            (status & !(31 | T | (0b11 << 25) | (0x3f << 10))) | mode | I | thumb_exceptions;
+        let hypervisor = self.is_v8r()
+            && (status & 31 == 0x1a
+                || mode == 0x1a
+                || offset == 0x18 && self.hcr & (1 << 4) != 0
+                || offset == 0x1c && self.hcr & (1 << 3) != 0);
+        let control = if hypervisor { self.hsctlr } else { self.sctlr };
+        let mode = if hypervisor { 0x1a } else { mode };
+        let thumb_exceptions = (control >> 25) & T;
+        let exception_masks = if hypervisor {
+            A | I | F
+        } else if offset == 0x1c {
+            I | F
+        } else {
+            I
+        };
+        let updated = (status & !(31 | T | (0b11 << 25) | (0x3f << 10)))
+            | mode
+            | exception_masks
+            | thumb_exceptions;
         self.set_cpsr(updated, registers)
             .expect("valid exception mode");
         self.banks[Self::bank_for(updated).unwrap()].spsr = status;
-        registers[14] = return_address;
-        let base = if self.sctlr & (1 << 13) != 0 {
+        if hypervisor {
+            self.elr_hyp = if matches!(offset, 0x18 | 0x1c) {
+                return_address.wrapping_sub(4)
+            } else {
+                return_address
+            };
+        } else {
+            registers[14] = return_address;
+        }
+        let base = if hypervisor {
+            self.hvbar
+        } else if control & (1 << 13) != 0 {
             0xffff_0000
         } else {
             self.vbar
@@ -710,15 +844,26 @@ impl Cpu {
                 }
             }
         }
-        if self.cpsr & I == 0
-            && bus.arm_gic.as_ref().is_some_and(|gic| {
-                gic.highest_pending(slot, None) != crate::arm_gic::SPURIOUS_INTERRUPT
-            })
-        {
+        let (gic_irq, gic_fiq) = bus
+            .arm_gic
+            .as_ref()
+            .map_or((false, false), |gic| gic.cpu_inputs(slot));
+        let fiq = self.interrupt_inputs[1] || gic_fiq;
+        let irq = self.interrupt_inputs[0] || gic_irq;
+        if self.cpsr & F == 0 && fiq {
+            *pc = self.exception(0x11, 0x1c, pc.wrapping_add(4), registers);
+            return Ok(Step::AsynchronousException);
+        }
+        if self.cpsr & I == 0 && irq {
             *pc = self.exception(0x12, 0x18, pc.wrapping_add(4), registers);
-            return Ok(Step::Trap);
+            return Ok(Step::AsynchronousException);
         }
         if self.cpsr & T != 0 {
+            if let Some(vector) = self.check_protection(*pc, 2, pmsa::Access::Fetch, *pc, registers)
+            {
+                *pc = vector;
+                return Ok(Step::Trap);
+            }
             let raw = Self::load(bus, slot, *pc, 2)?;
             if raw & 0xff07 == 0x4700 {
                 let reg = ((raw >> 3) & 15) as usize;
@@ -734,6 +879,16 @@ impl Cpu {
                 return Ok(Step::Retired);
             }
             if matches!(raw & 0xffc0, 0xe800 | 0xe980) {
+                if let Some(vector) = self.check_protection(
+                    pc.wrapping_add(2),
+                    2,
+                    pmsa::Access::Fetch,
+                    *pc,
+                    registers,
+                ) {
+                    *pc = vector;
+                    return Ok(Step::Trap);
+                }
                 let low = Self::load(bus, slot, pc.wrapping_add(2), 2)?;
                 if let Some(next) =
                     self.exception_return(raw, low, *pc, registers, bus, slot, output)?
@@ -750,6 +905,10 @@ impl Cpu {
             } else {
                 Step::Stop(Stop::Ebreak)
             });
+        }
+        if let Some(vector) = self.check_protection(*pc, 4, pmsa::Access::Fetch, *pc, registers) {
+            *pc = vector;
+            return Ok(Step::Trap);
         }
         let instruction = Self::load(bus, slot, *pc, 4)?;
         let address = *pc;
@@ -785,6 +944,37 @@ impl Cpu {
             let rn = ((instruction >> 16) & 15) as usize;
             let rd = ((instruction >> 12) & 15) as usize;
             match instruction {
+                _ if instruction & 0x0f00_0000 == 0x0f00_0000 => {
+                    if self.is_v8r() && self.cpsr & 31 == 0x1a {
+                        self.fault_status[2] = (0x11 << 26) | (1 << 25) | (instruction & 0xffff);
+                    }
+                    next = self.exception(0x13, 8, next, registers);
+                }
+                _ if self.is_v8r() && instruction & 0x0ff0_00f0 == 0x0140_0070 => {
+                    if self.cpsr & 31 == 0x10 || self.hcr & (1 << 29) != 0 {
+                        next = self.undefined(next, registers);
+                    } else {
+                        let immediate = ((instruction >> 4) & 0xfff0) | (instruction & 15);
+                        self.fault_status[2] = (0x12 << 26) | (1 << 25) | immediate;
+                        next = self.exception(0x1a, 8, next, registers);
+                    }
+                }
+                _ if self.is_v8r() && instruction & 0x0ff0_00f0 == 0x0120_0070 => {
+                    let immediate = ((instruction >> 4) & 0xfff0) | (instruction & 15);
+                    self.debug_status = (self.debug_status & !0x3c) | 0x0c;
+                    if self.cpsr & 31 == 0x1a {
+                        self.fault_status[2] = (0x38 << 26) | (1 << 25) | immediate;
+                        next = self.exception(0x1a, 0x0c, address, registers);
+                    } else {
+                        next = self.exception(0x17, 0x0c, next, registers);
+                    }
+                }
+                _ if instruction & 0x0ff0_00f0 == 0x07f0_00f0
+                    || instruction & 0x0f00_0f10 == 0x0e00_0e00 =>
+                {
+                    // UDF and the unimplemented CP14 CDP encoding take Undefined.
+                    next = self.undefined(next, registers);
+                }
                 0xe160_006e if self.is_v8r() && self.cpsr & 31 == 0x1a => {
                     let status = self.banks[6].spsr;
                     self.set_cpsr(status, registers)?;
@@ -901,7 +1091,10 @@ impl Cpu {
                         if self.cpsr & 31 == 0x10 {
                             fields &= 0xf80f_0000;
                         }
-                        let updated = (self.cpsr & !fields) | (value & fields);
+                        let mut updated = (self.cpsr & !fields) | (value & fields);
+                        if self.is_v8r() && (self.cpsr & 31 == 0x1a) != (updated & 31 == 0x1a) {
+                            updated = (updated & !31) | (self.cpsr & 31) | (1 << 20);
+                        }
                         if self.set_cpsr(updated, registers).is_err() {
                             next = self.undefined(address.wrapping_add(4), registers);
                         }
@@ -957,6 +1150,17 @@ impl Cpu {
                     let pre = instruction & (1 << 24) != 0;
                     let target = if pre { updated } else { base };
                     let width = if instruction & (1 << 22) != 0 { 1 } else { 4 };
+                    let access = if instruction & (1 << 20) != 0 {
+                        pmsa::Access::Read
+                    } else {
+                        pmsa::Access::Write
+                    };
+                    if let Some(vector) =
+                        self.check_protection(target, width, access, address, registers)
+                    {
+                        *pc = vector;
+                        return Ok(Step::Trap);
+                    }
                     if instruction & (1 << 20) != 0 {
                         let value = Self::load(bus, slot, target, width)?;
                         if rd == 15 {

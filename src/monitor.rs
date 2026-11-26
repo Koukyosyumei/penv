@@ -1393,9 +1393,9 @@ fn run_commands<'a>(
             Action::CpuStep(cpu, steps) if !machine.is_cortex_m() => {
                 let chunk = (*steps).min(budget);
                 let start = machine.elapsed_steps();
-                machine.monitor_step_riscv(cpu, chunk, &mut output).and_then(|(stop, count)| {
+                machine.monitor_step_native_cpu(cpu, chunk, &mut output).and_then(|(stop, count)| {
                     retired += count;
-                    budget -= machine.elapsed_steps().wrapping_sub(start);
+                    budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
                     if stop != Stop::Limit || chunk < *steps {
                         return Ok(Some(stop));
                     }
@@ -1663,10 +1663,15 @@ fn run_commands<'a>(
                 let line = u8::try_from(*id).ok().filter(|&line| line < 32).ok_or("expected NVIC IRQ line 0 through 31")?;
                 machine.bus.drive_nvic_line(name, line, *asserted).map(|()| None)
             }
-            Action::ClicGpio(name, id, asserted) => machine.bus.clic.as_mut()
-                .filter(|clic| clic.name == *name)
-                .ok_or_else(|| format!("unsupported CLIC target {name:?}"))
-                .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None),
+            Action::ClicGpio(name, id, asserted) => {
+                if let Some(result) = machine.drive_arm_cpu_interrupt(name, *id, *asserted) {
+                    result.map(|()| None)
+                } else {
+                    machine.bus.clic.as_mut().filter(|clic| clic.name == *name)
+                        .ok_or_else(|| format!("unknown GPIO target {name:?}"))
+                        .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None)
+                }
+            }
             Action::ScopedRamOverlay(name, cpu, address, size) => {
                 let hart = machine.monitor_bus_hart(cpu)?;
                 machine.bus.map_named_cpu_ram(name, hart, *address, *size)
