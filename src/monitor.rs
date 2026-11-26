@@ -4980,6 +4980,7 @@ fn execute(
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)
                         | Action::UsartWriteChar(..)
+                        | Action::PeripheralLog(..)
                         | Action::I2cAccelerationFeed(..) | Action::I2cAccelerationRead(..) | Action::I2cSampleRate(..) | Action::I2cAcceleration(..)
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
