@@ -2782,6 +2782,10 @@ impl Hart {
         self.csr.hart_id = id;
     }
 
+    pub(crate) fn set_rv32_cycles_per_instruction(&mut self, cycles: u32) {
+        self.csr.cycles_per_instruction = cycles;
+    }
+
     pub(crate) fn set_cortex_m_clocked(&mut self, clocked: bool) -> Result<(), String> {
         self.thumb
             .as_mut()

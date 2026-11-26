@@ -141,6 +141,7 @@ pub struct Privilege {
     supervisor_counter_enable: u64,
     inhibit: u64,
     cycle: u64,
+    pub(crate) cycles_per_instruction: Option<u32>,
     retired: u64,
     time: u64,
 }
@@ -240,7 +241,7 @@ impl Privilege {
         self.pending = pending;
         self.time = time;
         if self.inhibit & 1 == 0 {
-            self.cycle = self.cycle.wrapping_add(1);
+            self.cycle = self.cycle.wrapping_add(u64::from(self.cycles_per_instruction.unwrap_or(1)));
         }
         self.inhibit & 4 == 0
     }

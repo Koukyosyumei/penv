@@ -37,7 +37,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
             continue;
         }
         match entry.model.as_str() {
-            "CPU.RiscV64" => {
+            "CPU.RiscV64" | "CPU.RiscV32" => {
                 if entry.registration.as_deref() != Some("sysbus")
                     && !entries.iter().any(|cluster| {
                         cluster.model == "CPU.Cluster"
@@ -45,7 +45,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
                     })
                 {
                     return Err(
-                        entry.error("expected RV64 CPU registered on sysbus or a CPU cluster")
+                        entry.error("expected RISC-V CPU registered on sysbus or a CPU cluster")
                     );
                 }
                 let hart = property(entry, "hartId").map_or(Ok(0), |value| number(entry, value))?;
@@ -85,22 +85,12 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         return Err("RV64 platform has no mapped RAM".into());
     }
     cpus.sort_unstable_by_key(|&(hart, _)| hart);
-    let single_mhartid = if let [(hart, _)] = cpus.as_mut_slice() {
-        let id = *hart;
-        *hart = 0;
-        (id != 0).then_some(id as u64)
-    } else {
-        None
-    };
     if cpus.is_empty()
         || cpus.len() > MAX_HARTS
-        || cpus
-            .iter()
-            .enumerate()
-            .any(|(index, &(hart, _))| index != hart)
+        || cpus.windows(2).any(|pair| pair[0].0 == pair[1].0)
     {
         return Err(format!(
-            "RV64 platform requires contiguous hart IDs from zero (up to {MAX_HARTS})"
+            "RISC-V platform requires unique hart IDs (up to {MAX_HARTS} CPUs)"
         ));
     }
     let mut external_pmps = [None; MAX_HARTS];
@@ -126,14 +116,27 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
     // Each scheduler slot runs one hart. Scale the slot rate so adding harts
     // does not take virtual execution time away from the existing CPUs.
     machine.bus.set_step_hz(crate::machine::VIRTUAL_STEPS_PER_SECOND * cpus.len() as u32);
-    for &(hart, entry) in &cpus {
-        let mut cpu = create_cpu(entry, clint, external_pmps[hart])?;
-        cpu.hart_id = hart;
-        cpu.mhartid_override = single_mhartid;
-        let target = machine.hart_mut(hart);
+    let default_vector_mapped = machine.bus.read_ram::<4>(crate::csr::DEFAULT_MTVEC).is_ok();
+    for (slot, &(hart, entry)) in cpus.iter().enumerate() {
+        let target = machine.hart_mut(slot);
+        if entry.model == "CPU.RiscV32" {
+            let config = crate::platform::parse_rv32_cpu(entry, [clint, None, None], None, None)?;
+            let external = external_pmps[slot].map(|external| {
+                let count = property(external, "numberOfPMPEntries").map_or(Ok(64), |value| number(external, value))?;
+                if !matches!(count, 16 | 64) {
+                    return Err(external.error("expected 16 or 64 RV32 external PMP entries"));
+                }
+                Ok((external, count as usize))
+            }).transpose()?;
+            crate::platform::configure_rv32_cpu(target, &config, default_vector_mapped, external)?;
+            continue;
+        }
+        let mut cpu = create_cpu(entry, clint, external_pmps[slot])?;
+        cpu.hart_id = slot;
+        cpu.mhartid_override = (hart != slot).then_some(hart as u64);
         target.name = Some(entry.name.clone());
         target.rv64 = Some(Box::new(cpu));
-        if external_pmps[hart].is_some() {
+        if external_pmps[slot].is_some() {
             let message = format!("{}: Enabling External PMP", entry.name);
             crate::monitor_log::record(1, &message);
             eprintln!("penv: {message}");
@@ -251,7 +254,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
                             .hart_mut(hart)
                             .rv64
                             .as_mut()
-                            .unwrap()
+                            .ok_or_else(|| entry.error("direct UART interrupts require an RV64 target"))?
                             .privilege
                             .add_interrupt(pin as u32);
                         cpu_lines.push((hart, pin as u32));
@@ -312,7 +315,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
                             .hart_mut(hart)
                             .rv64
                             .as_mut()
-                            .unwrap()
+                            .ok_or_else(|| entry.error("direct watchdog interrupts require an RV64 target"))?
                             .privilege
                             .add_interrupt(pin as u32);
                         output.harts.push((hart, pin as u32));
@@ -800,6 +803,11 @@ fn create_cpu(
         return Err(entry.error("unsupported RV64 privileged architecture"));
     }
     let mut cpu = Rv64::new(isa);
+    if let Some(value) = property(entry, "CyclesPerInstruction") {
+        let cycles = u32::try_from(number(entry, value)?).ok().filter(|cycles| *cycles != 0)
+            .ok_or_else(|| entry.error("CyclesPerInstruction requires a positive integer"))?;
+        cpu.privilege.cycles_per_instruction = Some(cycles);
+    }
     if let Some(address) = property(entry, "resetVector").or_else(|| property(entry, "ResetVector"))
     {
         cpu.set_reset_vector(number(entry, address)?);
@@ -1048,34 +1056,30 @@ fn registration_harts(
     entries: &[Entry],
     fields: &HashMap<&str, &str>,
 ) -> Result<u64, String> {
-    let mut cpus = entries.iter().filter(|candidate| {
-        candidate.model == "CPU.RiscV64" && candidate.registration.as_deref() != Some("none")
-    });
-    let single = cpus.clone().count() == 1;
-    let mask = |cpu: &Entry| {
-        if single {
-            return Ok(1);
-        }
-        let hart = property(cpu, "hartId").map_or(Ok(0), |value| number(cpu, value))?;
-        if hart >= MAX_HARTS as u64 {
-            return Err(cpu.error("hart ID exceeds supported limit"));
-        }
-        Ok(1 << hart)
-    };
+    let mut cpus = entries.iter().filter(|cpu| {
+        matches!(cpu.model.as_str(), "CPU.RiscV32" | "CPU.RiscV64") && cpu.registration.as_deref() != Some("none")
+    }).map(|cpu| {
+        let id = property(cpu, "hartId").map_or(Ok(0), |value| number(cpu, value))?;
+        Ok((id, cpu))
+    }).collect::<Result<Vec<_>, String>>()?;
+    if cpus.len() > MAX_HARTS {
+        return Err(entry.error("too many CPUs for a scoped bus registration"));
+    }
+    cpus.sort_unstable_by_key(|(id, _)| *id);
+    let mut cpus = cpus.into_iter().map(|(_, cpu)| cpu).enumerate();
     match (fields.get("cpu"), fields.get("cluster")) {
         (None, None) => Ok(0),
         (Some(name), None) => cpus
-            .find(|cpu| cpu.name == *name)
-            .ok_or_else(|| entry.error("unknown CPU in bus registration"))
-            .and_then(mask),
+            .find_map(|(slot, cpu)| (cpu.name == *name).then_some(1 << slot))
+            .ok_or_else(|| entry.error("unknown CPU in bus registration")),
         (None, Some(name))
             if entries
                 .iter()
                 .any(|candidate| candidate.model == "CPU.Cluster" && candidate.name == *name) =>
         {
             let mut result = 0;
-            for cpu in cpus.filter(|cpu| cpu.registration.as_deref() == Some(*name)) {
-                result |= mask(cpu)?;
+            for (slot, _) in cpus.filter(|(_, cpu)| cpu.registration.as_deref() == Some(*name)) {
+                result |= 1 << slot;
             }
             if result == 0 {
                 return Err(entry.error("bus registration cluster has no RV64 CPUs"));
@@ -1225,7 +1229,7 @@ fn map_memory(machine: &mut Machine, entry: &Entry, entries: &[Entry]) -> Result
 
 fn hart_by_name(cpus: &[(usize, &Entry)], entry: &Entry, name: &str) -> Result<usize, String> {
     cpus.iter()
-        .find_map(|&(hart, cpu)| (cpu.name == name).then_some(hart))
+        .position(|&(_, cpu)| cpu.name == name)
         .ok_or_else(|| entry.error("unknown RV64 hart in interrupt route"))
 }
 

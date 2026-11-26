@@ -144,6 +144,7 @@ pub struct Csr {
     pub compressed_double: bool,
     pub embedded_base: bool,
     pub sscofpmf: bool,
+    pub(crate) cycles_per_instruction: u32,
     pub andes: Option<AndesCsrs>,
     status: u32,
     pub f_extension: bool,
@@ -189,6 +190,7 @@ impl Default for Csr {
             compressed_double: true,
             embedded_base: false,
             sscofpmf: false,
+            cycles_per_instruction: 1,
             andes: None,
             status: MPP,
             f_extension: false,
@@ -228,7 +230,7 @@ impl Csr {
     pub fn tick_counters(&mut self, timer: u64) -> bool {
         let counters = &mut self.counters;
         if counters.inhibit & CYCLE_ENABLE == 0 {
-            counters.cycle = counters.cycle.wrapping_add(1);
+            counters.cycle = counters.cycle.wrapping_add(u64::from(self.cycles_per_instruction));
         }
         counters.time = timer;
         counters.instret_written = false;
@@ -239,7 +241,7 @@ impl Csr {
         self.pending = 0;
         let counters = &mut self.counters;
         if counters.inhibit & CYCLE_ENABLE == 0 {
-            counters.cycle = counters.cycle.wrapping_add(steps);
+            counters.cycle = counters.cycle.wrapping_add(steps.wrapping_mul(u64::from(self.cycles_per_instruction)));
         }
         counters.time = timer;
         counters.instret_written = false;
