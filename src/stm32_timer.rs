@@ -188,10 +188,34 @@ impl Stm32Timer {
         if self.registers[0] & ENABLE == 0 || self.active_arr == 0 || self.frequency == 0 {
             return limit;
         }
-        let ticks = u64::from(self.registers[10].saturating_sub(self.prescaler)) + 1;
-        let threshold = u128::from(ticks) * u128::from(CORTEX_M_STEP_HZ);
+        let control = self.registers[0];
+        let down = control & DOWN != 0;
+        let center = u32::from(control & CENTER != 0);
+        let mut counts = if down {
+            self.counter.saturating_sub(center)
+        } else {
+            (self.active_arr - center).saturating_sub(self.counter)
+        };
+        for channel in 0..4 {
+            if self.channel_mode(channel) & 3 != 0 {
+                continue;
+            }
+            let compare = self.registers[13 + channel];
+            let distance = if down {
+                self.counter.checked_sub(compare)
+            } else {
+                compare.checked_sub(self.counter)
+            };
+            if let Some(distance) = distance.filter(|distance| *distance != 0) {
+                counts = counts.min(distance - 1);
+            }
+        }
+        let prescaler = self.registers[10];
+        let first = u128::from(prescaler.saturating_sub(self.prescaler)) + 1;
+        let ticks = first + u128::from(counts) * (u128::from(prescaler) + 1);
+        let threshold = ticks * u128::from(CORTEX_M_STEP_HZ);
         let steps = threshold.saturating_sub(u128::from(self.phase)).div_ceil(u128::from(self.frequency));
-        limit.min(steps.saturating_sub(1) as u64)
+        u128::from(limit).min(steps.saturating_sub(1)) as u64
     }
 
     pub(crate) fn advance_quiet(&mut self, steps: u64) {
@@ -199,7 +223,21 @@ impl Stm32Timer {
             let total = u128::from(self.phase) + u128::from(self.frequency) * u128::from(steps);
             let cycles = total / u128::from(CORTEX_M_STEP_HZ);
             self.phase = (total % u128::from(CORTEX_M_STEP_HZ)) as u64;
-            self.prescaler += cycles as u32;
+            let prescaler = self.registers[10];
+            let first = u128::from(prescaler.saturating_sub(self.prescaler)) + 1;
+            if cycles < first {
+                self.prescaler += cycles as u32;
+                return;
+            }
+            let period = u128::from(prescaler) + 1;
+            let remaining = cycles - first;
+            self.prescaler = (remaining % period) as u32;
+            let counts = 1 + (remaining / period) as u32;
+            if self.registers[0] & DOWN != 0 {
+                self.counter -= counts;
+            } else {
+                self.counter += counts;
+            }
         }
     }
 
@@ -397,6 +435,43 @@ mod tests {
         timer.write(0x0c, u32::from(interrupt));
         timer.write(0, direction | UPDATE_OVERFLOW_ONLY | ENABLE);
         timer
+    }
+
+    #[test]
+    fn quiet_ticks_preserve_pwm_edges_and_counter_state() {
+        let configure = |direction| {
+            let mut timer = limit_timer(48_000_000, 100, direction, true);
+            timer.write(0x28, 3);
+            timer.write(CCR1, 33);
+            timer.write(0x18, 6 << 4);
+            timer.write(0x20, 1);
+            timer.take_output_changes();
+            timer
+        };
+        for direction in [0, DOWN, 1 << 5, (1 << 5) | DOWN] {
+            let mut reference = configure(direction);
+            let mut batched = configure(direction);
+            let mut elapsed = 0;
+            while elapsed < 6_000 {
+                let quiet = batched.quiet_steps(6_000 - elapsed);
+                for _ in 0..quiet {
+                    reference.tick();
+                    assert_eq!(reference.take_output_changes(), 0);
+                }
+                batched.advance_quiet(quiet);
+                elapsed += quiet;
+                assert_eq!(reference.counter, batched.counter);
+                assert_eq!(reference.prescaler, batched.prescaler);
+                assert_eq!(reference.phase, batched.phase);
+                assert_eq!(reference.registers, batched.registers);
+                if elapsed < 6_000 {
+                    assert_eq!(reference.tick(), batched.tick());
+                    assert_eq!(reference.take_output_changes(), batched.take_output_changes());
+                    assert_eq!(reference.pin_output(0), batched.pin_output(0));
+                    elapsed += 1;
+                }
+            }
+        }
     }
 
     #[test]

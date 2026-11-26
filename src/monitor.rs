@@ -5805,7 +5805,7 @@ fn execute(
     }
     if boot.started || boot.runtime.iter().any(|entry|
         !is_console_action(&entry.action) && !is_log_capture_setup(&entry.action)
-            && !matches!(entry.action, Action::AllowPrivates(_)))
+            && !matches!(entry.action, Action::AllowPrivates(_) | Action::ExecutePython(_) | Action::PythonAssignment(..)))
     {
         if matches!(
             boot.runtime.last().map(|entry| &entry.action),
