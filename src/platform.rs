@@ -1415,11 +1415,12 @@ fn load_platform(
                 _ => unreachable!(),
             }
         }
+        let cortex_m7 = cpu_type == Some(r#""cortex-m7""#);
         let cortex_m55 = cpu_type == Some(r#""cortex-m55""#);
         let cortex_m33 = cpu_type == Some(r#""cortex-m33""#);
-        let cortex_m4f = matches!(cpu_type, Some(r#""cortex-m4""# | r#""cortex-m4f""#)) || cortex_m33 || cortex_m55;
+        let cortex_m4f = matches!(cpu_type, Some(r#""cortex-m4""# | r#""cortex-m4f""#)) || cortex_m7 || cortex_m33 || cortex_m55;
         if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) && !cortex_m4f {
-            return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4F, Cortex-M33 or Cortex-M55 cpuType"));
+            return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4F, Cortex-M7, Cortex-M33 or Cortex-M55 cpuType"));
         }
         if trustzone && !(cortex_m33 || cortex_m55) {
             return Err(entry.error("TrustZone requires a Cortex-M33 or Cortex-M55 CPU"));
@@ -1451,6 +1452,25 @@ fn load_platform(
                     return Err(controller.error("invalid Non-secure NVIC alias"));
                 }
                 controller.registration_address(secure)?
+            } else if let Some(registrations) = controller.registration_list()
+                && let [registration] = registrations.as_slice()
+                && let Some(fields) = registration.strip_prefix("sysbus new Bus.BusPointRegistration")
+            {
+                let fields = fields.trim().strip_prefix('{').and_then(|fields| fields.strip_suffix('}'))
+                    .ok_or_else(|| controller.error("invalid CPU-scoped NVIC bus point"))?;
+                let mut address = None;
+                let mut cpu = None;
+                for (key, value) in object_fields(fields).map_err(|error| controller.error(error))? {
+                    match key {
+                        "address" if address.is_none() => address = Some(number(value).map_err(|error| controller.error(&error))?),
+                        "cpu" if cpu.is_none() => cpu = Some(value),
+                        _ => return Err(controller.error("invalid or duplicate NVIC bus point field")),
+                    }
+                }
+                if cpu != Some(entry.name.as_str()) {
+                    return Err(controller.error("NVIC bus point refers to the wrong CPU"));
+                }
+                address.ok_or_else(|| controller.error("missing NVIC bus point address"))?
             } else {
                 controller.address()?
             };
@@ -2394,10 +2414,10 @@ fn load_platform(
             .map_nrf_nvic(priority.unwrap_or(if cortex_m4f { 0xe0 } else { 0xc0 }), uart_irq,
                 cortex_m4f && stm32f4_rcc.is_none())
             .map_err(|e| entry.error(&e))?;
-        if cortex_m4f && stm32f4_rcc.is_some() {
+        if cortex_m7 || cortex_m4f && stm32f4_rcc.is_some() {
             let nvic = machine.bus.nvic.as_mut().unwrap();
             nvic.enable_fpu();
-            nvic.configure_mpu(8);
+            nvic.configure_mpu(if cortex_m7 { 16 } else { 8 });
         }
         machine
             .bus

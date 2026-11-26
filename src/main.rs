@@ -1740,6 +1740,12 @@ fn run() -> Result<ExitCode, String> {
                             if stm32f0_console || original.starts_with("monitor asset unavailable:") {
                                 return Err(original);
                             }
+                            if monitor_stdio && !has_firmware {
+                                let root = platform_root.as_deref().unwrap_or(std::path::Path::new("."));
+                                if let Ok(machine) = platform::load_monitor_configuration(platform_path, root, asset_dir.as_deref()) {
+                                    return Ok(machine);
+                                }
+                            }
                             network_repl::load(platform_path, platform_root.as_deref())
                                 .map_err(|error| format!("{original}; network REPL: {error}"))
                         })?
