@@ -53,10 +53,10 @@ pub(crate) fn assemble_source(
                     || !label
                         .chars()
                         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
-                    || instruction.trim_start().starts_with('.')
+                    || unsupported_assembly_directive(instruction.trim_start())
                     || instruction.contains(':')
             } else {
-                line.starts_with('.')
+                unsupported_assembly_directive(line)
             }
         })
     {
@@ -90,7 +90,7 @@ pub(crate) fn assemble_source(
     }
     let output_text = String::from_utf8_lossy(&output.stdout);
     let image = match inline_encoding(&output_text)? {
-        Some(image) if !instructions.contains(".4byte ") && !output_text.contains("fixup ") => image,
+        Some(image) if !instructions.contains(".4byte ") && !instructions.contains(".insn ") && !output_text.contains("fixup ") => image,
         _ => link_instructions(triple, &features, address, &instructions)?,
     };
     if image.is_empty() {
@@ -103,6 +103,10 @@ pub(crate) fn assemble_source(
     .ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
     target.copy_from_slice(&image);
     Ok(image.len())
+}
+
+fn unsupported_assembly_directive(instruction: &str) -> bool {
+    instruction.starts_with('.') && !instruction.starts_with(".insn r ")
 }
 
 fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
@@ -148,6 +152,15 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
         let funct3 = if kind == "nds.bfoz" { 2 } else { 3 };
         let encoding = (msb << 26) | (lsb << 20) | (andes_register(rs1)? << 15)
             | (funct3 << 12) | (andes_register(rd)? << 7) | 0x5b;
+        return Ok(format!("{label} .4byte {encoding:#010x}"));
+    }
+    if matches!(name, "nds.vfwcvt.s.bf16" | "nds.vfncvt.bf16.s") {
+        let (rd, source) = args.split_once(',')
+            .ok_or_else(|| format!("{name} requires two vector registers"))?;
+        let rd = andes_vector_register(rd.trim())?;
+        let source = andes_vector_register(source.trim())?;
+        let narrow = u32::from(name == "nds.vfncvt.bf16.s");
+        let encoding = 0x0000_405b | (narrow << 15) | (source << 20) | (rd << 7);
         return Ok(format!("{label} .4byte {encoding:#010x}"));
     }
     if matches!(name, "nds.fcvt.s.bf16" | "nds.fcvt.bf16.s") {
@@ -233,6 +246,12 @@ fn signed_assembly_immediate(value: &str) -> Result<i64, String> {
     } else {
         crate::parse_address(value).map(i64::from)
     }
+}
+
+fn andes_vector_register(register: &str) -> Result<u32, String> {
+    register.strip_prefix('v').and_then(|index| index.parse::<u32>().ok())
+        .filter(|&index| index < 32)
+        .ok_or_else(|| format!("invalid vector register {register}"))
 }
 
 fn andes_float_register(register: &str) -> Result<u32, String> {
