@@ -56,13 +56,18 @@ impl Timer {
         self.events & self.interrupts != 0
     }
 
-    pub(super) fn tick(&mut self) {
+    #[cfg(test)]
+    fn tick(&mut self) {
+        self.advance(1);
+    }
+
+    pub(super) fn advance(&mut self, ticks: u64) {
         if !self.running || self.mode != 0 {
             return;
         }
-        self.phase += 16_000_000;
+        self.phase += 16_000_000 * ticks;
         let period = CORTEX_M_STEP_HZ << self.prescaler;
-        if self.phase >= period {
+        while self.running && self.phase >= period {
             self.phase -= period;
             self.increment();
         }

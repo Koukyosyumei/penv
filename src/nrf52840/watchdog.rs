@@ -31,11 +31,16 @@ impl Default for Watchdog {
 }
 
 impl Watchdog {
-    pub(super) fn tick(&mut self, sleeping: bool) {
+    #[cfg(test)]
+    fn tick(&mut self, sleeping: bool) {
+        self.advance(sleeping, 1);
+    }
+
+    pub(super) fn advance(&mut self, sleeping: bool, ticks: u64) {
         if self.remaining == 0 || (sleeping && self.config & 1 == 0 && !self.expiring) {
             return;
         }
-        self.phase += 32_768;
+        self.phase += 32_768 * ticks;
         if self.phase < CORTEX_M_STEP_HZ {
             return;
         }

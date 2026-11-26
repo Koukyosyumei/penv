@@ -3,7 +3,7 @@ use crate::csr::TrapVector;
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Write},
     net::Ipv4Addr,
     path::{Path, PathBuf},
     time::Duration,
@@ -20,12 +20,16 @@ use crate::{
 
 #[derive(Default)]
 pub struct Boot {
-    pub binaries: Vec<(Asset, u32)>,
+    pub binaries: Vec<(Asset, u64)>,
     pub network: Network,
     pub video_analyzers: Vec<String>,
     pub pcm_inputs: Vec<(String, Asset)>,
     pub pcm_outputs: Vec<(String, PathBuf)>,
     pub run_steps: Option<u64>,
+    pub quantum: Option<u64>,
+    pub uart_timeout: Option<u64>,
+    pub cpu_mips: Option<u32>,
+    pub unhandled_access: Option<UnhandledAccess>,
     pub post_run: Vec<PostRun>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
@@ -33,6 +37,9 @@ pub struct Boot {
     pub mtvec: Option<u32>,
     pub cpu_control: Vec<CpuControl>,
     pub platform: Option<PathBuf>,
+    inline_repl: Vec<(PathBuf, String)>,
+    pub generated_repl: Option<GeneratedRepl>,
+    pub session: Session,
     pub serial_analyzer: Option<String>,
     pub image: Option<Asset>,
     pub hex: bool,
@@ -41,10 +48,14 @@ pub struct Boot {
     pub use_virtual_elf_addresses: bool,
     pub log_function_names: bool,
     pub monitor_log_level: Option<i8>,
+    pub initial_log_capacity: Option<usize>,
     pub trace_memory: Vec<(String, bool)>,
     pub riscv_wfi_as_nop: Vec<(String, bool)>,
     pub monitor_user_state: Option<String>,
     pub monitor_output: Vec<String>,
+    pub console_only: bool,
+    pub empty_machine: bool,
+    pub initial_start: bool,
     pub cpu_registers: Vec<CpuRegisterCommand>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
@@ -57,24 +68,458 @@ pub struct Boot {
     started: bool,
 }
 
+#[derive(Default)]
+pub struct Session {
+    macros: HashMap<String, Macro>,
+    aliases: HashMap<String, String>,
+    variables: HashMap<String, String>,
+    machine: Option<String>,
+    machine_cleared: bool,
+    number_mode: NumberMode,
+}
+
+#[derive(Clone, Copy, Default)]
+enum NumberMode {
+    #[default]
+    Hexadecimal,
+    Decimal,
+    Both,
+}
+
+impl NumberMode {
+    fn print(self, value: u64, width: usize, output: &mut impl Write) -> Result<(), String> {
+        let digits = 2 * width;
+        match self {
+            Self::Hexadecimal => writeln!(output, "0x{value:0digits$X}"),
+            Self::Decimal => writeln!(output, "{value}"),
+            Self::Both => writeln!(output, "0x{value:0digits$X} ({value})"),
+        }.map_err(|error| error.to_string())
+    }
+}
+
+const SESSION_SNAPSHOT_V1: &[u8; 9] = b"PENVSESS\x01";
+const SESSION_SNAPSHOT_V2: &[u8; 9] = b"PENVSESS\x02";
+const SESSION_SNAPSHOT_V3: &[u8; 9] = b"PENVSESS\x03";
+const SESSION_SNAPSHOT_V4: &[u8; 9] = b"PENVSESS\x04";
+const SESSION_SNAPSHOT_V5: &[u8; 9] = b"PENVSESS\x05";
+const SESSION_SNAPSHOT_V6: &[u8; 9] = b"PENVSESS\x06";
+const SESSION_SNAPSHOT_V7: &[u8; 9] = b"PENVSESS\x07";
+const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x08";
+const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
+
+fn write_snapshot(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> Result<(), String>,
+) -> Result<(), String> {
+    if let Some(error) = inspect_snapshot_destination(path) {
+        return Err(error);
+    }
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let temporary = path.with_file_name(format!(
+        ".penv-snapshot-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)
+        .map_err(|error| format!("{}: {error}", temporary.display()))?;
+    let result = write(&mut file)
+        .and_then(|()| file.sync_all().map_err(|error| error.to_string()));
+    drop(file);
+    let result = result.and_then(|()| fs::rename(&temporary, path).map_err(|error| error.to_string()));
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result.map_err(|error| format!("{}: {error}", path.display()))
+}
+
+struct SnapshotMetadata {
+    selected: String,
+    user_state: String,
+    number_mode: NumberMode,
+    machine_cleared: bool,
+    quantum: Option<u64>,
+    cpu_mips: Option<u32>,
+    variables: HashMap<String, String>,
+    macros: HashMap<String, Macro>,
+    aliases: HashMap<String, String>,
+}
+
+fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMetadata>, String> {
+    let header = input.fill_buf().map_err(|e| e.to_string())?;
+    let version = if header.starts_with(SESSION_SNAPSHOT) {
+        8
+    } else if header.starts_with(SESSION_SNAPSHOT_V7) {
+        7
+    } else if header.starts_with(SESSION_SNAPSHOT_V6) {
+        6
+    } else if header.starts_with(SESSION_SNAPSHOT_V5) {
+        5
+    } else if header.starts_with(SESSION_SNAPSHOT_V4) {
+        4
+    } else if header.starts_with(SESSION_SNAPSHOT_V3) {
+        3
+    } else if header.starts_with(SESSION_SNAPSHOT_V2) {
+        2
+    } else if header.starts_with(SESSION_SNAPSHOT_V1) {
+        1
+    } else {
+        return Ok(None);
+    };
+    input.consume(SESSION_SNAPSHOT.len());
+    let quantum = if version >= 2 {
+        let mut bytes = [0; 8];
+        input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+        let quantum = u64::from_le_bytes(bytes);
+        if quantum == 0 {
+            return Err("invalid snapshot synchronization quantum".into());
+        }
+        Some(quantum)
+    } else {
+        None
+    };
+    let cpu_mips = if version >= 3 {
+        let mut bytes = [0; 4];
+        input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+        let mips = u32::from_le_bytes(bytes);
+        Some(mips)
+    } else {
+        None
+    };
+    fn read_size(input: &mut impl Read) -> Result<usize, String> {
+        let mut length = [0; 4];
+        input.read_exact(&mut length).map_err(|e| e.to_string())?;
+        Ok(u32::from_le_bytes(length) as usize)
+    }
+    fn read_string(data: &mut &[u8]) -> Result<String, String> {
+        let length = read_size(data)?;
+        let (text, remaining) = data.split_at_checked(length).ok_or("truncated monitor variable snapshot")?;
+        *data = remaining;
+        String::from_utf8(text.to_owned()).map_err(|e| e.to_string())
+    }
+    let size = read_size(input)?;
+    if size > MAX_MONITOR_PAYLOAD {
+        return Err("monitor variable snapshot exceeds size limit".into());
+    }
+    let mut data = vec![0; size];
+    input.read_exact(&mut data).map_err(|e| e.to_string())?;
+    let mut data = data.as_slice();
+    let selected = read_string(&mut data)?;
+    let machine_cleared = if version >= 6 {
+        let (&flag, remaining) = data.split_first().ok_or("missing machine selection flag")?;
+        data = remaining;
+        match flag {
+            0 => false,
+            1 => true,
+            _ => return Err("invalid machine selection flag".into()),
+        }
+    } else {
+        false
+    };
+    let user_state = if version >= 7 { read_string(&mut data)? } else { String::new() };
+    let number_mode = if version >= 8 {
+        let (&mode, remaining) = data.split_first().ok_or("missing monitor number format")?;
+        data = remaining;
+        match mode {
+            0 => NumberMode::Hexadecimal,
+            1 => NumberMode::Decimal,
+            2 => NumberMode::Both,
+            _ => return Err("invalid monitor number format".into()),
+        }
+    } else {
+        NumberMode::Hexadecimal
+    };
+    let mut macros = HashMap::new();
+    if version >= 4 {
+        let count = read_size(&mut data)?;
+        for _ in 0..count {
+            let name = read_string(&mut data)?;
+            let script = PathBuf::from(read_string(&mut data)?);
+            let command_count = read_size(&mut data)?;
+            let mut commands = Vec::new();
+            for _ in 0..command_count {
+                let line = read_size(&mut data)?;
+                commands.push((line, read_string(&mut data)?));
+            }
+            if name.is_empty() || macros.insert(name, Macro { script, commands }).is_some() {
+                return Err("invalid monitor macro snapshot".into());
+            }
+        }
+    }
+    let mut aliases = HashMap::new();
+    if version >= 5 {
+        let count = read_size(&mut data)?;
+        for _ in 0..count {
+            let name = read_string(&mut data)?;
+            let command = read_string(&mut data)?;
+            if name.is_empty() || command.is_empty() || aliases.insert(name, command).is_some() {
+                return Err("invalid monitor alias snapshot".into());
+            }
+        }
+    }
+    let mut variables = HashMap::new();
+    while !data.is_empty() {
+        let key = read_string(&mut data)?;
+        let value = read_string(&mut data)?;
+        if matches!(key.as_str(), "global.CWD" | "global.ORIGIN") || variables.insert(key, value).is_some() {
+            return Err("invalid monitor variable snapshot".into());
+        }
+    }
+    Ok(Some(SnapshotMetadata { selected, user_state, number_mode, machine_cleared, quantum, cpu_mips, variables, macros, aliases }))
+}
+
+fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<String>), String> {
+    let mut input = open_snapshot_input(path)?;
+    let selected = match read_snapshot_metadata(&mut input)? {
+        Some(metadata) if metadata.cpu_mips == Some(0) => {
+            (!metadata.selected.is_empty()).then_some(metadata.selected)
+        }
+        None => None,
+        Some(_) => return Err("unsupported snapshot platform bootstrap outside empty or TrivialUart CPU-less machines".into()),
+    };
+    let repl = Machine::read_cpu_less_snapshot_platform(&mut input)?
+        .map(|(address, uart)| trivial_uart_snapshot_repl(address, &uart))
+        .transpose()?;
+    Ok((selected, repl))
+}
+
+impl Session {
+    fn selected_machine(&self) -> Option<&str> {
+        self.machine.as_deref().filter(|_| !self.machine_cleared)
+    }
+
+    fn save(&self, machine: &Machine, path: &Path) -> Result<(), String> {
+        let mut data = Vec::new();
+        let mut entries: Vec<_> = self.variables.iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "global.CWD" | "global.ORIGIN"))
+            .collect();
+        entries.sort_unstable();
+        fn encode(data: &mut Vec<u8>, text: &str) -> Result<(), String> {
+            if data.len().saturating_add(text.len()).saturating_add(4) > MAX_MONITOR_PAYLOAD {
+                return Err("monitor variable snapshot exceeds size limit".into());
+            }
+            data.extend_from_slice(&(text.len() as u32).to_le_bytes());
+            data.extend_from_slice(text.as_bytes());
+            Ok(())
+        }
+        let number_mode = match self.number_mode {
+            NumberMode::Hexadecimal => 0,
+            NumberMode::Decimal => 1,
+            NumberMode::Both => 2,
+        };
+        let has_user_state = !machine.bus.monitor_user_state.is_empty();
+        let version_has_user_state = has_user_state || number_mode != 0;
+        encode(&mut data, self.machine.as_deref().unwrap_or_default())?;
+        if version_has_user_state || self.machine_cleared {
+            data.push(u8::from(self.machine_cleared));
+        }
+        if version_has_user_state {
+            encode(&mut data, &machine.bus.monitor_user_state)?;
+        }
+        if number_mode != 0 {
+            data.push(number_mode);
+        }
+        fn encode_size(data: &mut Vec<u8>, value: usize) -> Result<(), String> {
+            if data.len() > MAX_MONITOR_PAYLOAD - 4 {
+                return Err("monitor snapshot exceeds size limit".into());
+            }
+            let value = u32::try_from(value).map_err(|_| "monitor snapshot field exceeds size limit")?;
+            data.extend_from_slice(&value.to_le_bytes());
+            Ok(())
+        }
+        if version_has_user_state || self.machine_cleared || !self.macros.is_empty() || !self.aliases.is_empty() {
+            let mut macros: Vec<_> = self.macros.iter().collect();
+            macros.sort_unstable_by_key(|(name, _)| *name);
+            encode_size(&mut data, macros.len())?;
+            for (name, body) in macros {
+                encode(&mut data, name)?;
+                encode(&mut data, body.script.to_str().ok_or("monitor macro path is not UTF-8")?)?;
+                encode_size(&mut data, body.commands.len())?;
+                for (line, command) in &body.commands {
+                    encode_size(&mut data, *line)?;
+                    encode(&mut data, command)?;
+                }
+            }
+        }
+        if version_has_user_state || self.machine_cleared || !self.aliases.is_empty() {
+            let mut aliases: Vec<_> = self.aliases.iter().collect();
+            aliases.sort_unstable_by_key(|(name, _)| *name);
+            encode_size(&mut data, aliases.len())?;
+            for (name, command) in aliases {
+                encode(&mut data, name)?;
+                encode(&mut data, command)?;
+            }
+        }
+        for (key, value) in entries {
+            encode(&mut data, key)?;
+            encode(&mut data, value)?;
+        }
+        write_snapshot(path, |file| {
+            let version = if number_mode != 0 {
+                SESSION_SNAPSHOT
+            } else if has_user_state {
+                SESSION_SNAPSHOT_V7
+            } else if self.machine_cleared {
+                SESSION_SNAPSHOT_V6
+            } else if !self.aliases.is_empty() {
+                SESSION_SNAPSHOT_V5
+            } else if !self.macros.is_empty() {
+                SESSION_SNAPSHOT_V4
+            } else {
+                SESSION_SNAPSHOT_V3
+            };
+            file.write_all(version).map_err(|e| e.to_string())?;
+            file.write_all(&machine.monitor_quantum.to_le_bytes()).map_err(|e| e.to_string())?;
+            let mips = if machine.cpu_less { 0 } else { (machine.bus.monitor_step_hz() / 1_000_000) as u32 };
+            file.write_all(&mips.to_le_bytes()).map_err(|e| e.to_string())?;
+            file.write_all(&(data.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+            file.write_all(&data).map_err(|e| e.to_string())?;
+            machine.write_boot_snapshot(file)
+        })
+    }
+
+    fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
+        let mut input = open_snapshot_input(path)?;
+        let result = (|| {
+            let Some(SnapshotMetadata { selected, user_state, number_mode, machine_cleared, quantum, cpu_mips, mut variables, macros, aliases }) =
+                read_snapshot_metadata(&mut input)?
+            else {
+                return machine.read_boot_snapshot(&mut input);
+            };
+            if selected != self.machine.as_deref().unwrap_or_default() {
+                return Err("snapshot uses a different monitor machine".into());
+            }
+            let cpu_mips = match cpu_mips {
+                None => None,
+                Some(0) if machine.cpu_less => None,
+                Some(mips) if machine.is_cortex_m() && mips != 0 && mips.checked_mul(1_000_000).is_some() => Some(mips),
+                _ => return Err("invalid snapshot CPU speed".into()),
+            };
+            for key in ["global.CWD", "global.ORIGIN"] {
+                if let Some(value) = self.variables.get(key) {
+                    variables.insert(key.into(), value.clone());
+                }
+            }
+            machine.read_boot_snapshot(&mut input)?;
+            if let Some(mips) = cpu_mips {
+                machine.set_monitor_cpu_rate(mips)?;
+            }
+            if let Some(quantum) = quantum {
+                machine.monitor_quantum = quantum;
+            }
+            machine.bus.monitor_user_state = user_state;
+            self.variables = variables;
+            self.machine_cleared = machine_cleared;
+            self.number_mode = number_mode;
+            self.macros = macros;
+            self.aliases = aliases;
+            Ok(())
+        })();
+        result.map_err(|e| format!("{}: {e}", path.display()))
+    }
+}
+
+pub struct GeneratedRepl(PathBuf);
+
+impl Drop for GeneratedRepl {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+impl Boot {
+    fn has_platform(&self) -> bool {
+        self.platform.is_some() || !self.inline_repl.is_empty()
+    }
+
+    fn materialize_platform(&mut self) -> Result<(), String> {
+        if self.inline_repl.is_empty() {
+            return Ok(());
+        }
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "penv-repl-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir(&dir).map_err(|e| e.to_string())?;
+        let guard = GeneratedRepl(dir);
+        let path = guard.0.join("platform.repl");
+        let mut file = fs::File::create(&path).map_err(|e| e.to_string())?;
+        if let Some(base) = &self.platform {
+            let base = fs::canonicalize(base).map_err(|e| format!("{}: {e}", base.display()))?;
+            writeln!(file, "using {:?}", base.to_string_lossy()).map_err(|e| e.to_string())?;
+        }
+        for (origin, source) in &self.inline_repl {
+            for line in source.lines() {
+                let relative = line.trim_start().strip_prefix("using ")
+                    .and_then(|value| value.trim().strip_prefix('"')?.strip_suffix('"'));
+                if let Some(relative) = relative {
+                    let include = origin.join(relative);
+                    if include.is_file() {
+                        writeln!(file, "using {:?}", include.to_string_lossy())
+                            .map_err(|e| e.to_string())?;
+                        continue;
+                    }
+                }
+                writeln!(file, "{line}").map_err(|e| e.to_string())?;
+            }
+        }
+        self.platform = Some(path);
+        self.generated_repl = Some(guard);
+        Ok(())
+    }
+}
+
 pub struct RuntimeCommand {
     line: usize,
     source: PathBuf,
     action: Action,
 }
 
+enum AssemblyAddress {
+    Literal(u64),
+    ProgramCounter(String),
+}
+
 enum Action {
+    SetEmulationPaused(bool),
+    MonitorLog(String),
+    AssembleBlock(String, AssemblyAddress, String, String, NumberMode),
     RunFor(u64),
+    RunUntil(u64),
+    RunToSyncPoint,
+    SetQuantum(u64),
     LogLevel(i8),
+    ScriptLog(i8, String),
+    LastLog(i32),
     UserState(Option<String>),
     Echo(String),
+    Illuminance(String, f64),
+    ClicGpio(String, u32, bool),
+    LogUart(String),
+    GpioWire(String, u8, String, u8),
+    GpioOverlay(Vec<(String, u8, String, u8)>),
+    IlluminanceFeed(String, PathBuf),
     RunRemaining,
+    TimeSourceInfo,
+    EmulationIsStarted,
+    SingleStepBlocking(Option<bool>),
+    PhyRegister(String, u16),
+    AdxlAxis(String, usize, i16),
+    LiteXLedState(String),
+    UartIdle(u64, Option<usize>, Option<bool>),
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
-    SaveMemory(PathBuf),
+    DescribeSnapshotPlatform,
+    DescribeEnvironment,
+    MonitorAssignment(String, PathBuf),
+    MonitorAlias(String, String),
+    MonitorMacro(String, Macro),
+    InvokeMonitorMacro(String, PathBuf),
+    InvokeMonitorScript(String, PathBuf, PathBuf),
+    MonitorEcho(String, PathBuf),
+    SaveMemory(SnapshotPath, bool),
     ClearMemory,
-    LoadMemory(PathBuf),
-    SelectMachineZero,
+    LoadMemory(SnapshotPath),
+    SetMachineCleared(bool),
     FindBytes(FindBytes),
     BusScalar(BusScalar),
     RecordTo(PathBuf),
@@ -83,20 +528,26 @@ enum Action {
     RtcDateTime,
     CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
+    CpuMips(u32),
+    ReadCpuMips(NumberMode),
+    TraceStackAccess(String),
+    VectorRegisterLength(String, u64),
     CpuCondition(String, u32),
     CpuXpsr(String),
     CpuWait(String, bool),
     CpuPaused(String, Option<bool>),
     CpuHalted(String, Option<bool>),
     ReadCpuPc(String),
+    AssertCpuValue(String, Option<String>, u64),
     CpuRegister(String, String, Option<u64>),
     ExecutionMode(String, Option<bool>),
     AddCpuHook(String, Option<u32>, CpuHook),
     NvicLog(String),
-    NvicWrite(String, u32, u32),
+    PeripheralWrite(String, u32, u32),
     SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
+    CpuSymbolPc(String, String),
     MachineReset(Vec<ResetHook>),
     ReadScalar(u64, ScalarWidth),
     WriteScalar(u64, ScalarWidth, u32),
@@ -111,21 +562,28 @@ enum Action {
     NvicPending(String, u32),
     NvicClocked(String, bool),
     Frequency(String, u32),
+    TimerProperty(String, bool),
+    TraceRcc,
+    WriteRcc(u32, u32),
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
-    CreateUartTester(String, bool),
+    CreateUartTester(String, Option<String>, bool, Option<u64>, Option<bool>, bool, bool, bool),
     DefaultUartTester(Option<usize>),
-    WaitForTester(Option<usize>, String, UartWaitMode, u64),
-    WaitForBytes(Option<usize>, BinaryUartPattern, bool, u64),
+    DefaultUartTimeout(u64),
+    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool, Option<bool>, Option<bool>),
+    WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>, Option<bool>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
+    ClearUartTesterReport(Option<usize>),
     WriteUartLine(String, String, &'static [u8]),
+    WriteTesterUart(Option<usize>, String, &'static [u8], Option<bool>, Option<bool>),
 }
 
 struct BusScalar {
     address: u64,
     width: usize,
     value: Option<u64>,
+    number_mode: NumberMode,
 }
 
 impl BusScalar {
@@ -134,6 +592,7 @@ impl BusScalar {
             address,
             width,
             value,
+            number_mode,
         } = *self;
         let address32 = u32::try_from(address)
             .ok()
@@ -151,23 +610,18 @@ impl BusScalar {
             (Some(address), 2) => bus.read_scalar::<2>(address, true),
             (Some(address), 4) => bus.read_scalar::<4>(address, true),
             _ => {
-                return Self::print_value(
+                return number_mode.print(
                     crate::memory_setup::read_ram(bus, address, width)?,
                     width,
                     output,
                 );
             }
         };
-        Self::print_value(
+        number_mode.print(
             u64::from(result.map_err(|error| error.to_string())?),
             width,
             output,
         )
-    }
-
-    fn print_value(value: u64, width: usize, output: &mut impl Write) -> Result<(), String> {
-        let digits = 2 * width;
-        writeln!(output, "0x{value:0digits$x}").map_err(|error| error.to_string())
     }
 }
 
@@ -208,12 +662,22 @@ impl ScalarWidth {
     }
 }
 
-struct ScriptOutput<'a, W> {
-    output: &'a mut W,
+struct ScriptOutput<'a> {
+    output: &'a mut dyn Write,
     history: Option<UartHistory>,
+    replies: Option<&'a mut dyn Write>,
 }
 
-impl<W: Write> Write for ScriptOutput<'_, W> {
+impl ScriptOutput<'_> {
+    fn reply(&mut self) -> &mut dyn Write {
+        match self.replies.as_deref_mut() {
+            Some(replies) => replies,
+            None => self.output,
+        }
+    }
+}
+
+impl Write for ScriptOutput<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let written = self.output.write(bytes)?;
         if let Some(history) = &mut self.history {
@@ -234,24 +698,56 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
         && commands.iter().all(|command| {
             matches!(
                 command.action,
-                Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime
+                Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
+                    | Action::AssembleBlock(..) | Action::BusScalar(_)
+                    | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
+                    | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
+                    | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
+                    | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
+                    | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
+                    | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
+                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
 
 pub fn run(
     machine: &mut Machine,
-    _script: &Path,
+    session: &mut Session,
     commands: &[RuntimeCommand],
-    mut budget: u64,
+    budget: u64,
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
+    run_commands(machine, commands, budget, output, session, None, 0)
+}
+
+pub fn run_startup(
+    machine: &mut Machine,
+    session: &mut Session,
+    commands: &[RuntimeCommand],
+    budget: u64,
+    guest_output: &mut impl Write,
+    replies: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    run_commands(machine, commands, budget, guest_output, session, Some(replies), 0)
+}
+
+fn run_commands<'a>(
+    machine: &mut Machine,
+    commands: &[RuntimeCommand],
+    mut budget: u64,
+    mut output: &'a mut dyn Write,
+    session: &mut Session,
+    replies: Option<&'a mut dyn Write>,
+    depth: usize,
+) -> Result<(Stop, u64), String> {
     if commands.is_empty() {
-        return machine.run(budget, output);
+        return machine.run(budget, &mut output);
     }
     let mut output = ScriptOutput {
         output,
         history: None,
+        replies,
     };
     for command in commands {
         match &command.action {
@@ -282,19 +778,80 @@ pub fn run(
                 .map(|_| ())
                 .and_then(|()| machine.finish_profile())
                 .map(|()| None),
-            Action::SaveMemory(path) => machine.save_memory_snapshot(path).map(|()| None),
+            Action::InvokeMonitorMacro(name, root) => (|| {
+                let path = &session.macros.get(name).ok_or("unknown macro")?.script;
+                let mut state = deferred_script_state(path, session);
+                expand_macro(name, &mut state, root)?;
+                validate_deferred_commands(&state.boot, depth, true)?;
+                let start = machine.elapsed_steps();
+                let boot = apply_deferred_state(session, state);
+                let (stop, count) = run_deferred_commands(machine, boot, budget, &mut output, session, depth)?;
+                retired += count;
+                budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
+                Ok((stop != Stop::ScriptComplete).then_some(stop))
+            })(),
+            Action::InvokeMonitorScript(text, canonical, root) => (|| {
+                let mut state = deferred_script_state(&command.source, session);
+                load_text(&command.source, canonical.clone(), root, &mut state, text)?;
+                let start = machine.elapsed_steps();
+                let mut separators = Vec::new();
+                let words = command_tokens(text, Some(&mut separators))?;
+                let allow_snapshots = !separators.is_empty() || matches!(words.first(), Some(&("include" | "i" | "ExecuteScript")));
+                validate_deferred_commands(&state.boot, depth, allow_snapshots)?;
+                let boot = apply_deferred_state(session, state);
+                let (stop, count) = run_deferred_commands(machine, boot, budget, &mut output, session, depth)?;
+                retired += count;
+                budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
+                Ok((stop != Stop::ScriptComplete).then_some(stop))
+            })(),
+            Action::MonitorAlias(name, command) => {
+                session.aliases.insert(name.clone(), command.clone());
+                Ok(None)
+            }
+            Action::MonitorMacro(name, body) => {
+                session.macros.insert(name.clone(), body.clone());
+                Ok(None)
+            }
+            Action::MonitorAssignment(text, origin) => command_words(text).and_then(|words| {
+                assign_variable(text, &words, session.machine.as_deref().filter(|_| !session.machine_cleared), &mut session.variables, Some(origin))
+            }).map(|_| None),
+            Action::MonitorEcho(value, origin) => monitor_echo(value, &session.variables, origin).and_then(|message| {
+                writeln!(output.reply(), "{message}").map_err(|error| error.to_string())
+            }).map(|()| None),
+            Action::DescribeEnvironment => writeln!(
+                output.reply(), "{}", describe_environment(&session.variables, &session.macros, &session.aliases),
+            ).map(|()| None).map_err(|error| error.to_string()),
+            Action::DescribeSnapshotPlatform => describe_snapshot_platform(machine, session)
+                .and_then(|script| output.output.write_all(script.as_bytes()).map_err(|error| error.to_string()))
+                .map(|()| None),
+            Action::SaveMemory(path, restorable) => path.resolve(&session.variables).and_then(|path| {
+                if *restorable {
+                    snapshot_platform(machine)?;
+                }
+                session.save(machine, &path)
+            }).map(|()| None),
             Action::ClearMemory => machine.clear_memory_snapshot().map(|()| {
                 cleared = true;
                 None
             }),
-            Action::LoadMemory(path) => machine.load_memory_snapshot(path).map(|()| {
+            Action::LoadMemory(path) => path.resolve(&session.variables).and_then(|path| session.load(machine, &path)).map(|()| {
+                machine.monitor_single_step_blocking = true;
                 cleared = false;
                 None
             }),
-            Action::SelectMachineZero => Ok(None),
-            Action::BusScalar(access) => access.apply(&mut machine.bus, &mut output).map(|()| None),
+            Action::SetMachineCleared(cleared) => {
+                apply_machine_selection(&mut session.machine_cleared, *cleared, session.machine.as_deref(), &mut session.variables);
+                Ok(None)
+            }
+            Action::BusScalar(access) => {
+                if access.value.is_none() {
+                    access.apply(&mut machine.bus, &mut output.reply())
+                } else {
+                    access.apply(&mut machine.bus, &mut output)
+                }
+            }.map(|()| None),
             Action::FindBytes(search) => search
-                .write_matches(&machine.bus, "", output.output)
+                .write_matches(&machine.bus, "", &mut output.output)
                 .map(|()| None),
             Action::RunRemaining => machine.run(budget, &mut output).map(|(stop, count)| {
                 retired += count;
@@ -333,26 +890,148 @@ pub fn run(
                     (stop != Stop::Limit || chunk < *steps).then_some(stop)
                 })
             }
-            Action::RunFor(steps) | Action::CpuStep(_, steps) => {
+            Action::PhyRegister(target, value) => machine.bus.litex_phy_mut(target).map(|phy| {
+                phy.set_vendor_specific1(*value);
+                None
+            }),
+            Action::AdxlAxis(target, axis, value) => machine.bus.nrf_adxl_input(target)
+                .ok_or_else(|| format!("unsupported ADXL372 target {target:?}"))
+                .map(|acceleration| {
+                    acceleration[*axis] = *value;
+                    None
+                }),
+            Action::LiteXLedState(target) => machine.bus.litex_led_state(target).and_then(|state| {
+                writeln!(output.output, "{}", if state { "True" } else { "False" })
+                    .map(|()| None).map_err(|error| error.to_string())
+            }),
+            Action::VectorRegisterLength(cpu, bits) => machine.configure_rv64_vlen(cpu, *bits).map(|()| None),
+            Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
+            Action::CpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
+            Action::ReadCpuMips(mode) => {
+                if machine.cpu_less {
+                    return Err("the platform has no CPU".into());
+                }
+                mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, &mut output.output).map(|()| None)
+            }
+            Action::SingleStepBlocking(value) => {
+                if let Some(value) = value {
+                    machine.monitor_single_step_blocking = *value;
+                    Ok(None)
+                } else {
+                    writeln!(output.reply(), "{}", if machine.monitor_single_step_blocking { "True" } else { "False" })
+                        .map(|()| None).map_err(|error| error.to_string())
+                }
+            }
+            Action::EmulationIsStarted => {
+                write!(output.reply(), "{}", emulation_started_reply(machine.monitor_is_active()))
+                    .map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::TimeSourceInfo => {
+                writeln!(output.reply(), "Elapsed Virtual Time: {}\nQuantum: {}",
+                    monitor_timestamp(machine.monitor_elapsed_ns()),
+                    monitor_timestamp(u128::from(machine.monitor_quantum) * 10))
+                    .map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::AssembleBlock(cpu, address, triple, source, mode) => {
+                let address = match address {
+                    AssemblyAddress::Literal(address) => *address,
+                    AssemblyAddress::ProgramCounter(cpu) => machine.monitor_named_pc(cpu)?,
+                };
+                crate::monitor_asm::assemble_source(machine, cpu, address, triple, source)
+                    .and_then(|size| mode.print(size as u64, 4, &mut output.output))
+                    .map(|()| None)
+            }
+            Action::MonitorLog(command) => {
+                let start = machine.elapsed_steps();
+                let (status, message) = crate::monitor_log::handle(machine, command, budget, &mut output)
+                    .ok_or("invalid log monitor command")??;
+                budget -= machine.elapsed_steps().wrapping_sub(start);
+                match status {
+                    "OK" => Ok(None),
+                    "MATCH" => writeln!(output.reply(), "{message}")
+                        .map(|()| None).map_err(|error| error.to_string()),
+                    _ => Err(format!("log monitor {status}: {message}")),
+                }
+            }
+            Action::SetEmulationPaused(paused) => {
+                let message = if *paused {
+                    machine.set_monitor_active(false);
+                    "Pausing emulation..."
+                } else if machine.monitor_is_active() {
+                    "Emulation is already started. Ignoring command"
+                } else {
+                    machine.set_monitor_active(true);
+                    "Starting emulation..."
+                };
+                writeln!(output.reply(), "{message}").map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::UartIdle(timeout, tester, pause) => {
+                let cycles = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?;
+                let start = machine.elapsed_steps();
+                let limit = cycles.min(budget);
+                let (stop, count) = wait_for_uart_idle(machine, *tester, cycles, *pause, budget, &mut output)?;
+                retired += count;
+                budget -= machine.elapsed_steps().wrapping_sub(start);
+                match stop {
+                    Stop::Limit if limit == cycles => Ok(None),
+                    Stop::OutputMatch => Err("UART was not idle".into()),
+                    _ => Err(format!("UART idle interval ended before completion ({stop:?})")),
+                }
+            }
+            Action::SetQuantum(duration) => {
+                machine.monitor_quantum = *duration;
+                Ok(None)
+            }
+            Action::RunToSyncPoint | Action::RunFor(_) | Action::RunUntil(_) | Action::CpuStep(..) => {
                 let valid_cpu = match &command.action {
                     Action::CpuStep(cpu, _) => machine.cortex_m_cpu(cpu).map(|_| ()),
-                    _ if machine.is_cortex_m() => Ok(()),
-                    _ => Err("RunFor requires a Cortex-M platform".into()),
+                    _ => Ok(()),
                 };
                 valid_cpu.and_then(|()| {
-                    if machine.primary.monitor_paused {
+                    let was_paused = machine.primary.monitor_paused;
+                    if was_paused && matches!(command.action, Action::CpuStep(..)) {
                         return Ok(None);
                     }
-                    let chunk = (*steps).min(budget);
+                    let steps = match command.action {
+                        Action::CpuStep(_, steps) => steps,
+                        Action::RunFor(duration) => duration_cycles(
+                            duration, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
+                        )?,
+                        Action::RunUntil(timestamp) => {
+                            let deadline = u128::from(timestamp) * 10;
+                            let elapsed = machine.monitor_elapsed_ns();
+                            if deadline < elapsed {
+                                crate::monitor_log::record(2, &format!(
+                                    "Given timestamp '{}' is from the past. Current elapsed virtual time is {}",
+                                    monitor_timestamp(deadline), monitor_timestamp(elapsed),
+                                ));
+                            }
+                            let remaining = deadline.saturating_sub(elapsed);
+                            duration_cycles(
+                                remaining.try_into().map_err(|_| "virtual timestamp exceeds the supported range")?,
+                                1_000_000_000,
+                                machine.bus.monitor_step_hz(),
+                            )?
+                        }
+                        Action::RunToSyncPoint => duration_cycles(
+                            machine.monitor_quantum, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
+                        )?,
+                        _ => unreachable!(),
+                    };
+                    let chunk = steps.min(budget);
                     let start = machine.elapsed_steps();
-                    TimeHandle::run_grant(chunk, |granted| {
+                    machine.primary.monitor_paused = false;
+                    let result = TimeHandle::run_grant(chunk, |granted| {
                         let result = machine.run(granted, &mut output)?;
                         Ok((result, machine.elapsed_steps().wrapping_sub(start)))
-                    })
-                    .map(|((stop, count), used)| {
+                    });
+                    let paused_during_run = machine.primary.monitor_paused;
+                    machine.set_monitor_active(false);
+                    machine.primary.monitor_paused = paused_during_run || was_paused;
+                    result.map(|((stop, count), used)| {
                         retired += count;
                         budget -= used;
-                        (stop != Stop::Limit || (chunk < *steps && !machine.primary.monitor_paused))
+                        (stop != Stop::Limit || (chunk < steps && !paused_during_run))
                             .then_some(stop)
                     })
                 })
@@ -376,7 +1055,7 @@ pub fn run(
                 machine.monitor_execution_mode(cpu, *single_step).and_then(|state| {
                     if single_step.is_none() {
                         let mode = if state { "SingleStep" } else { "Continuous" };
-                        writeln!(output.output, "{mode}").map_err(|error| error.to_string())?;
+                        writeln!(output.reply(), "{mode}").map_err(|error| error.to_string())?;
                     }
                     Ok(None)
                 })
@@ -415,7 +1094,19 @@ pub fn run(
                     None
                 })
             }
-            Action::Echo(message) => writeln!(output.output, "{message}")
+            Action::ClicGpio(name, id, asserted) => machine.bus.clic.as_mut()
+                .filter(|clic| clic.name == *name)
+                .ok_or_else(|| format!("unsupported CLIC target {name:?}"))
+                .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None),
+            Action::GpioOverlay(links) => machine.bus.connect_stm32_gpios(
+                links.iter().map(|(from, output, to, input)| (from.as_str(), *output, to.as_str(), *input)),
+            ).map(|()| None),
+            Action::GpioWire(from, output_pin, to, input_pin) => machine.bus
+                .connect_stm32_gpio(from, *output_pin, to, *input_pin).map(|()| None),
+            Action::LogUart(target) => machine.bus.log_uart(target).map(|()| None),
+            Action::Illuminance(sensor, value) => machine.bus.set_illuminance(sensor, *value).map(|()| None),
+            Action::IlluminanceFeed(sensor, path) => machine.bus.feed_illuminance(sensor, path).map(|()| None),
+            Action::Echo(message) => writeln!(output.reply(), "{message}")
                 .map(|()| None).map_err(|error| error.to_string()),
             Action::UserState(value) => {
                 if let Some(value) = value {
@@ -427,29 +1118,47 @@ pub fn run(
                         .map_err(|error| error.to_string())
                 }
             }
+            Action::ScriptLog(level, message) => {
+                crate::monitor_log::record(*level, message);
+                Ok(None)
+            }
+            Action::LastLog(count) => write_last_log(*count, &mut output.reply()).map(|()| None),
             Action::LogLevel(level) => {
                 machine.bus.set_monitor_log_level(*level);
                 Ok(None)
             }
             Action::NvicLog(target) => machine.bus.enable_nvic_log(target).map(|()| None),
-            Action::NvicWrite(target, offset, value) => machine
-                .bus
-                .nvic_register_address(target, *offset)
-                .and_then(|address| {
-                    machine
-                        .bus
-                        .write_scalar(address, 4, *value, &mut output, true)
-                        .map_err(|e| e.to_string())
-                })
-                .map(|()| None),
+            Action::PeripheralWrite(target, offset, value) => {
+                if let Some(address) = machine.bus.trivial_uart_register(target, *offset) {
+                    machine.bus.write_scalar(address, 4, *value, &mut io::sink(), true)
+                        .map(|()| None).map_err(|error| error.to_string())
+                } else {
+                    let address = machine.bus.nvic_register_address(target, *offset)?;
+                    machine.bus.write_scalar(address, 4, *value, &mut output, true)
+                        .map(|()| None).map_err(|error| error.to_string())
+                }
+            }
+            Action::AssertCpuValue(cpu, register, expected) => {
+                let actual = match register {
+                    Some(register) => machine.monitor_named_register(cpu, register, None)?
+                        .ok_or("register has no readable value")?,
+                    None => machine.monitor_named_pc(cpu)?,
+                };
+                if actual == *expected {
+                    Ok(None)
+                } else {
+                    let target = register.as_ref().map_or_else(|| "PC".into(), |name| format!("Register {name}"));
+                    Err(format!("{target} value assertion failed, actual: {actual:#x}, expected: {expected:#x}"))
+                }
+            }
             Action::ReadCpuPc(cpu) => machine.monitor_named_pc(cpu).and_then(|pc| {
-                writeln!(output.output, "0x{pc:08x}")
+                writeln!(output.reply(), "0x{pc:08x}")
                     .map_err(|error| error.to_string()).map(|()| None)
             }),
             Action::CpuRegister(cpu, register, value) => {
                 machine.monitor_named_register(cpu, register, *value).and_then(|value| {
                     if let Some(value) = value {
-                        writeln!(output.output, "0x{value:x}").map_err(|error| error.to_string())?;
+                        writeln!(output.reply(), "0x{value:x}").map_err(|error| error.to_string())?;
                     }
                     Ok(None)
                 })
@@ -459,6 +1168,7 @@ pub fn run(
             Action::CpuWait(cpu, asserted) => {
                 machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
             }
+            Action::CpuSymbolPc(cpu, symbol) => machine.set_monitor_symbol_pc(cpu, symbol).map(|()| None),
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
             Action::MachineReset(hooks) => machine.reset_cortex_m_machine().and_then(|()| {
@@ -503,7 +1213,7 @@ pub fn run(
                 Ok(None)
             }
             Action::ReadBytes(address, count) => {
-                read_bus_bytes(machine, *address, *count, output.output).map(|()| None)
+                read_bus_bytes(machine, *address, *count, &mut output.output).map(|()| None)
             }
             Action::WriteBytes(address, bytes) => machine
                 .bus
@@ -528,6 +1238,16 @@ pub fn run(
                 .bus
                 .pend_nvic_exception(target, *exception)
                 .map(|()| None),
+            Action::TimerProperty(target, enabled) => machine.bus.timer_properties(target).and_then(|(frequency, gate)| {
+                let value = if *enabled { u32::from(gate) } else { frequency };
+                writeln!(output.output, "{value}").map(|()| None).map_err(|error| error.to_string())
+            }),
+            Action::TraceRcc => machine.bus.trace_rcc().map(|()| None),
+            Action::WriteRcc(offset, value) => machine.bus.rcc_base().and_then(|base| {
+                let address = base.checked_add(*offset).ok_or("RCC address overflow")?;
+                machine.bus.write_scalar(address, 4, *value, &mut output.output, true)
+                    .map(|()| None).map_err(|error| error.to_string())
+            }),
             Action::Frequency(target, frequency) => {
                 machine.bus.set_frequency(target, *frequency).map(|()| None)
             }
@@ -538,48 +1258,68 @@ pub fn run(
             Action::Adc(name, channel, volts) => machine
                 .external_event(ExternalEvent::Adc(name.clone(), *channel, *volts))
                 .map(|()| None),
-            Action::CreateUartTester(target, binary) => machine
-                .bus
-                .create_uart_tester(target, *binary)
-                .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
-                .map(|()| None),
+            Action::CreateUartTester(target, requested_machine, binary, timeout, echo, carriage_return, next_line, pause) => {
+                let available = session.machine.as_deref().unwrap_or("machine-0");
+                if let Some(name) = requested_machine && name != available {
+                    return Err(format!("{}:{}: Machine with name {name} not found. Available machines: [{available}]", command.source.display(), command.line));
+                }
+                machine.bus.default_uart_pause = *pause;
+                machine.bus.set_default_uart_echo(*echo);
+                machine.bus.set_default_uart_next_line(*next_line);
+                machine.bus.create_uart_tester(target, *binary, *timeout, *carriage_return)
+                    .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
+                    .map(|()| None)
+            }
+            Action::DefaultUartTimeout(timeout) => {
+                machine.bus.set_default_uart_timeout(*timeout);
+                Ok(None)
+            }
             Action::DefaultUartTester(id) => {
                 machine.bus.set_default_uart_tester(*id).map(|()| None)
             }
+            Action::ClearUartTesterReport(id) => machine.bus.clear_uart_tester_report(*id).map(|()| None),
             Action::SetUartFailure(id, pattern, register) => machine
                 .bus
                 .set_uart_failure(*id, pattern.clone(), *register)
                 .map(|()| None),
-            Action::WaitForBytes(id, pattern, match_start, timeout) => {
+            Action::WaitForBytes(id, pattern, match_start, timeout, pause) => {
+                let cycles = uart_wait_cycles(machine, *id, *timeout)?.min(budget);
                 let start = machine.elapsed_steps();
-                machine.bus.watch_uart_bytes(*id, pattern, *match_start).and_then(|watch| {
-                    let result = drive_uart_watch(machine, watch, (*timeout).min(budget), &mut output);
-                    let matched = machine.bus.take_uart_byte_match(watch);
-                    machine.bus.finish_stm32_uart_watch(watch);
-                    result.and_then(|(stop, count)| {
+                wait_for_uart_bytes(machine, *id, pattern, *match_start, cycles, *pause, &mut output)
+                    .and_then(|(stop, count, matched)| {
                         retired += count;
                         budget -= machine.elapsed_steps().wrapping_sub(start);
                         let matched = matched.ok_or_else(|| format!("Terminal tester failed! Byte pattern was not received ({stop:?})"))?;
-                        write_hex_list(matched.content, 2, output.output).map_err(|e| e.to_string())?;
+                        write_hex_list(matched.content, 2, &mut output.output).map_err(|e| e.to_string())?;
                         for group in matched.groups {
                             match group {
-                                Some(bytes) => write_hex_list(bytes, 2, output.output),
+                                Some(bytes) => write_hex_list(bytes, 2, &mut output.output),
                                 None => writeln!(output.output, "null"),
                             }.map_err(|e| e.to_string())?;
                         }
                         Ok(None)
                     })
-                })
             }
-            Action::WaitForTester(id, pattern, mode, timeout) => {
+            Action::WaitForTester(id, pattern, regex, mode, timeout, absent, _, first_only, pause) => {
+                let cycles = uart_wait_cycles(machine, *id, *timeout)?;
+                let limit = cycles.min(budget);
                 let start = machine.elapsed_steps();
-                machine.bus.watch_uart_tester_mode(*id, pattern, *mode).and_then(|watch| {
-                    run_uart_watch(machine, watch, (*timeout).min(budget), &mut output)
-                }).and_then(|(stop, count)| {
+                machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode, *first_only).and_then(|watch| {
+                    let pause = !*absent && pause.unwrap_or(machine.bus.default_uart_pause);
+                    run_uart_watch(machine, watch, limit, Some(pause), &mut output)
+                }).and_then(|(stop, count, line)| {
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
-                    if stop == Stop::OutputMatch {
+                    if pattern.is_empty() && let Some(line) = line {
+                        writeln!(output.output, "{line}").map_err(|error| error.to_string())?;
+                    }
+                    if (*absent && stop == Stop::Limit && limit == cycles)
+                        || (!*absent && stop == Stop::OutputMatch) {
                         Ok(None)
+                    } else if *absent && stop != Stop::OutputMatch {
+                        Err(format!("UART absence interval ended before completion ({stop:?})"))
+                    } else if *absent {
+                        Err(format!("Unexpected UART entry matching {pattern:?}"))
                     } else {
                         Err(format!("Terminal tester failed! Line containing {pattern:?} was not received ({stop:?})"))
                     }
@@ -587,12 +1327,15 @@ pub fn run(
             }
             Action::WaitForUart(target, pattern, end, timeout) => {
                 let start = machine.elapsed_steps();
+                let limit = timeout.map(|duration| duration_cycles(
+                    duration, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
+                )).transpose()?.unwrap_or(budget).min(budget);
                 wait_for_uart(
                     machine,
                     target.as_deref(),
                     pattern,
                     *end,
-                    timeout.map_or(budget, |timeout| timeout.min(budget)),
+                    limit,
                     &mut output,
                 )
                 .and_then(|(stop, count)| {
@@ -615,19 +1358,42 @@ pub fn run(
                     }
                 })
             }
-            Action::WaitForLed(target, state, timeout, hold) => wait_for_led(
-                machine,
-                target,
-                *state,
-                *timeout,
-                *hold,
-                &mut budget,
-                &mut output,
-            )
-            .map(|count| {
-                retired += count;
-                None
-            }),
+            Action::WaitForLed(target, state, timeout, hold) => {
+                let rate = machine.bus.monitor_step_hz();
+                let timeout = duration_cycles(*timeout, CORTEX_M_STEP_HZ, rate)?;
+                let hold = duration_cycles(*hold, CORTEX_M_STEP_HZ, rate)?;
+                wait_for_led(machine, target, *state, timeout, hold, &mut budget, &mut output)
+                    .map(|count| {
+                        retired += count;
+                        None
+                    })
+            }
+            Action::WriteTesterUart(id, text, ending, echo, pause) => {
+                let target = machine.bus.uart_tester_target(*id)?.to_owned();
+                let cycles = if echo.unwrap_or_else(|| machine.bus.default_uart_echo()) && !text.is_empty() {
+                    Some(uart_wait_cycles(machine, *id, None)?)
+                } else {
+                    None
+                };
+                machine.bus.write_uart_tester_input(&target, text, ending)?;
+                if let Some(cycles) = cycles {
+                    let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt, Some(false))?;
+                    let start = machine.elapsed_steps();
+                    let limit = cycles.min(budget);
+                    let pause = pause.unwrap_or(machine.bus.default_uart_pause);
+                    let (stop, count, _) = run_uart_watch(machine, watch, limit, Some(pause), &mut output)
+                        .map_err(|error| format!("{}:{}: {error}", command.source.display(), command.line))?;
+                    retired += count;
+                    budget -= machine.elapsed_steps().wrapping_sub(start);
+                    match stop {
+                        Stop::OutputMatch => Ok(None),
+                        Stop::Limit if cycles == limit => Err(format!("Terminal tester failed! UART echo {text:?} was not received")),
+                        _ => Err(format!("UART echo wait ended before completion ({stop:?})")),
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
             Action::WriteUartLine(target, text, ending) => machine
                 .external_event(ExternalEvent::UartLine(
                     target.clone(),
@@ -645,38 +1411,117 @@ pub fn run(
     Ok((Stop::ScriptComplete, retired))
 }
 
+fn live_command_boot(path: &Path, session: &Session) -> Boot {
+    let mut boot = Boot {
+        platform: Some(path.to_owned()),
+        image: Some(Asset::new("", path)),
+        started: true,
+        ..Boot::default()
+    };
+    boot.session.machine.clone_from(&session.machine);
+    boot.session.machine_cleared = session.machine_cleared;
+    boot.session.number_mode = session.number_mode;
+    boot
+}
+
+fn deferred_script_state(path: &Path, session: &Session) -> ScriptState {
+    ScriptState {
+        boot: live_command_boot(path, session),
+        machine: true,
+        variables: session.variables.clone(),
+        macros: session.macros.clone(),
+        aliases: session.aliases.clone(),
+        ..ScriptState::default()
+    }
+}
+
+fn apply_deferred_state(session: &mut Session, state: ScriptState) -> Boot {
+    session.machine_cleared = state.boot.session.machine_cleared;
+    session.variables = state.variables;
+    session.macros = state.macros;
+    session.aliases = state.aliases;
+    state.boot
+}
+
+fn validate_deferred_commands(boot: &Boot, depth: usize, allow_snapshots: bool) -> Result<(), String> {
+    if depth >= 32 {
+        return Err("recursive or excessively deep deferred monitor script".into());
+    }
+    if !boot.post_run.is_empty() || (!allow_snapshots && boot.runtime.iter().any(|entry| matches!(
+        entry.action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory
+    ))) {
+        return Err("snapshot and post-run commands are unavailable in this deferred invocation".into());
+    }
+    Ok(())
+}
+
+fn run_deferred_commands(
+    machine: &mut Machine, boot: Boot, budget: u64, output: &mut ScriptOutput<'_>, session: &mut Session,
+    depth: usize,
+) -> Result<(Stop, u64), String> {
+    session.number_mode = boot.session.number_mode;
+    if boot.runtime.is_empty() {
+        return Ok((Stop::ScriptComplete, 0));
+    }
+    let replies = output.replies.as_mut().map(|reply| &mut **reply as &mut dyn Write);
+    run_commands(machine, &boot.runtime, budget, &mut *output.output, session, replies, depth + 1)
+}
+
+fn write_last_log(count: i32, output: &mut impl Write) -> Result<(), String> {
+    for entry in crate::monitor_log::tail(count) {
+        writeln!(output, "{entry}").map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<()> {
+    writeln!(output, "{status} {}", bytes.len())?;
+    output.write_all(bytes)?;
+    output.flush()
+}
+
 /// Execute one runtime command at a time on the same machine. Separate command
 /// status from UART/monitor bytes so firmware output cannot create a reply frame.
 pub fn serve(
     machine: &mut Machine,
     mut input: impl BufRead,
     mut output: impl Write,
-    startup_output: &str,
+    startup_output: &[u8],
+    mut session: Session,
+    root: &Path,
 ) -> Result<(), String> {
-    fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<()> {
-        writeln!(output, "{status} {}", bytes.len())?;
-        output.write_all(bytes)?;
-        output.flush()
-    }
-
     let initial: Vec<_> = (0..machine.hart_count()).map(|id| machine.hart_mut(id).clone()).collect();
     let path = Path::new("<monitor>");
     let mut line = String::new();
-    frame(&mut output, "READY", startup_output.as_bytes()).map_err(|error| error.to_string())?;
+    frame(&mut output, "READY", startup_output).map_err(|error| error.to_string())?;
     loop {
         line.clear();
         if input.read_line(&mut line).map_err(|error| error.to_string())? == 0 {
             return Ok(());
         }
-        let text = line.trim();
+        let framed;
+        let text = if let Some(length) = line.strip_prefix("PENV-COMMAND ") {
+            framed = read_monitor_text(&mut input, length)?;
+            framed.trim()
+        } else {
+            line.trim()
+        };
         if let Some(result) = crate::monitor_asm::handle(machine, text) {
             match result {
-                Ok(()) => frame(&mut output, "OK", &[]),
+                Ok(size) => frame(&mut output, "OK", size.to_string().as_bytes()),
                 Err(error) => frame(&mut output, "UNSUPPORTED", error.as_bytes()),
             }.map_err(|error| error.to_string())?;
             continue;
         }
-        if let Some(result) = crate::monitor_log::handle(machine, text) {
+        let log_result = if text.split_ascii_whitespace().next().is_some_and(crate::monitor_log::is_command) {
+            match resolve_log_command(text, &session.variables) {
+                Ok(command) => crate::monitor_log::handle(machine, &command, u64::MAX, &mut io::sink()),
+                Err(error) => Some(Err(error)),
+            }
+        } else {
+            None
+        };
+        if let Some(result) = log_result {
             match result {
                 Ok((status, value)) => frame(&mut output, status, value.as_bytes()),
                 Err(error) if error.starts_with("unsupported") => {
@@ -686,30 +1531,142 @@ pub fn serve(
             }.map_err(|error| error.to_string())?;
             continue;
         }
-        let mut boot = Boot {
-            platform: Some(path.into()),
-            image: Some(Asset::new("", path)),
-            started: true,
-            ..Boot::default()
-        };
+        let mut boot = live_command_boot(path, &session);
         let mut existing_machine = true;
-        let parsed = command_words(text).and_then(|words| {
-            execute(text, &words, &HashMap::new(), &mut existing_machine, &mut boot, path, Path::new("."), 1)
-        });
+        let mut included_state = None;
+        let parsed = (|| {
+            let mut separators = Vec::new();
+            let words = if text.contains(';') {
+                command_tokens(text, Some(&mut separators))?
+            } else {
+                command_words(text)?
+            };
+            if !separators.is_empty() || matches!(words.as_slice(), ["include" | "i" | "ExecuteScript", _]) {
+                let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+                boot.runtime.push(RuntimeCommand {
+                    line: 1, source: path.to_owned(),
+                    action: Action::InvokeMonitorScript(text.to_owned(), cwd.join(path), root.to_owned()),
+                });
+                return Ok(());
+            }
+            if let ["runMacro", name] = words.as_slice()
+                && let Some(name) = name.strip_prefix('$')
+            {
+                boot.runtime.push(RuntimeCommand {
+                    line: 1, source: path.to_owned(),
+                    action: Action::InvokeMonitorMacro(name.to_owned(), root.to_owned()),
+                });
+                return Ok(());
+            }
+            if words.first().is_some_and(|verb|
+                matches!(*verb, "alias" | "macro" | "printenv")
+                    || matches!(words.as_slice(), ["mach" | "machine", "set" | "clear", ..])
+                    || monitor_alias(&session.aliases, session.selected_machine(), verb).is_some())
+            {
+                let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+                let mut state = ScriptState {
+                    boot: std::mem::take(&mut boot),
+                    machine: true,
+                    variables: session.variables.clone(),
+                    macros: session.macros.clone(),
+                    aliases: session.aliases.clone(),
+                    ..ScriptState::default()
+                };
+                load_text(path, cwd.join(path), root, &mut state, text)?;
+                if !state.boot.post_run.is_empty() {
+                    return Err("post-run script actions are unavailable in a live include".into());
+                }
+                if state.boot.runtime.iter().any(|command| matches!(command.action,
+                    Action::SaveMemory(..) | Action::LoadMemory(_)))
+                {
+                    return Err("use live Save and Load as separate monitor commands".into());
+                }
+                boot = state.boot;
+                included_state = Some((state.variables, state.macros, state.aliases));
+                return Ok(());
+            }
+            if assign_variable(text, &words, session.machine.as_deref().filter(|_| !session.machine_cleared), &mut session.variables, None)? {
+                return Ok(());
+            }
+            execute(text, &words, &session.variables, &mut existing_machine, &mut boot, path, root, 1)
+        })();
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
-            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, mode, timeout), .. }]) => {
-                let result = machine.bus.watch_uart_tester_mode(*id, expected, *mode).and_then(|watch| {
-                    let stop = drive_uart_watch(machine, watch, *timeout, &mut bytes);
+            (Ok(()), []) => {
+                session.number_mode = boot.session.number_mode;
+                session.machine_cleared = boot.session.machine_cleared;
+                if let Some((variables, macros, aliases)) = included_state.take() {
+                    session.variables = variables;
+                    session.macros = macros;
+                    session.aliases = aliases;
+                }
+                frame(&mut output, "OK", &[])
+            }
+            (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps, tester, pause), .. }]) => {
+                let result = duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
+                    .and_then(|cycles| wait_for_uart_idle(machine, *tester, cycles, *pause, u64::MAX, &mut bytes));
+
+                match result {
+                    Ok((Stop::Limit, _)) => frame(&mut output, "MATCH", &[]),
+                    Ok((Stop::OutputMatch, _)) => frame(&mut output, "FAIL", b"UART was not idle"),
+                    Ok((stop, _)) => frame(&mut output, "STOP", format!("{stop:?}").as_bytes()),
+                    Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+                }
+            }
+
+            (Ok(()), [RuntimeCommand { action: Action::WaitForBytes(id, pattern, match_start, timeout, pause), .. }]) => {
+                let result = uart_wait_cycles(machine, *id, *timeout)
+                    .and_then(|cycles| wait_for_uart_bytes(machine, *id, pattern, *match_start, cycles, *pause, &mut io::sink()));
+                match result {
+                    Ok((_, _, Some(matched))) => frame(&mut output, "MATCHBYTES", uart_byte_payload(matched).as_bytes()),
+                    Ok((Stop::Limit, _, None)) => frame(&mut output, "FAIL", b"Terminal tester failed! Byte pattern was not received (Limit)"),
+                    Ok((stop, _, None)) => frame(&mut output, "STOP", format!("{stop:?}").as_bytes()),
+                    Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+                }
+            }
+            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups, first_only, pause), .. }]) => {
+                let result = uart_wait_cycles(machine, *id, *timeout).and_then(|cycles| {
+                    let watch = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode, *first_only)?;
+                    let pause = !*absent && pause.unwrap_or(machine.bus.default_uart_pause);
+                    let started_at = machine.monitor_elapsed_ns();
+                    let stop = drive_tester_watch(machine, watch, cycles, pause, &mut bytes);
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
+                    let timestamp = if machine.bus.uart_tester_matched_unfinished_line(watch) {
+                        Some(machine.monitor_elapsed_ns())
+                    } else {
+                        machine.bus.uart_tester_matched_timestamp(watch)
+                    };
+                    let captures = if machine.bus.uart_tester_suppresses_captures(watch) {
+                        None
+                    } else {
+                        regex.as_ref()
+                    };
                     machine.bus.finish_stm32_uart_watch(watch);
                     if let Some(line) = failure {
-                        return Ok(("FAIL", format!("Terminal tester failing entry: {line}")));
+                        return Ok(("FAIL", format!("Terminal tester failed! Test failing entry has been found on UART: {line}")));
                     }
                     match (stop?, matched) {
-                        ((Stop::OutputMatch, _), Some(line)) => Ok(("MATCH", line)),
-                        ((Stop::Limit, _), _) => Ok(("FAIL", format!("UART line containing {expected:?} was not received (Limit)"))),
+                        ((Stop::OutputMatch, _), Some(line)) if *absent => Ok(("FAIL", format!("Unexpected UART entry: {line}"))),
+                        ((Stop::Limit, _), _) if *absent => Ok(("MATCH", String::new())),
+                        ((Stop::OutputMatch, _), Some(line)) => {
+                            let regex = if *capture_groups { captures } else { None };
+                            let payload = uart_capture_payload(&line, regex);
+                            if let Some(timestamp) = timestamp {
+                                Ok(("MATCHTIMEDUART", format!("{timestamp}\t{payload}")))
+                            } else if *capture_groups {
+                                Ok(("MATCHCAPTURES", payload))
+                            } else {
+                                Ok(("MATCH", line))
+                            }
+                        }
+                        ((Stop::Limit, _), _) => {
+                            let buffered = machine.bus.uart_tester_buffered_tail(watch).unwrap_or_default();
+                            Ok(("FAIL", format!(
+                                "Terminal tester failed! UART line containing {expected:?} was not received (Limit)\nVirtual time: {} to {}\nBuffered UART tail: {buffered:?}",
+                                monitor_timestamp(started_at), monitor_timestamp(machine.monitor_elapsed_ns()),
+                            )))
+                        }
                         ((stop, _), _) => Ok(("STOP", format!("{stop:?}"))),
                     }
                 });
@@ -724,22 +1681,96 @@ pub fn serve(
                     Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
             }
-            (Ok(()), [command]) => {
-                match run(machine, path, std::slice::from_ref(command), u64::MAX, &mut bytes) {
-                    Ok((Stop::ScriptComplete, _)) => frame(&mut output, "OK", &bytes),
+            (Ok(()), commands) if included_state.is_some() || commands.len() == 1 => {
+                let echo_assertion = matches!(commands,
+                    [RuntimeCommand { action: Action::WriteTesterUart(_, text, _, echo, _), .. }]
+                        if !text.is_empty() && echo.unwrap_or_else(|| machine.bus.default_uart_echo()));
+                match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, None, 0) {
+                    Ok((Stop::ScriptComplete, _)) => {
+                        if let Some((variables, macros, aliases)) = included_state.take() {
+                            session.number_mode = boot.session.number_mode;
+                            session.machine_cleared = boot.session.machine_cleared;
+                            session.variables = variables;
+                            session.macros = macros;
+                            session.aliases = aliases;
+                        }
+                        frame(&mut output, if echo_assertion { "MATCH" } else { "OK" }, &bytes)
+                    }
                     Ok((stop, _)) => {
                         frame(&mut output, "STOP", format!("{stop:?}").as_bytes())
+                    }
+                    Err(error) if (error.starts_with("<monitor>:1: PC ")
+                        || error.starts_with("<monitor>:1: Register ")) && error.contains(" value assertion failed,") => {
+                        frame(&mut output, "FAIL", error.as_bytes())
+                    }
+                    Err(error) if error.starts_with("<monitor>:1: Terminal tester failed!") => {
+                        frame(&mut output, "FAIL", error.as_bytes())
+                    }
+                    Err(error) if error.starts_with("<monitor>:1: unsupported ADXL372 target ")
+                        || error.starts_with("<monitor>:1: unsupported snapshot platform") => {
+                        frame(&mut output, "UNSUPPORTED", error.as_bytes())
                     }
                     Err(error) => {
                         frame(&mut output, "ERROR", error.as_bytes())
                     }
                 }
             }
+            (Err(error), _) if missing_include(&error) || invalid_command_parameters(&error) => {
+                frame(&mut output, "REJECTED", error.as_bytes())
+            }
+            (Err(error), _) if error.starts_with("Wrong machine number.")
+                || (error.starts_with("Machine ") && error.ends_with(" not found.")) => {
+                frame(&mut output, "ERROR", error.as_bytes())
+            }
             (result, _) => frame(&mut output, "UNSUPPORTED",
                                 result.err().as_deref().unwrap_or("not a runtime command").as_bytes()),
         };
         reply.map_err(|error| error.to_string())?;
     }
+}
+
+fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<String, String> {
+    let repl = snapshot_platform(machine)?;
+    let name = session.machine.as_deref().unwrap_or("machine-0");
+    if name.chars().any(|c| c.is_control() || matches!(c, '"' | '\\')) {
+        return Err("unsupported snapshot platform name for monitor bootstrap".into());
+    }
+    let mut script = format!("mach create \"{name}\"\n");
+    if let Some(repl) = repl {
+        script.push_str(&format!("machine LoadPlatformDescriptionFromString \"{repl}\"\n"));
+    }
+    Ok(script)
+}
+
+fn snapshot_platform(machine: &Machine) -> Result<Option<String>, String> {
+    if !machine.cpu_less {
+        return Err("unsupported snapshot platform bootstrap outside empty or TrivialUart CPU-less machines".into());
+    }
+    if machine.empty_monitor {
+        return Ok(None);
+    }
+    let (address, uart) = machine.bus.snapshot_trivial_uart()
+        .map_err(|error| format!("unsupported snapshot platform: {error}"))?;
+    trivial_uart_snapshot_repl(address, uart).map(Some)
+}
+
+fn trivial_uart_snapshot_repl(address: u32, uart: &str) -> Result<String, String> {
+    if uart.is_empty() || !uart.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err("unsupported snapshot platform name for monitor bootstrap".into());
+    }
+    Ok(format!("{uart}: UART.TrivialUart @ sysbus {address:#x}"))
+}
+
+fn monitor_timestamp(ns: u128) -> String {
+    let seconds = ns / 1_000_000_000;
+    format!("{:02}:{:02}:{:02}.{:09}",
+        seconds / 3600, seconds / 60 % 60, seconds % 60, ns % 1_000_000_000)
+}
+
+pub(crate) fn duration_cycles(duration: u64, units_per_second: u64, rate: u64) -> Result<u64, String> {
+    let cycles = (u128::from(duration) * u128::from(rate))
+        .div_ceil(u128::from(units_per_second));
+    u64::try_from(cycles).map_err(|_| "duration exceeds virtual time".to_owned())
 }
 
 fn read_bus_bytes(
@@ -759,6 +1790,41 @@ fn read_bus_bytes(
         write!(output, "{separator}0x{byte:02x}").map_err(|error| error.to_string())?;
     }
     writeln!(output, "]").map_err(|error| error.to_string())
+}
+
+fn uart_byte_payload(matched: crate::uart::BinaryUartMatch) -> String {
+    use std::fmt::Write;
+    let mut payload = String::new();
+    for (index, field) in std::iter::once(Some(matched.content)).chain(matched.groups).enumerate() {
+        if index != 0 {
+            payload.push('\t');
+        }
+        for byte in field.unwrap_or_default() {
+            write!(payload, "{byte:02x}").expect("writing to String");
+        }
+    }
+    payload
+}
+
+fn uart_capture_payload(line: &str, regex: Option<&regex::Regex>) -> String {
+    use std::fmt::Write;
+
+    // Tab-separated hex preserves UTF-8 and empty captures.
+    let mut payload = String::new();
+    let captures = regex.and_then(|regex| regex.captures(line));
+    let groups = captures.iter().flat_map(|captures| captures.iter().skip(1));
+    for (index, field) in std::iter::once(line)
+        .chain(groups.map(|group| group.map_or("", |group| group.as_str())))
+        .enumerate()
+    {
+        if index != 0 {
+            payload.push('\t');
+        }
+        for byte in field.bytes() {
+            write!(payload, "{byte:02x}").expect("writing to String");
+        }
+    }
+    payload
 }
 
 fn write_hex_list<T: std::fmt::LowerHex>(
@@ -789,7 +1855,7 @@ fn wait_for_led(
         let start = machine.elapsed_steps();
         let limit = timeout.min(*budget);
         let (stop, count) =
-            machine.run_until(limit, output, |bus, _| bus.gpio_led(index).state == state)?;
+            run_until_deadline(machine, limit, output, |bus, _| bus.gpio_led(index).state == state)?;
         *budget -= machine.elapsed_steps().wrapping_sub(start);
         if stop != Stop::OutputMatch {
             return Err(format!(
@@ -801,7 +1867,7 @@ fn wait_for_led(
 
     let transitions = machine.bus.gpio_led(index).transitions;
     let limit = hold.min(*budget);
-    let (stop, count) = machine.run_until(limit, output, |bus, _| {
+    let (stop, count) = run_until_deadline(machine, limit, output, |bus, _| {
         bus.gpio_led(index).transitions != transitions
     })?;
     if stop == Stop::OutputMatch {
@@ -816,6 +1882,65 @@ fn wait_for_led(
     Ok(retired + count)
 }
 
+pub(crate) fn run_until_deadline<W: Write>(
+    machine: &mut Machine,
+    cycles: u64,
+    output: &mut W,
+    matched: impl Fn(&crate::bus::Bus, &W) -> bool,
+) -> Result<(Stop, u64), String> {
+    let start = machine.elapsed_steps();
+    let (stop, retired) = machine.run_until(cycles, output, matched)?;
+    if stop == Stop::Limit && machine.elapsed_steps().wrapping_sub(start) < cycles {
+        return Ok((Stop::Paused, retired));
+    }
+    Ok((stop, retired))
+}
+
+fn uart_wait_cycles(machine: &Machine, id: Option<usize>, timeout: Option<u64>) -> Result<u64, String> {
+    let timeout = match timeout {
+        Some(timeout) => timeout,
+        None => machine.bus.uart_tester_timeout(id)?,
+    };
+    duration_cycles(timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
+}
+
+fn wait_for_uart_bytes(
+    machine: &mut Machine,
+    id: Option<usize>,
+    pattern: &BinaryUartPattern,
+    match_start: bool,
+    cycles: u64,
+    pause: Option<bool>,
+    output: &mut impl Write,
+) -> Result<(Stop, u64, Option<crate::uart::BinaryUartMatch>), String> {
+    let watch = machine.bus.watch_uart_bytes(id, pattern, match_start)?;
+    let pause = pause.unwrap_or(machine.bus.default_uart_pause);
+    let result = drive_tester_watch(machine, watch, cycles, pause, output);
+    let matched = machine.bus.take_uart_byte_match(watch);
+    machine.bus.finish_stm32_uart_watch(watch);
+    result.map(|(stop, count)| (stop, count, matched))
+}
+
+fn wait_for_uart_idle(
+    machine: &mut Machine,
+    tester: Option<usize>,
+    cycles: u64,
+    pause: Option<bool>,
+    budget: u64,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    let (id, previous) = machine.bus.uart_activity(tester)?;
+    let limit = cycles.min(budget);
+    if limit != 0 {
+        machine.set_monitor_active(true);
+    }
+    let result = run_until_deadline(machine, limit, output, |bus, _| bus.uart_activity_changed(id, previous))?;
+    if limit == cycles && result.0 == Stop::Limit && pause.unwrap_or(machine.bus.default_uart_pause) {
+        machine.set_monitor_active(false);
+    }
+    Ok(result)
+}
+
 fn drive_uart_watch(
     machine: &mut Machine,
     watch: UartWatch,
@@ -825,23 +1950,46 @@ fn drive_uart_watch(
     if machine.bus.stm32_uart_matched(watch) {
         Ok((Stop::OutputMatch, 0))
     } else {
-        machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched(watch))
+        run_until_deadline(machine, budget, output, |bus, _| bus.stm32_uart_matched(watch))
     }
+}
+
+fn drive_tester_watch(
+    machine: &mut Machine,
+    watch: UartWatch,
+    budget: u64,
+    pause: bool,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    if budget != 0 && !machine.bus.stm32_uart_matched(watch) {
+        machine.set_monitor_active(true);
+    }
+    let result = drive_uart_watch(machine, watch, budget, output)?;
+    if pause && result.0 == Stop::OutputMatch {
+        machine.set_monitor_active(false);
+    }
+    Ok(result)
 }
 
 fn run_uart_watch(
     machine: &mut Machine,
     watch: UartWatch,
     budget: u64,
+    pause: Option<bool>,
     output: &mut impl Write,
-) -> Result<(Stop, u64), String> {
-    let result = drive_uart_watch(machine, watch, budget, output).and_then(|result| {
+) -> Result<(Stop, u64, Option<String>), String> {
+    let result = if let Some(pause) = pause {
+        drive_tester_watch(machine, watch, budget, pause, output)
+    } else {
+        drive_uart_watch(machine, watch, budget, output)
+    };
+    let result = result.and_then(|(stop, count)| {
         if let Some(line) = machine.bus.uart_watch_failure(watch) {
             return Err(format!(
                 "Terminal tester failed! Test failing entry has been found on UART:\n{line}"
             ));
         }
-        Ok(result)
+        Ok((stop, count, machine.bus.uart_tester_matched_line(watch)))
     });
     machine.bus.finish_stm32_uart_watch(watch);
     result
@@ -853,11 +2001,11 @@ fn wait_for_uart(
     pattern: &str,
     end: UartWaitMode,
     budget: u64,
-    output: &mut ScriptOutput<'_, impl Write>,
+    output: &mut ScriptOutput<'_>,
 ) -> Result<(Stop, u64), String> {
     if let Some(target) = target {
         let watch = machine.bus.watch_stm32_uart(target, pattern, end)?;
-        run_uart_watch(machine, watch, budget, output)
+        run_uart_watch(machine, watch, budget, None, output).map(|(stop, count, _)| (stop, count))
     } else {
         let history = output
             .history
@@ -954,6 +2102,7 @@ impl Boot {
 #[derive(Debug)]
 #[derive(Clone)]
 pub struct Asset {
+    pub fdt_bootargs: Option<(String, bool)>,
     value: String,
     script: PathBuf,
 }
@@ -1013,12 +2162,25 @@ impl Network {
     }
 }
 
+fn monitor_string(token: &str) -> Option<String> {
+    if let Some(body) = token.strip_prefix("\"\"\"").and_then(|body| body.strip_suffix("\"\"\"")) {
+        return Some(body.to_owned());
+    }
+    for (quote, escaped) in [('"', r#"\""#), ('\'', r"\'")] {
+        if let Some(body) = token.strip_prefix(quote).and_then(|body| body.strip_suffix(quote)) {
+            return Some(body.replace(escaped, if quote == '"' { "\"" } else { "'" }));
+        }
+    }
+    None
+}
+
 fn unquote(text: &str) -> &str {
     text.strip_prefix('"')
         .and_then(|text| text.strip_suffix('"'))
         .unwrap_or(text)
 }
 
+#[derive(Clone, Debug)]
 struct Macro {
     script: PathBuf,
     commands: Vec<(usize, String)>,
@@ -1028,29 +2190,352 @@ struct Macro {
 struct ScriptState {
     variables: HashMap<String, String>,
     macros: HashMap<String, Macro>,
+    aliases: HashMap<String, String>,
     visiting: HashSet<PathBuf>,
     boot: Boot,
     machine: bool,
 }
 
+fn describe_environment(
+    variables: &HashMap<String, String>,
+    macros: &HashMap<String, Macro>,
+    aliases: &HashMap<String, String>,
+) -> String {
+    use std::fmt::Write;
+    let mut output = String::from("Variables:\n");
+    let mut variables: Vec<_> = variables.iter().collect();
+    variables.sort_unstable_by_key(|(name, _)| *name);
+    for (name, token) in variables {
+        if !name.contains('.') || name == "global.ORIGIN" {
+            continue;
+        }
+        let (kind, value) = describe_monitor_token(token);
+        let _ = writeln!(output, "\t{kind} {name} = {value} ({token})");
+    }
+    output.push_str("Macros:\n");
+    let mut macros: Vec<_> = macros.iter().collect();
+    macros.sort_unstable_by_key(|(name, _)| *name);
+    for (name, body) in macros {
+        let body = body.commands.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join("\n\t");
+        let prefix = if name.contains('.') { "" } else { "global." };
+        let _ = writeln!(output, "{prefix}{name} \"{body}\"");
+    }
+    output.push_str("Aliases:");
+    let mut aliases: Vec<_> = aliases.iter().collect();
+    aliases.sort_unstable_by_key(|(name, _)| *name);
+    for (name, command) in aliases {
+        let _ = write!(output, "\n\t{name} = {command}");
+    }
+    output
+}
+
+fn describe_monitor_token(token: &str) -> (&'static str, String) {
+    if let Some(path) = token.strip_prefix('@') {
+        return ("PathToken", path_value(unquote(path)));
+    }
+    if let Some(value) = monitor_string(token) {
+        return ("StringToken", value);
+    }
+    if token.eq_ignore_ascii_case("true") {
+        return ("BooleanToken", "True".into());
+    }
+    if token.eq_ignore_ascii_case("false") {
+        return ("BooleanToken", "False".into());
+    }
+    if let Some(value) = token.strip_prefix("0x").and_then(|value| u64::from_str_radix(value, 16).ok()) {
+        return ("HexToken", value.to_string());
+    }
+    if let Ok(value) = token.parse::<i64>() {
+        return ("DecimalIntegerToken", value.to_string());
+    }
+    ("LiteralToken", token.to_owned())
+}
+
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
-    load_script(path, root, false)
+    load_script(path, root, false, None)
 }
 
 pub fn load_for_session(path: &Path, root: &Path) -> Result<Boot, String> {
-    load_script(path, root, true)
+    load_script(path, root, true, None)
 }
 
-fn load_script(path: &Path, root: &Path, session: bool) -> Result<Boot, String> {
+pub enum StartupInput {
+    Boot(Box<Boot>),
+    Reply(&'static str, String),
+}
+
+pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<StartupInput, String> {
+    let mut header = String::new();
+    input.by_ref().take(64).read_line(&mut header).map_err(|e| e.to_string())?;
+    let source = std::env::current_dir().map_err(|e| e.to_string())?.join("<monitor-startup>");
+    if let Some(length) = header.strip_prefix("PENV-STARTUP ") {
+        let body = read_monitor_text(&mut input, length)?;
+        return load_script(&source, root, true, Some(&body)).map(|boot| StartupInput::Boot(Box::new(boot)));
+    }
+    let chain_length = header.strip_prefix("PENV-INSPECT-CHAIN ");
+    let length = chain_length.or_else(|| header.strip_prefix("PENV-INSPECT "))
+        .ok_or("expected a monitor startup or inspection frame followed by the byte count")?;
+    let inspect_chain = chain_length.is_some();
+    let body = read_monitor_text(&mut input, length)?;
+    header.clear();
+    input.by_ref().take(64).read_line(&mut header).map_err(|e| e.to_string())?;
+    let length = header.strip_prefix("PENV-COMMAND ").ok_or("expected PENV-COMMAND")?;
+    let command = read_monitor_text(&mut input, length)?;
+    let mut state = script_state()?;
+    if inspect_chain {
+        let mut separators = Vec::new();
+        if command_tokens(command.trim(), Some(&mut separators)).is_ok()
+            && !separators.is_empty()
+            && load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && !state.machine && state.boot.runtime.iter().all(|entry| is_console_action(&entry.action))
+        {
+            state.boot.monitor_output.clear();
+            state.boot.runtime.retain(|entry| !matches!(entry.action, Action::Echo(_) | Action::LastLog(_)));
+            if load_text(&source, source.clone(), root, &mut state, &command).is_ok()
+                && !state.machine && !state.boot.has_platform() && !state.boot.started
+                && state.boot.runtime.iter().all(|entry| is_console_action(&entry.action))
+            {
+                let mut output = Vec::new();
+                run_console_script(&state.boot, &mut output)?;
+                return Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?));
+            }
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
+    if let Ok(["mach" | "machine", "set", selector]) = command_words(command.trim()).as_deref() {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && let Err(error) = validate_machine_selection(
+                selector, &state.variables, state.boot.session.machine.as_deref(), state.machine,
+            )
+        {
+            return Ok(StartupInput::Reply("REJECTED", error));
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
+    if let Ok([verb @ ("include" | "i" | "ExecuteScript"), value]) = command_words(command.trim()).as_deref() {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok() {
+            let origin = source.parent().unwrap_or(Path::new("."));
+            if let Err(error) = include_path(verb, value, &source, origin, root, &state.variables) {
+                let status = if missing_include(&error) { "REJECTED" } else { "ERROR" };
+                return Ok(StartupInput::Reply(status, error));
+            }
+            if !state.machine && state.boot.runtime.is_empty() {
+                state.boot.monitor_output.clear();
+                if load_text(&source, source.clone(), root, &mut state, &command).is_ok()
+                    && !state.machine && !state.boot.has_platform() && state.boot.runtime.is_empty()
+                {
+                    let mut output = Vec::new();
+                    run_console_script(&state.boot, &mut output)?;
+                    return Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?));
+                }
+            }
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
+    if let Ok(["machine", "LoadPlatformDescription", value]) = command_words(command.trim()).as_deref() {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && state.machine
+            && !state.boot.has_platform()
+            && !state.boot.started
+            && state.boot.runtime.is_empty()
+            && let Ok(path) = platform_path(value, &source, root, &state.variables)
+            && !path.to_string_lossy().contains("://")
+            && platform_file_missing(&path)
+        {
+            return Ok(StartupInput::Reply("REJECTED", format!("Could not find file '{}'.", path.display())));
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
+    if let Ok([verb @ ("Load" | "Save"), value]) = command_words(command.trim()).as_deref() {
+        let mut pending = script_state()?;
+        if load_text(&source, source.clone(), root, &mut pending, &body).is_ok()
+            && pending.boot.runtime.is_empty()
+            && let Ok(path) = snapshot_path(value, source.parent().unwrap_or(Path::new(".")), &pending.variables)
+            && let Some(error) = if *verb == "Load" {
+                inspect_snapshot_input(&path)
+            } else {
+                inspect_snapshot_destination(&path)
+            }
+        {
+            return Ok(StartupInput::Reply("REJECTED", error));
+        }
+    }
+    if let Ok(words) = command_words(command.trim())
+        && (matches!(words.first(), Some(&("log" | "Save" | "Load")))
+            || matches!(words.as_slice(), ["logLevel", _]))
+    {
+        let uses_variables = words[1..].iter().any(|word| word.starts_with('$') || word.starts_with("@$"));
+        if (!uses_variables || load_text(&source, source.clone(), root, &mut state, &body).is_ok())
+            && let Err(error) = execute(
+                command.trim(), &words, &state.variables, &mut state.machine,
+                &mut state.boot, &source, root, 1,
+            )
+            && invalid_command_parameters(&error)
+        {
+            return Ok(StartupInput::Reply("REJECTED", error));
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
+    if matches!(command_words(command.trim()).as_deref(), Ok(["runMacro", _])) {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && !state.machine && state.boot.runtime.is_empty()
+        {
+            state.boot.monitor_output.clear();
+            if let Err(error) = load_text(&source, source.clone(), root, &mut state, &command) {
+                return Ok(StartupInput::Reply("ERROR", error));
+            }
+            if !state.machine && !state.boot.has_platform() && state.boot.runtime.is_empty() {
+                let mut output = Vec::new();
+                run_console_script(&state.boot, &mut output)?;
+                return Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?));
+            }
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
+    if matches!(command_words(command.trim()).as_deref(), Ok(["emulation", "IsStarted"])) {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && !state.boot.started
+            && !state.boot.has_platform()
+            && state.boot.runtime.iter().all(|entry| is_console_action(&entry.action))
+        {
+            return Ok(StartupInput::Reply("OK", emulation_started_reply(state.boot.started).into()));
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
+    // Inspect only read-only commands that resolve in startup state.
+    // A queued runtime operation may change that state, so use the live monitor then.
+    if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _] | ["lastLog"] | ["lastLog", _] | ["printenv"]))
+        || load_text(&source, source.clone(), root, &mut state, &body).is_err()
+        || state.boot.has_platform()
+        || state.boot.started
+        || !state.boot.runtime.iter().all(|command| matches!(command.action,
+            Action::ScriptLog(..) | Action::LogLevel(_)))
+    {
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
+    state.boot.monitor_output.clear();
+    if let Err(error) = load_text(&source, source.clone(), root, &mut state, &command) {
+        let status = if error.ends_with(LAST_LOG_PARAMETERS) { "REJECTED" } else { "ERROR" };
+        return Ok(StartupInput::Reply(status, error));
+    }
+    let mut output = Vec::new();
+    run_console_script(&state.boot, &mut output)?;
+    if matches!(command_words(command.trim()).as_deref(), Ok(["echo", _])) {
+        output.pop(); // The inspection protocol returns the echo value without a trailing newline.
+    }
+    Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?))
+}
+
+fn emulation_started_reply(started: bool) -> &'static str {
+    if started { "True\n" } else { "False\n" }
+}
+
+fn is_console_action(action: &Action) -> bool {
+    matches!(action, Action::ScriptLog(..) | Action::LogLevel(_) | Action::LastLog(_) | Action::Echo(_))
+}
+
+fn is_log_capture_setup(action: &Action) -> bool {
+    matches!(action, Action::MonitorLog(text) if
+        text.split_ascii_whitespace().next().is_some_and(|verb|
+            matches!(verb, "AttachMonitorLog" | "ClearMonitorLog")))
+}
+
+fn is_monitor_snapshot_action(action: &Action) -> bool {
+    matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment
+        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..))
+}
+
+fn is_empty_machine_action(action: &Action) -> bool {
+    is_console_action(action) || is_monitor_snapshot_action(action) || matches!(action,
+        Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
+        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::RunFor(_) | Action::RunUntil(_)
+        | Action::RunToSyncPoint | Action::SetEmulationPaused(_)
+        | Action::ClearMemory | Action::DescribeSnapshotPlatform)
+}
+
+pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), String> {
+    crate::monitor_log::enable_history();
+    if let Some(level) = boot.monitor_log_level {
+        crate::monitor_log::set_level(level);
+    }
+    for message in &boot.monitor_output {
+        writeln!(output, "{message}").map_err(|error| error.to_string())?;
+    }
+    for command in &boot.runtime {
+        match &command.action {
+            Action::ScriptLog(level, message) => crate::monitor_log::record(*level, message),
+            Action::LogLevel(level) => crate::monitor_log::set_level(*level),
+            Action::LastLog(count) => write_last_log(*count, output)?,
+            Action::Echo(message) => writeln!(output, "{message}").map_err(|error| error.to_string())?,
+            Action::EmulationIsStarted => output.write_all(emulation_started_reply(boot.started).as_bytes())
+                .map_err(|error| error.to_string())?,
+            _ => return Err("command requires a booted monitor".into()),
+        }
+    }
+    Ok(())
+}
+
+fn read_monitor_text(input: &mut impl Read, length: &str) -> Result<String, String> {
+    let length = length.strip_suffix('\n').and_then(|length| length.trim_end().parse::<usize>().ok())
+        .filter(|length| *length <= MAX_MONITOR_PAYLOAD)
+        .ok_or("invalid monitor frame byte count")?;
+    let mut body = vec![0; length];
+    input.read_exact(&mut body).map_err(|e| format!("reading monitor frame: {e}"))?;
+    String::from_utf8(body).map_err(|e| e.to_string())
+}
+
+fn script_state() -> Result<ScriptState, String> {
     let mut state = ScriptState::default();
-    load_file(path, root, &mut state)?;
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    state.variables.insert("global.CWD".into(), format!("@\"{}\"", cwd.display()));
+    state.variables.insert("global.ORIGIN".into(), format!("@\"{}\"", cwd.display()));
+    Ok(state)
+}
+
+fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) -> Result<Boot, String> {
+    let mut state = script_state()?;
+    if let Some(source) = source {
+        load_text(path, path.to_owned(), root, &mut state, source)?;
+    } else {
+        load_file(path, root, &mut state)?;
+    }
     let mut boot = state.boot;
+    boot.session.variables = state.variables;
+    boot.session.macros = state.macros;
+    boot.session.aliases = state.aliases;
+    if !session && !state.machine && !boot.has_platform() && !boot.started
+        && (!boot.monitor_output.is_empty() || !boot.runtime.is_empty())
+        && boot.runtime.iter().all(|command|
+            is_console_action(&command.action) || matches!(command.action, Action::EmulationIsStarted))
+    {
+        boot.console_only = true;
+        return Ok(boot);
+    }
+    // Keep monitor-only state in the same CPU-less backing store in both entry points.
+    if !state.machine && !boot.has_platform() && !boot.started
+        && (session || boot.runtime.iter().any(|command|
+            is_monitor_snapshot_action(&command.action) || matches!(command.action, Action::MonitorLog(_))))
+        && boot.runtime.iter().all(|command|
+            is_console_action(&command.action) || is_monitor_snapshot_action(&command.action)
+                || matches!(command.action, Action::MonitorLog(_) | Action::EmulationIsStarted))
+    {
+        boot.empty_machine = true;
+        return Ok(boot);
+    }
+    if state.machine && !boot.has_platform() && (session || !boot.runtime.is_empty())
+        && boot.runtime.iter().all(|command| is_empty_machine_action(&command.action))
+    {
+        boot.empty_machine = true;
+        return Ok(boot);
+    }
+    boot.materialize_platform()?;
     if let [
         RuntimeCommand {
             action: Action::RunFor(steps),
             ..
         },
     ] = boot.runtime.as_slice()
+        && (boot.image.is_some() || !boot.binaries.is_empty())
     {
         boot.run_steps = Some(*steps);
         boot.runtime.clear();
@@ -1093,23 +2578,107 @@ fn load_script(path: &Path, root: &Path, session: bool) -> Result<Boot, String> 
 
 fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), String> {
     let canonical = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let content = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    load_text(path, canonical, root, state, &content)
+}
+
+fn expand_macro(name: &str, state: &mut ScriptState, root: &Path) -> Result<(), String> {
+    let body = state.macros.get(name).ok_or("unknown macro")?.clone();
+    let canonical = if body.script.is_absolute() {
+        body.script.clone()
+    } else {
+        std::env::current_dir().map_err(|error| error.to_string())?.join(&body.script)
+    };
+    // Retain the script directory without mistaking a macro call for an include of its defining file.
+    let canonical = canonical.with_file_name(format!("<macro:{}>", name.replace(['/', '\\'], "_")));
+    for (index, text) in &body.commands {
+        load_text_at(&body.script, canonical.clone(), root, state, text, *index)?;
+    }
+    Ok(())
+}
+
+fn has_snapshot_boundary(boot: &Boot) -> bool {
+    boot.runtime.iter().any(|command| matches!(
+        command.action, Action::SaveMemory(..) | Action::LoadMemory(_)
+    ))
+}
+
+fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptState, content: &str) -> Result<(), String> {
+    load_text_at(path, canonical, root, state, content, 0)
+}
+
+fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptState, content: &str, offset: usize) -> Result<(), String> {
     if state.visiting.len() >= 64 || !state.visiting.insert(canonical.clone()) {
         return Err(format!(
             "{}: recursive or excessively deep script include",
             path.display()
         ));
     }
-    let content = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let origin = canonical.parent().unwrap_or(Path::new("."));
     let previous_origin = state.variables.insert(
         "global.ORIGIN".into(),
         format!("@{}", origin.display()),
     );
-    let mut cursor = content.lines().enumerate();
+    let mut cursor = content.lines().enumerate().map(|(line, text)| (offset.saturating_add(line), text));
     while let Some((line, raw)) = cursor.next() {
-        let text = raw.trim();
+        let mut text = std::borrow::Cow::Borrowed(raw.trim());
         let error = |message: &str| format!("{}:{}: {message}", path.display(), line + 1);
         if text.is_empty() || text.starts_with('#') || text.starts_with(':') {
+            continue;
+        }
+        // A Robot frame can contain a quoted argument spanning physical lines.
+        // Read it as one command when the same text is supplied in a RESC file.
+        while command_words(&text).as_ref().is_err_and(|error| error == UNTERMINATED_ARGUMENT) {
+            let (_, next) = cursor.next().ok_or_else(|| error(UNTERMINATED_ARGUMENT))?;
+            let command = text.to_mut();
+            command.push('\n');
+            command.push_str(next);
+        }
+        let text = text.as_ref();
+        let mut separators = Vec::new();
+        if text.contains(';') {
+            command_tokens(text, Some(&mut separators)).map_err(|e| error(&e))?;
+        }
+        if !separators.is_empty() {
+            let mut chain_name = canonical.file_name().unwrap_or_default().to_os_string();
+            chain_name.push(".<command-chain>");
+            let chain_source = canonical.with_file_name(chain_name);
+            let mut start = 0;
+            for end in separators.into_iter().chain(std::iter::once(text.len())) {
+                load_text_at(path, chain_source.clone(), root, state, &text[start..end], line)?;
+                start = end + 1;
+            }
+            continue;
+        }
+        if let Some(value) = text.strip_prefix("machine LoadPlatformDescriptionFromString ") {
+            if !state.machine || state.boot.session.machine_cleared {
+                return Err(error("inline REPL requires a machine"));
+            }
+            let value = value.trim();
+            let source = if let Some(first) = value.strip_prefix("\"\"\"") {
+                let mut body = first.to_owned();
+                while !body.ends_with("\"\"\"") {
+                    let (_, next) = cursor.next().ok_or_else(|| error("unterminated inline REPL"))?;
+                    body.push('\n');
+                    body.push_str(next);
+                }
+                body.truncate(body.len() - 3);
+                body
+            } else {
+                let value = resolve(&state.variables, value).map_err(|e| error(&e))?;
+                let inner = value.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                    .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                    .ok_or_else(|| error("expected quoted inline REPL"))?;
+                inner.replace("\\\"", "\"")
+            };
+            if state.boot.started || !state.boot.runtime.is_empty() {
+                let links = parse_gpio_overlay(&source, root).map_err(|message| error(&message))?;
+                state.boot.runtime.push(RuntimeCommand {
+                    line: line + 1, source: path.to_owned(), action: Action::GpioOverlay(links),
+                });
+            } else {
+                state.boot.inline_repl.push((origin.to_owned(), source));
+            }
             continue;
         }
         if let Some(name) = text
@@ -1151,90 +2720,108 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
         }
         if let Some(declaration) = text.strip_prefix("macro ") {
             let declaration = declaration.trim();
-            if let Some((name, body)) = declaration.split_once(char::is_whitespace) {
-                let body = body
-                    .trim()
-                    .strip_prefix("\"\"\"")
-                    .and_then(|body| body.strip_suffix("\"\"\""))
-                    .ok_or_else(|| error("expected triple-quoted macro body"))?;
-                state.macros.insert(
-                    name.into(),
-                    Macro {
-                        script: path.into(),
-                        commands: vec![(line, body.into())],
-                    },
-                );
-                continue;
-            }
-            let name = declaration;
-            if cursor
-                .next()
-                .is_none_or(|(_, line)| line.trim() != "\"\"\"")
-            {
-                return Err(error("expected triple-quoted macro body"));
-            }
-            let mut body = Vec::new();
-            loop {
-                let (index, command) = cursor.next().ok_or_else(|| error("unterminated macro"))?;
-                if command.trim() == "\"\"\"" {
-                    break;
-                }
-                body.push((index, command.trim().to_string()));
-            }
-            state.macros.insert(
-                name.into(),
-                Macro {
-                    script: path.into(),
-                    commands: body,
-                },
-            );
-            continue;
-        }
-        if let Some(assignment) = text.strip_prefix('$') {
-            let (name, value) = assignment
-                .split_once('=')
-                .ok_or_else(|| error("expected variable assignment"))?;
-            let name = name.trim();
-            if let Some(name) = name.strip_suffix('?') {
-                if resolve(&state.variables, &format!("${}", name.trim())).is_err() {
-                    state.variables.entry(name.trim().into()).or_insert_with(|| value.trim().into());
-                }
+            let (name, commands) = if let Some((name, body)) = declaration.split_once(char::is_whitespace) {
+                let body = monitor_string(body.trim()).ok_or_else(|| error("expected quoted macro body"))?;
+                (name, vec![(line, body)])
             } else {
-                state.variables.insert(name.into(), value.trim().into());
+                if cursor.next().is_none_or(|(_, line)| line.trim() != "\"\"\"") {
+                    return Err(error("expected triple-quoted macro body"));
+                }
+                let mut commands = Vec::new();
+                loop {
+                    let (index, command) = cursor.next().ok_or_else(|| error("unterminated macro"))?;
+                    if command.trim() == "\"\"\"" {
+                        break;
+                    }
+                    commands.push((index, command.trim().to_owned()));
+                }
+                (declaration, commands)
+            };
+            let body = Macro { script: path.into(), commands };
+            if has_snapshot_boundary(&state.boot) {
+                state.boot.runtime.push(RuntimeCommand {
+                    line: line + 1, source: path.to_owned(), action: Action::MonitorMacro(name.into(), body),
+                });
+            } else {
+                state.macros.insert(name.into(), body);
             }
             continue;
         }
         let words = command_words(text).map_err(|e| error(&e))?;
+        // A restore can change both machine selection and variable bindings.
+        if (matches!(words.as_slice(),
+                ["mach" | "machine", "set", _]
+                | ["numbersMode", _]
+                | ["SetDefaultUartTimeout" | "CreateTerminalTester" | "TestMonitorUartIdle"
+                    | "WaitForLineOnUart" | "WaitForTesterPrompt" | "WaitForNextLineOnUart"
+                    | "WaitForBytesOnUart" | "ShouldNotBeOnUart" | "WriteTesterUart"
+                    | "RegisterFailingUartString" | "UnregisterFailingUartString", ..]
+                | ["WaitForMonitorLog" | "AssertAbsentMonitorLog" | "RegisterFailingMonitorLog"
+                    | "UnregisterFailingMonitorLog" | "log" | "logLevel" | "lastLog", ..]
+                | ["emulation", "SetGlobalQuantum" | "SetQuantum" | "RunFor" | "RunUntil", _]
+                | ["machine", "UserState" | "GetTimeSourceInfo" | "SetQuantum" | "Reset", ..])
+            || words.first().is_some_and(|word| requires_selected_machine(word) && *word != "machine"))
+            && has_snapshot_boundary(&state.boot)
+        {
+            state.boot.runtime.push(RuntimeCommand {
+                line: line + 1, source: path.to_owned(),
+                action: Action::InvokeMonitorScript(text.to_owned(), canonical.clone(), root.to_owned()),
+            });
+            continue;
+        }
+        let assignment = text.starts_with('$') || matches!(words.as_slice(), ["set", _, _]);
+        let follows_snapshot = (assignment || matches!(words.as_slice(), ["echo", _] | ["printenv"] | ["alias", _, _]))
+            && has_snapshot_boundary(&state.boot);
+        if follows_snapshot && assignment {
+            state.boot.runtime.push(RuntimeCommand {
+                line: line + 1, source: path.to_owned(),
+                action: Action::MonitorAssignment(text.to_owned(), origin.to_owned()),
+            });
+            continue;
+        }
+        if assign_variable(text, &words, state.boot.session.selected_machine(), &mut state.variables, None)
+            .map_err(|e| error(&e))?
+        {
+            continue;
+        }
         match words.as_slice() {
-            ["set", name, value] => {
-                let name = name.strip_prefix('$').unwrap_or(name);
-                state.variables.insert(name.into(), (*value).into());
+            ["mach" | "machine", "set", selector] => {
+                validate_machine_selection(selector, &state.variables, state.boot.session.machine.as_deref(), state.machine)
+                    .map_err(|e| error(&e))?;
+                set_script_machine_selection(state, false, path, line + 1);
             }
-            ["include" | "i", value] => {
-                if state.boot.started {
-                    return Err(error(
-                        "commands after start are unsupported in a boot script",
-                    ));
+            ["mach" | "machine", "clear"] => set_script_machine_selection(state, true, path, line + 1),
+            ["RestoreMonitorSnapshot", value] => {
+                if state.machine || state.boot.has_platform() || state.boot.started || !state.boot.runtime.is_empty() {
+                    return Err(error("snapshot bootstrap requires a fresh monitor"));
                 }
-                let included = if let Some(relative) = value
-                    .strip_prefix("$ORIGIN/")
-                    .or_else(|| value.strip_prefix("$global.ORIGIN/"))
-                {
-                    path.parent().unwrap_or(Path::new(".")).join(path_value(relative))
-                } else {
-                    let value = resolve(&state.variables, value).map_err(|e| error(&e))?;
-                    let file = unquote(value.strip_prefix('@').unwrap_or(value));
-                    let file = path_value(file);
-                    // Renode searches the current monitor path before the script fallback.
-                    let candidate = root.join(&file);
-                    if candidate.is_file() {
-                        candidate
-                    } else {
-                        local_path(&file, path, root)
-                    }
-                };
+                let snapshot = snapshot_path(value, origin, &state.variables).map_err(|e| error(&e))?;
+                let (selected, repl) = restore_snapshot_platform(&snapshot)
+                    .map_err(|e| error(&format!("{}: {e}", snapshot.display())))?;
+                state.machine = true;
+                state.boot.session.machine = selected;
+                if let Some(repl) = repl {
+                    state.boot.inline_repl.push((origin.to_owned(), repl));
+                }
+                state.boot.runtime.push(RuntimeCommand {
+                    line: line + 1, source: path.to_owned(), action: Action::LoadMemory(SnapshotPath::Fixed(snapshot)),
+                });
+            }
+            ["include" | "i" | "ExecuteScript", value]
+                if has_snapshot_boundary(&state.boot)
+                    && (value.starts_with('$') || value.starts_with("@$")
+                        || unquote(value.trim_start_matches('@')).ends_with(".resc")) =>
+            {
+                state.boot.runtime.push(RuntimeCommand {
+                    line: line + 1, source: path.to_owned(),
+                    action: Action::InvokeMonitorScript(text.to_owned(), canonical.clone(), root.to_owned()),
+                });
+            }
+            [verb @ ("include" | "i" | "ExecuteScript"), value] => {
+                let included = include_path(verb, value, path, origin, root, &state.variables)
+                    .map_err(|e| error(&e))?;
                 match included.extension().and_then(|suffix| suffix.to_str()) {
-                    Some("repl") if state.boot.platform.is_none() => {
+                    Some("repl") if !state.boot.has_platform() => {
                         state.machine = true;
                         state.boot.platform = Some(included);
                     }
@@ -1244,38 +2831,81 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
                     _ => load_file(&included, root, state).map_err(|e| error(&e))?,
                 }
             }
-            ["runMacro", name] if name.starts_with('$') => {
-                let body = state
-                    .macros
-                    .get(&name[1..])
-                    .ok_or_else(|| error("unknown macro"))?;
-                for (index, command) in &body.commands {
-                    let words = command_words(command)
-                        .map_err(|e| format!("{}:{}: {e}", body.script.display(), index + 1))?;
-                    execute(
-                        command,
-                        &words,
-                        &state.variables,
-                        &mut state.machine,
-                        &mut state.boot,
-                        &body.script,
-                        root,
-                        index + 1,
-                    )
-                    .map_err(|e| format!("{}:{}: {e}", body.script.display(), index + 1))?;
+            ["echo", value] if follows_snapshot => state.boot.runtime.push(RuntimeCommand {
+                line: line + 1, source: path.to_owned(),
+                action: Action::MonitorEcho((*value).to_owned(), origin.to_owned()),
+            }),
+            ["printenv"] => {
+                if follows_snapshot {
+                    state.boot.runtime.push(RuntimeCommand {
+                        line: line + 1, source: path.to_owned(), action: Action::DescribeEnvironment,
+                    });
+                } else {
+                    let message = describe_environment(&state.variables, &state.macros, &state.aliases);
+                    if state.boot.started || !state.boot.runtime.is_empty() {
+                        state.boot.runtime.push(RuntimeCommand {
+                            line: line + 1, source: path.to_owned(), action: Action::Echo(message),
+                        });
+                    } else {
+                        state.boot.monitor_output.push(message);
+                    }
                 }
             }
-            _ => execute(
-                text,
-                &words,
-                &state.variables,
-                &mut state.machine,
-                &mut state.boot,
-                path,
-                root,
-                line + 1,
-            )
-            .map_err(|e| error(&e))?,
+            ["alias", name, command] => {
+                let command = monitor_string(command).unwrap_or_else(|| (*command).to_owned());
+                if name.is_empty() || command.trim().is_empty()
+                    || !name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '.'))
+                {
+                    return Err(error("invalid monitor alias"));
+                }
+                let scope = state.boot.session.selected_machine().map(normalized_monitor_scope);
+                let key = if name.contains('.') { (*name).to_owned() }
+                    else { format!("{}.{name}", scope.as_deref().unwrap_or("global")) };
+                if follows_snapshot {
+                    state.boot.runtime.push(RuntimeCommand {
+                        line: line + 1, source: path.to_owned(), action: Action::MonitorAlias(key, command),
+                    });
+                } else {
+                    state.aliases.insert(key, command);
+                }
+            }
+            ["alias", ..] => return Err(error("invalid monitor alias parameters")),
+            ["runMacro", name] if name.starts_with('$') => {
+                if has_snapshot_boundary(&state.boot) {
+                    state.boot.runtime.push(RuntimeCommand {
+                        line: line + 1, source: path.to_owned(),
+                        action: Action::InvokeMonitorMacro(name[1..].into(), root.to_owned()),
+                    });
+                } else {
+                    expand_macro(&name[1..], state, root).map_err(|e| error(&e))?;
+                }
+            }
+            _ => {
+                if let Err(failure) = execute(
+                    text, &words, &state.variables, &mut state.machine, &mut state.boot,
+                    path, root, line + 1,
+                ) {
+                    let Some(verb) = words.first().filter(|_| {
+                        failure.starts_with("unsupported monitor command")
+                            || failure == "commands after start are unsupported in a boot script"
+                    }) else {
+                        return Err(error(&failure));
+                    };
+                    if has_snapshot_boundary(&state.boot) {
+                        state.boot.runtime.push(RuntimeCommand {
+                            line: line + 1, source: path.to_owned(),
+                            action: Action::InvokeMonitorScript(text.to_owned(), canonical.clone(), root.to_owned()),
+                        });
+                        continue;
+                    }
+                    let Some(command) = monitor_alias(&state.aliases, state.boot.session.selected_machine(), verb) else {
+                        return Err(error(&failure));
+                    };
+                    let expanded = format!("{command}{}", &text[verb.len()..]);
+                    let alias_source = canonical.with_file_name(format!("<alias:{verb}>"));
+                    load_text(path, alias_source, root, state, &expanded).map_err(|e| error(&e))?;
+                }
+            }
         }
         if let Some(RuntimeCommand {
             line: command_line,
@@ -1300,23 +2930,277 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
     Ok(())
 }
 
+const LOG_LEVEL_PARAMETERS: &str = "Bad parameters for command logLevel";
+const LAST_LOG_PARAMETERS: &str = "Bad parameters for command lastLog";
+const LOG_PARAMETERS: &str = "Bad parameters for command log";
+const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expected @snapshot-path or quoted path";
+
+fn invalid_command_parameters(error: &str) -> bool {
+    matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | LAST_LOG_PARAMETERS | SNAPSHOT_PARAMETERS)
+}
+
+fn inspect_snapshot_destination(path: &Path) -> Option<String> {
+    if path.is_dir() {
+        return Some(format!("Cannot save snapshot to '{}': destination is a directory.", path.display()));
+    }
+    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let missing = match fs::metadata(parent) {
+        Ok(metadata) => !metadata.is_dir(),
+        Err(error) => matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory),
+    };
+    missing.then(|| format!("Could not find a part of the path '{}'.", path.display()))
+}
+
+fn inspect_snapshot_input(path: &Path) -> Option<String> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => return Some(nonregular_snapshot(path)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(missing_snapshot(path)),
+        _ => return None,
+    };
+    // Header inspection never constructs or modifies an emulation.
+    let file = fs::File::open(path).ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.is_file() || metadata.len() != opened.len() {
+        return None;
+    }
+    let mut input = io::BufReader::new(file);
+    read_snapshot_metadata(&mut input)
+        .and_then(|_| Machine::validate_boot_snapshot_header(&mut input))
+        .err()
+        .map(|reason| format!(
+            "This snapshot is incompatible or the emulation's state is corrupted: {}: {reason}",
+            path.display(),
+        ))
+}
+
+fn nonregular_snapshot(path: &Path) -> String {
+    format!("Parameters did not match the signature: snapshot input is not a regular file: {}", path.display())
+}
+
+fn open_snapshot_input(path: &Path) -> Result<io::BufReader<fs::File>, String> {
+    let describe_error = |error: io::Error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            missing_snapshot(path)
+        } else {
+            format!("{}: {error}", path.display())
+        }
+    };
+    if !fs::metadata(path).map_err(describe_error)?.is_file() {
+        return Err(nonregular_snapshot(path));
+    }
+    let file = fs::File::open(path).map_err(describe_error)?;
+    if !file.metadata().map_err(describe_error)?.is_file() {
+        return Err(nonregular_snapshot(path));
+    }
+    Ok(io::BufReader::new(file))
+}
+
+fn missing_snapshot(path: &Path) -> String {
+    format!("Parameters did not match the signature: snapshot file does not exist: {}", path.display())
+}
+
+fn missing_include(message: &str) -> bool {
+    message.starts_with("File does not exist: ") || message.starts_with("Could not find file: ")
+}
+
+fn include_path(
+    verb: &str, value: &str, path: &Path, origin: &Path, root: &Path, variables: &HashMap<String, String>,
+) -> Result<PathBuf, String> {
+    let file = if let Some(path) = anchored_path(value, origin, variables)? {
+        path
+    } else {
+        let value = resolve(variables, value)?;
+        let file = path_value(unquote(value.trim_start_matches('@')));
+        let candidate = root.join(&file);
+        if candidate.is_file() { candidate } else { local_path(&file, path, root) }
+    };
+    match fs::metadata(&file) {
+        Ok(_) => Ok(file),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let message = if verb == "ExecuteScript" { "Could not find file" } else { "File does not exist" };
+            Err(format!("{message}: {}", file.display()))
+        }
+        Err(error) => Err(format!("{}: {error}", file.display())),
+    }
+}
+
+fn monitor_origin(variables: &HashMap<String, String>) -> &Path {
+    let origin = resolve(variables, "$global.ORIGIN").unwrap_or(".");
+    Path::new(unquote(origin.trim_start_matches('@')))
+}
+
+enum SnapshotPath {
+    Fixed(PathBuf),
+    WorkingDirectory(PathBuf),
+}
+
+impl SnapshotPath {
+    fn resolve(&self, variables: &HashMap<String, String>) -> Result<PathBuf, String> {
+        match self {
+            Self::Fixed(path) => Ok(path.clone()),
+            Self::WorkingDirectory(relative) => Ok(monitor_working_directory(variables)?.join(relative)),
+        }
+    }
+}
+
+fn monitor_working_directory(variables: &HashMap<String, String>) -> Result<&Path, String> {
+    let cwd = resolve(variables, "$global.CWD")?;
+    Ok(Path::new(unquote(cwd.trim_start_matches('@'))))
+}
+
+fn snapshot_path(
+    value: &str, script_dir: &Path, variables: &HashMap<String, String>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
+        return Ok(path);
+    }
+    if let Some(path) = monitor_string(value) {
+        return Ok(script_dir.join(path));
+    }
+    let path = monitor_path_token(resolve(variables, value)?).ok_or(SNAPSHOT_PARAMETERS)?;
+    Ok(script_dir.join(path_value(unquote(path))))
+}
+
+fn path_anchor(value: &str) -> Option<(&str, &str)> {
+    let token = value.strip_prefix('$')?;
+    let (anchor, relative) = token.strip_prefix("global.").unwrap_or(token).split_once('/')?;
+    matches!(anchor, "ORIGIN" | "CWD").then_some((anchor, relative))
+}
+
+fn anchored_path(
+    value: &str, origin: &Path, variables: &HashMap<String, String>,
+) -> Result<Option<PathBuf>, String> {
+    let Some((anchor, relative)) = path_anchor(value) else {
+        return Ok(None);
+    };
+    let base = if anchor == "ORIGIN" {
+        origin
+    } else {
+        monitor_working_directory(variables)?
+    };
+    Ok(Some(base.join(path_value(relative))))
+}
+
+fn assign_variable(
+    text: &str,
+    words: &[&str],
+    machine: Option<&str>,
+    variables: &mut HashMap<String, String>,
+    origin: Option<&Path>,
+) -> Result<bool, String> {
+    let (name, value, conditional) = match words {
+        ["set", name, value] => (name.trim_start_matches('$'), *value, false),
+        _ if text.starts_with('$') => {
+            let (name, value) = text[1..].split_once('=').ok_or("expected variable assignment")?;
+            let name = name.trim();
+            let name_without_suffix = name.trim_end_matches('?').trim();
+            (name_without_suffix, value.trim(), name.ends_with('?'))
+        }
+        _ => return Ok(false),
+    };
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') || value.is_empty() {
+        return Err("invalid monitor variable assignment".into());
+    }
+    let scope = machine.map(normalized_monitor_scope);
+    let local = scope.as_ref().and_then(|scope| name.strip_prefix(scope)?.strip_prefix('.'));
+    if !conditional || variable_binding(variables, name).is_none() {
+        let anchored = anchored_path(value, origin.unwrap_or_else(|| monitor_origin(variables)), variables)?
+            .map(|path| format!("@{}", path.display()));
+        let value = anchored.as_deref().unwrap_or(value);
+        if name.starts_with("global.") {
+            variables.insert(name.to_owned(), value.to_owned());
+        } else if let Some(scope) = scope {
+            let local = local.unwrap_or(name).to_owned();
+            variables.insert(format!("{scope}.{local}"), value.to_owned());
+            variables.insert(local, value.to_owned());
+        } else {
+            variables.insert(format!("global.{name}"), value.to_owned());
+        }
+    }
+    Ok(true)
+}
+
+fn apply_machine_selection(
+    cleared: &mut bool, next: bool, machine: Option<&str>, variables: &mut HashMap<String, String>,
+) {
+    if *cleared == next {
+        return;
+    }
+    *cleared = next;
+    if let Some(name) = machine {
+        let prefix = format!("{}.", normalized_monitor_scope(name));
+        let locals: Vec<_> = variables.iter().filter_map(|(key, value)| {
+            key.strip_prefix(&prefix).map(|name| (name.to_owned(), value.clone()))
+        }).collect();
+        for (name, value) in locals {
+            if next {
+                variables.remove(&name);
+            } else {
+                variables.insert(name, value);
+            }
+        }
+    }
+}
+
+fn set_script_machine_selection(state: &mut ScriptState, cleared: bool, path: &Path, line: usize) {
+    if has_snapshot_boundary(&state.boot) {
+        state.boot.runtime.push(RuntimeCommand {
+            line, source: path.to_owned(), action: Action::SetMachineCleared(cleared),
+        });
+    } else {
+        apply_machine_selection(&mut state.boot.session.machine_cleared, cleared,
+            state.boot.session.machine.as_deref(), &mut state.variables);
+    }
+}
+
+fn validate_machine_selection(
+    selector: &str, variables: &HashMap<String, String>, machine: Option<&str>, exists: bool,
+) -> Result<(), String> {
+    let selector = resolve(variables, selector)?;
+    if let Ok(index) = crate::parse_address64(selector) {
+        if exists && index == 0 {
+            return Ok(());
+        }
+        return Err("Wrong machine number. Type mach to show a list of available machines.".into());
+    }
+    let name = unquote(selector);
+    if machine == Some(name) {
+        Ok(())
+    } else {
+        Err(format!("Machine {name} not found."))
+    }
+}
+
+fn normalized_monitor_scope(name: &str) -> String {
+    name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
+}
+
+fn monitor_alias<'a>(aliases: &'a HashMap<String, String>, machine: Option<&str>, verb: &str) -> Option<&'a String> {
+    aliases.get(verb)
+        .or_else(|| machine.and_then(|name| aliases.get(&format!("{}.{verb}", normalized_monitor_scope(name)))))
+        .or_else(|| aliases.get(&format!("global.{verb}")))
+}
+
+fn variable_binding<'a>(variables: &'a HashMap<String, String>, name: &str) -> Option<&'a String> {
+    variables.get(name).or_else(|| {
+        if name.starts_with("global.") {
+            return None;
+        }
+        variables.get(&format!("global.{name}"))
+    })
+}
+
 fn resolve<'a>(variables: &'a HashMap<String, String>, mut value: &'a str) -> Result<&'a str, String> {
     let mut remaining = variables.len();
-    while let Some(name) = value.strip_prefix('$') {
+    while let Some(name) = value.strip_prefix('$').or_else(|| value.strip_prefix("@$")) {
         if name.is_empty() {
             return Err("missing variable name".into());
         }
         if remaining == 0 {
             return Err(format!("unknown or recursive variable {name}"));
         }
-        value = variables
-            .get(name)
-            .or_else(|| {
-                name.strip_prefix("global.")
-                    .and_then(|short| variables.get(short))
-                    .or_else(|| variables.get(&format!("global.{name}")))
-            })
-            .ok_or_else(|| format!("unknown variable {name}"))?;
+        value = variable_binding(variables, name).ok_or_else(|| format!("unknown variable {name}"))?;
         remaining -= 1;
     }
     Ok(value)
@@ -1361,6 +3245,80 @@ fn parse_reset_hooks(mut commands: &str, hooks: &mut Vec<ResetHook>) -> Result<(
     Ok(())
 }
 
+fn parse_gpio_overlay(source: &str, root: &Path) -> Result<Vec<(String, u8, String, u8)>, String> {
+    let unsupported = || "unsupported live REPL overlay: expected GPIO pin connections on existing devices".to_string();
+    let entries = crate::repl_parser::parse_inline(source, root)?;
+    let mut links = Vec::new();
+    for entry in entries {
+        if !entry.model.is_empty() || entry.registration.is_some() || entry.body.is_empty() {
+            return Err(unsupported());
+        }
+        for (_, wire) in entry.body {
+            let (output, destination) = wire.split_once("->").ok_or_else(unsupported)?;
+            let (target, input) = destination.split_once('@').ok_or_else(unsupported)?;
+            let output = output.trim().parse::<u8>().map_err(|_| unsupported())?;
+            let input = input.trim().parse::<u8>().map_err(|_| unsupported())?;
+            links.push((entry.name.clone(), output, target.trim().into(), input));
+        }
+    }
+    if links.is_empty() {
+        return Err(unsupported());
+    }
+    Ok(links)
+}
+
+fn monitor_echo(value: &str, variables: &HashMap<String, String>, origin: &Path) -> Result<String, String> {
+    if let Some(path) = anchored_path(value, origin, variables)? {
+        return Ok(path.display().to_string());
+    }
+    let value = resolve(variables, value)?;
+    if let Some(path) = value.strip_prefix('@') {
+        return Ok(path_value(path));
+    }
+    Ok(monitor_string(value).unwrap_or_else(|| value.to_owned()))
+}
+
+fn resolve_log_command(text: &str, variables: &HashMap<String, String>) -> Result<String, String> {
+    if !text.contains('$') {
+        return Ok(text.to_owned());
+    }
+    let words = command_words(text)?;
+    let (timeout_index, pattern_index) = match words.as_slice() {
+        ["WaitForMonitorLog" | "AssertAbsentMonitorLog", _, _, _, _, _, ..] => (Some(1), 5),
+        ["RegisterFailingMonitorLog" | "UnregisterFailingMonitorLog", _, _] => (None, 2),
+        _ => return Ok(text.to_owned()),
+    };
+    let mut command = String::new();
+    for (index, word) in words.into_iter().enumerate() {
+        if index != 0 {
+            command.push(' ');
+        }
+        if word.starts_with('$') && Some(index) == timeout_index {
+            let timeout = unquote(resolve(variables, word)?);
+            if timeout.is_empty() || timeout.chars().any(char::is_whitespace) {
+                return Err("expected a single log timeout value".into());
+            }
+            command.push_str(timeout);
+        } else if word.starts_with('$') && index == pattern_index {
+            use std::fmt::Write;
+            let pattern = monitor_string(resolve(variables, word)?).ok_or("expected a log string variable")?;
+            if pattern.is_empty() {
+                command.push('-');
+            }
+            for byte in pattern.bytes() {
+                write!(command, "{byte:02x}").unwrap();
+            }
+        } else {
+            command.push_str(word);
+        }
+    }
+    Ok(command)
+}
+
+fn requires_selected_machine(target: &str) -> bool {
+    matches!(target, "machine" | "cpu" | "sysbus") || target.starts_with("sysbus.")
+}
+
 fn execute(
     text: &str,
     words: &[&str],
@@ -1371,10 +3329,43 @@ fn execute(
     root: &Path,
     line: usize,
 ) -> Result<(), String> {
-    if matches!(words, [] | ["using", "sysbus"]) {
-        return Ok(());
+    if boot.session.machine_cleared && words.first().is_some_and(|word| requires_selected_machine(word))
+    {
+        return Err(format!("No such command or device: {}", words[0]));
+    }
+    match words {
+        [] => return Ok(()),
+        ["using", "sysbus"] => return Ok(()),
+        ["mach" | "machine", "set", selector] if !boot.session.machine_cleared => {
+            return validate_machine_selection(selector, variables, boot.session.machine.as_deref(), *machine);
+        }
+        ["AttachMonitorLog", capacity] if !*machine && !boot.started && boot.runtime.is_empty() => {
+            boot.initial_log_capacity = Some(crate::monitor_log::parse_capacity(capacity)?);
+            return Ok(());
+        }
+        ["SetDefaultUartTimeout", value] if !boot.started && boot.runtime.is_empty() => {
+            boot.uart_timeout = Some(duration_steps(resolve(variables, value)?)?);
+            return Ok(());
+        }
+        ["numbersMode", mode] => {
+            boot.session.number_mode = match *mode {
+                "Hexadecimal" => NumberMode::Hexadecimal,
+                "Decimal" => NumberMode::Decimal,
+                "Both" => NumberMode::Both,
+                _ => return Err(format!("unknown numbersMode {mode:?}")),
+            };
+            return Ok(());
+        }
+        _ => {}
     }
     let resolve = |value| resolve(variables, value);
+    if let ["emulation", "SetGlobalSerialExecution", value] = words {
+        if parse_tester_bool(resolve(value)?)? {
+            // This scheduler executes harts serially.
+            return Ok(());
+        }
+        return Err("unsupported monitor parallel execution".into());
+    }
     if let ["machine", "UserState", value] = words
         && !boot.started && boot.runtime.is_empty()
     {
@@ -1382,11 +3373,9 @@ fn execute(
         boot.monitor_user_state = Some(path_value(unquote(value.strip_prefix('@').unwrap_or(value))));
         return Ok(());
     }
-    if let ["echo", value] = words
-        && (value.starts_with('$') || boot.started && boot.runtime.is_empty())
-    {
-        let message = unquote(resolve(value)?).trim_start_matches('@').to_owned();
-        if boot.started {
+    if let ["echo", value] = words {
+        let message = monitor_echo(value, variables, monitor_origin(variables))?;
+        if boot.started || !boot.runtime.is_empty() {
             boot.runtime.push(RuntimeCommand { line, source: script.to_owned(), action: Action::Echo(message) });
         } else {
             boot.monitor_output.push(message);
@@ -1394,15 +3383,7 @@ fn execute(
         return Ok(());
     }
     if let ["logLevel", value] = words {
-        let value = resolve(value)?;
-        let level = match unquote(value) {
-            "-1" | "Noisy" => -1,
-            "0" | "Debug" => 0,
-            "1" | "Info" => 1,
-            "2" | "Warning" => 2,
-            "3" | "Error" => 3,
-            _ => return Err(format!("unsupported monitor log level {value:?}")),
-        };
+        let level = crate::monitor_log::parse_level(unquote(resolve(value)?)).map_err(|_| LOG_LEVEL_PARAMETERS)?;
         if boot.started || !boot.runtime.is_empty() {
             boot.runtime.push(RuntimeCommand {
                 line,
@@ -1415,7 +3396,7 @@ fn execute(
         return Ok(());
     }
     if let [cpu, "WfiAsNop", value] = words
-        && !boot.started && boot.runtime.is_empty() && boot.platform.is_some()
+        && !boot.started && boot.runtime.is_empty() && boot.has_platform()
     {
         let enabled = match unquote(resolve(value)?) {
             "true" => true,
@@ -1426,7 +3407,7 @@ fn execute(
         return Ok(());
     }
     if let ["sysbus", "LogPeripheralAccess", name, options @ ..] = words
-        && !boot.started && boot.runtime.is_empty() && boot.platform.is_some()
+        && !boot.started && boot.runtime.is_empty() && boot.has_platform()
     {
         let enabled = match options {
             [] | ["true"] => true,
@@ -1437,21 +3418,194 @@ fn execute(
         boot.trace_memory.push((name.trim_start_matches("sysbus.").to_owned(), enabled));
         return Ok(());
     }
+    if let ["emulation", "SetGlobalQuantum" | "SetQuantum", value] | ["machine", "SetQuantum", value] = words
+        && !boot.started && boot.runtime.is_empty()
+    {
+        let quantum = duration_steps(resolve(value)?).map_err(|error| format!("invalid emulation quantum: {error}"))?;
+        if quantum == 0 {
+            return Err("emulation quantum must be positive".into());
+        }
+        boot.quantum = Some(quantum);
+        return Ok(());
+    }
     let action = match words {
-        [verb @ ("Save" | "Load"), path] => {
-            let path = resolve(path)?
-                .strip_prefix('@')
-                .ok_or("expected @snapshot-path")?;
-            let path = script
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(unquote(path));
-            Some(if *verb == "Save" {
-                Action::SaveMemory(path)
+        ["DescribeMonitorSnapshotPlatform"] => Some(Action::DescribeSnapshotPlatform),
+        ["pause" | "p"] => Some(Action::SetEmulationPaused(true)),
+        ["start" | "s"]
+            if boot.started || !boot.runtime.is_empty() || (*machine && !boot.has_platform()) =>
+        {
+            boot.started = true;
+            Some(Action::SetEmulationPaused(false))
+        }
+        [cpu, "AssembleBlock", address, source, options @ ..] => {
+            let source = resolve(source)?;
+            let source = source.strip_prefix("\"\"\"").and_then(|s| s.strip_suffix("\"\"\""))
+                .or_else(|| source.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
+                .ok_or("expected quoted AssembleBlock source")?;
+            let triple = match options {
+                [] | ["false"] | ["null"] | ["null", "false"] => "default",
+                [triple] | [triple, "false"] if triple.starts_with('"') && triple.ends_with('"') => unquote(triple),
+                _ => return Err("unsupported AssembleBlock triple or alternate dialect".into()),
+            };
+            let token = resolve(address)?;
+            let address = if let Some(expression) = token.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
+                let words = command_words(expression)?;
+                let [cpu, "PC"] = words.as_slice() else {
+                    return Err("unsupported AssembleBlock address expression".into());
+                };
+                AssemblyAddress::ProgramCounter(cpu.trim_start_matches("sysbus.").to_owned())
             } else {
+                AssemblyAddress::Literal(crate::parse_address64(token)?)
+            };
+            Some(Action::AssembleBlock(
+                cpu.trim_start_matches("sysbus.").to_owned(), address,
+                triple.to_owned(), source.to_owned(), boot.session.number_mode,
+            ))
+        }
+        [command, ..] if crate::monitor_log::is_command(command) => {
+            Some(Action::MonitorLog(resolve_log_command(text, variables)?))
+        }
+        [target, "VendorSpecific1", value] if boot.started => Some(Action::PhyRegister(
+            (*target).to_owned(), u16::try_from(crate::parse_address(resolve(value)?)?)
+                .map_err(|_| "PHY register exceeds 16 bits")?)),
+        [target, axis @ ("AccelerationX" | "AccelerationY" | "AccelerationZ"), value] if boot.started => {
+            let value = resolve(value)?.parse::<f64>().map_err(|_| "invalid acceleration")?;
+            if !(-200.0..=200.0).contains(&value) {
+                return Err("acceleration must be within ±200 g".into());
+            }
+            let axis = match *axis { "AccelerationX" => 0, "AccelerationY" => 1, _ => 2 };
+            let target = target.trim_start_matches("sysbus.").to_owned();
+            Some(Action::AdxlAxis(target, axis, (value * 10.0).round() as i16))
+        }
+        [target, "State"] if boot.started && target.rsplit('.').next().is_some_and(|part| part.starts_with("led")) => {
+            Some(Action::LiteXLedState((*target).to_owned()))
+        }
+
+        [cpu, "VectorRegisterLength", bits] if boot.started => Some(Action::VectorRegisterLength(
+            cpu.trim_start_matches("sysbus.").to_owned(),
+            crate::parse_address64(resolve(bits)?)?,
+        )),
+        ["TraceStackAccess", cpu] if boot.started => Some(Action::TraceStackAccess(
+            cpu.trim_start_matches("sysbus.").to_owned(),
+        )),
+        ["cpu" | "sysbus.cpu", "PerformanceInMips"] if boot.started => Some(Action::ReadCpuMips(boot.session.number_mode)),
+        ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.started || !boot.runtime.is_empty() => {
+            let mips = resolve(value)?.parse().map_err(|_| "PerformanceInMips requires a positive integer")?;
+            Some(Action::CpuMips(mips))
+        }
+        ["log", value, level @ ..] if level.len() <= 1 => {
+            let value = resolve(value)?;
+            let message = monitor_string(value).ok_or(LOG_PARAMETERS)?;
+            let level = match level {
+                [] => 1,
+                [level] => {
+                    let token = resolve(level)?;
+                    match monitor_string(token) {
+                        Some(name) if matches!(name.as_str(), "Noisy" | "Debug" | "Info" | "Warning" | "Error") =>
+                            crate::monitor_log::parse_level(&name).map_err(|_| LOG_PARAMETERS)?,
+                        None if matches!(token, "-1" | "0" | "1" | "2" | "3") =>
+                            crate::monitor_log::parse_level(token).map_err(|_| LOG_PARAMETERS)?,
+                        _ => return Err(LOG_PARAMETERS.into()),
+                    }
+                }
+                _ => unreachable!(),
+            };
+            Some(Action::ScriptLog(level, format!("Script: {message}")))
+        }
+        ["log", ..] => return Err(LOG_PARAMETERS.into()),
+        ["lastLog", count @ ..] if count.len() <= 1 => {
+            let count = match count {
+                [] => crate::monitor_log::DEFAULT_TAIL,
+                [count] => {
+                    let token = resolve(count)?;
+                    let value = if let Some(hex) = token.strip_prefix("0x") {
+                        u64::from_str_radix(hex, 16).map(|value| value as i64)
+                    } else {
+                        token.parse::<i64>()
+                    }.map_err(|_| LAST_LOG_PARAMETERS)?;
+                    value as i32
+                }
+                _ => unreachable!(),
+            };
+            if count > crate::monitor_log::HISTORY_LIMIT as i32 {
+                return Err(format!("The number of entries cannot be larger than {}", crate::monitor_log::HISTORY_LIMIT));
+            }
+            Some(Action::LastLog(count))
+        }
+        ["emulation" | "machine", "GetTimeSourceInfo"] => Some(Action::TimeSourceInfo),
+        ["emulation", "SingleStepBlocking", value @ ..] if value.len() <= 1 => {
+            Some(Action::SingleStepBlocking(value.first()
+                .map(|value| resolve(value).and_then(parse_tester_bool)).transpose()?))
+        }
+        ["emulation", "IsStarted"] => Some(Action::EmulationIsStarted),
+        ["TestMonitorUartIdle", timeout, args @ ..] => {
+            let mut tester = None;
+            let mut pause = None;
+            for option in args {
+                match option.split_once('=') {
+                    Some(("testerId", value)) if tester.is_none() => {
+                        tester = Some(crate::parse_address(resolve(value)?)? as usize);
+                    }
+                    Some(("pauseEmulation", value)) if pause.is_none() => {
+                        pause = Some(parse_tester_bool(resolve(value)?)?);
+                    }
+                    _ => return Err(format!("unsupported or duplicate UART idle option {option:?}")),
+                }
+            }
+            Some(Action::UartIdle(duration_steps(resolve(timeout)?)?, tester, pause))
+        }
+
+        [target, "Frequency"] if boot.started => Some(Action::TimerProperty(
+            target.trim_start_matches("sysbus.").to_owned(), false)),
+        ["sysbus", "IsPeripheralEnabled", target] if boot.started => Some(Action::TimerProperty(
+            target.trim_start_matches("sysbus.").to_owned(), true)),
+        ["sysbus", "LogPeripheralAccess", "rcc" | "sysbus.rcc"] if boot.started => Some(Action::TraceRcc),
+        ["rcc" | "sysbus.rcc", "WriteDoubleWord", offset, value] if boot.started => Some(Action::WriteRcc(
+            crate::parse_address(resolve(offset)?)?, crate::parse_address(resolve(value)?)?)),
+
+        ["machine", "LoadPlatformDescriptionFromString", value] if boot.started => {
+            let source = crate::repl_parser::quoted_value(resolve(value)?)
+                .map_err(|_| "expected quoted inline REPL")?;
+            Some(Action::GpioOverlay(parse_gpio_overlay(&source, root)?))
+        }
+        ["ConnectMonitorGpio", source, output, target, input] if boot.started => Some(Action::GpioWire(
+            (*source).to_owned(), output.parse().map_err(|_| "invalid source GPIO pin")?,
+            (*target).to_owned(), input.parse().map_err(|_| "invalid target GPIO pin")?,
+        )),
+
+        [target, "OnGPIO", id, asserted] if boot.started => Some(Action::ClicGpio(
+            resolve(target)?.trim_start_matches("sysbus.").to_owned(),
+            crate::parse_address(resolve(id)?)?, parse_tester_bool(resolve(asserted)?)?,
+        )),
+        ["showAnalyzer", target] | ["showAnalyzer", target, "LoggingUartAnalyzer"] if boot.started => {
+            Some(Action::LogUart(resolve(target)?.to_owned()))
+        }
+
+        [sensor, "Illuminance", value] if boot.started && sensor.starts_with("sysbus.") => {
+            let value = resolve(value)?.parse::<f64>().map_err(|_| "invalid illuminance")?;
+            Some(Action::Illuminance((*sensor).to_owned(), value))
+        }
+        [sensor, "FeedIlluminanceSamplesFromRESD", file]
+            if boot.started && sensor.starts_with("sysbus.") =>
+        {
+            let path = resolve(file)?.strip_prefix('@').ok_or("expected @RESD-path")?;
+            Some(Action::IlluminanceFeed((*sensor).to_owned(), PathBuf::from(path_value(path))))
+        }
+
+        [verb @ ("Save" | "SaveRestorableMonitorSnapshot" | "Load"), path] => {
+            let directory = script.parent().unwrap_or_else(|| Path::new("."));
+            let path = if let Some(("CWD", relative)) = path_anchor(path) {
+                SnapshotPath::WorkingDirectory(PathBuf::from(path_value(relative)))
+            } else {
+                SnapshotPath::Fixed(snapshot_path(path, directory, variables)?)
+            };
+            Some(if *verb == "Load" {
                 Action::LoadMemory(path)
+            } else {
+                Action::SaveMemory(path, *verb == "SaveRestorableMonitorSnapshot")
             })
         }
+        ["Save" | "Load", ..] => return Err(SNAPSHOT_PARAMETERS.into()),
         ["machine", "UserState", value @ ..] if value.len() <= 1 => {
             let value = value.first().map(|value| {
                 let value = resolve(value)?;
@@ -1460,7 +3614,6 @@ fn execute(
             Some(Action::UserState(value))
         }
         ["Clear"] => Some(Action::ClearMemory),
-        ["mach" | "machine", "set", "0"] => Some(Action::SelectMachineZero),
         ["sysbus", method, address, rest @ ..]
             if matches!(
                 *method,
@@ -1493,6 +3646,7 @@ fn execute(
                 address,
                 width,
                 value,
+                number_mode: boot.session.number_mode,
             }))
         }
         ["sysbus", "FindBytes", ..] => Some(Action::FindBytes(FindBytes::parse(text, resolve)?)),
@@ -1569,13 +3723,41 @@ fn execute(
             ))
         }
         ["CreateTerminalTester", target, options @ ..] => {
+            let mut requested_machine = None;
             let mut binary = None;
+            let mut timeout = None;
+            let mut echo = None;
+            let mut carriage_return = None;
+            let mut next_line = None;
+            let mut pause = None;
             for option in options {
                 match option.split_once('=') {
+                    Some(("timeout", value)) if timeout.is_none() => {
+                        timeout = Some(duration_steps(resolve(value)?)?);
+                    }
+                    Some(("machine", value)) if requested_machine.is_none() => {
+                        let name = resolve(value)?;
+                        requested_machine = Some(monitor_string(name).unwrap_or_else(|| name.to_owned()));
+                    }
+                    Some(("endLineOption", value)) if carriage_return.is_none() => {
+                        carriage_return = Some(match resolve(value)? {
+                            "TreatLineFeedAsEndLine" => false,
+                            "TreatCarriageReturnAsEndLine" => true,
+                            _ => return Err("unsupported UART endLineOption".into()),
+                        });
+                    }
+                    Some(("defaultMatchNextLine", value)) if next_line.is_none() => {
+                        next_line = Some(parse_tester_bool(resolve(value)?)?);
+                    }
+                    Some(("defaultWaitForEcho", value)) if echo.is_none() => {
+                        echo = Some(parse_tester_bool(resolve(value)?)?);
+                    }
                     Some(("binaryMode", value)) if binary.is_none() => {
                         binary = Some(parse_tester_bool(resolve(value)?)?);
                     }
-                    Some(("defaultPauseEmulation", "true" | "True")) => {}
+                    Some(("defaultPauseEmulation", value)) if pause.is_none() => {
+                        pause = Some(parse_tester_bool(resolve(value)?)?);
+                    }
                     _ => {
                         return Err(format!(
                             "unsupported or duplicate UART tester option {option:?}"
@@ -1585,9 +3767,16 @@ fn execute(
             }
             Some(Action::CreateUartTester(
                 resolve(target)?.to_owned(),
+                requested_machine,
                 binary.unwrap_or(false),
+                timeout,
+                echo,
+                carriage_return.unwrap_or(false),
+                next_line.unwrap_or(false),
+                pause.unwrap_or(false),
             ))
         }
+        ["SetDefaultUartTimeout", value] => Some(Action::DefaultUartTimeout(duration_steps(resolve(value)?)?)),
         ["SetDefaultTester", id] => {
             let id = resolve(id)?;
             Some(Action::DefaultUartTester(
@@ -1598,20 +3787,21 @@ fn execute(
         }
         ["WaitForBytesOnUart", ..] => {
             let args = text["WaitForBytesOnUart".len()..].trim_start();
-            let (pattern, arguments) = quoted_argument(args)
-                .filter(|(pattern, _)| !pattern.is_empty())
-                .ok_or("expected WaitForBytesOnUart \"bytes or regex\" [options]")?;
+            let (pattern, arguments) = uart_text_argument(args, variables)?;
+            if pattern.is_empty() {
+                return Err("UART byte wait pattern must be nonempty".into());
+            }
             let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Bytes)?;
             let pattern = if options.regex {
                 BinaryUartPattern::Regex(
-                    regex::bytes::RegexBuilder::new(pattern)
+                    regex::bytes::RegexBuilder::new(&pattern)
                         .unicode(false)
                         .dot_matches_new_line(true)
                         .build()
                         .map_err(|e| format!("invalid UART byte regex: {e}"))?,
                 )
             } else {
-                let bytes = hex_pattern(pattern)?;
+                let bytes = hex_pattern(&pattern)?;
                 if bytes.is_empty() || bytes.len() > crate::uart::UART_HISTORY_BYTES {
                     return Err("UART byte pattern must contain 1 to 65536 bytes".into());
                 }
@@ -1622,43 +3812,66 @@ fn execute(
                 pattern,
                 options.match_start,
                 options.timeout,
+                options.pause,
             ))
         }
-        [command @ ("WaitForLineOnUart" | "WaitForTesterPrompt"), ..] => {
-            let (pattern, arguments) = quoted_argument(
-                text[command.len()..].trim_start(),
-            )
-            .filter(|(pattern, _)| !pattern.is_empty())
-            .ok_or(
-                "expected WaitForLineOnUart \"literal text\" [testerId=number] [timeout=seconds]",
-            )?;
+        ["WaitForNextLineOnUart", ..] => {
+            let args = text["WaitForNextLineOnUart".len()..].trim_start();
+            let options = tester_wait_options(args, resolve, TesterOptionsKind::Line)?;
+            if options.regex || options.capture_groups || options.unfinished || options.first_only.is_some() {
+                return Err("next UART line accepts only testerId, timeout and pauseEmulation".into());
+            }
+            Some(Action::WaitForTester(
+                options.id, String::new(), None, UartWaitMode::Lf,
+                options.timeout, false, false, Some(true), options.pause,
+            ))
+        }
+        [command @ ("WaitForLineOnUart" | "WaitForTesterPrompt" | "ShouldNotBeOnUart"), ..] => {
+            let (pattern, arguments) = uart_text_argument(text[command.len()..].trim_start(), variables)?;
+            if pattern.is_empty() {
+                return Err("UART wait pattern must be nonempty".into());
+            }
             let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Line)?;
             Some(Action::WaitForTester(
                 options.id,
-                pattern.to_owned(),
-                if *command == "WaitForTesterPrompt" { UartWaitMode::Prompt } else { UartWaitMode::Lf },
+                pattern.clone(),
+                options.regex.then(|| regex::Regex::new(&pattern))
+                    .transpose().map_err(|e| format!("invalid UART text regex: {e}"))?,
+                if *command == "WaitForTesterPrompt" || options.unfinished { UartWaitMode::Prompt } else { UartWaitMode::Lf },
                 options.timeout,
+                *command == "ShouldNotBeOnUart",
+                options.capture_groups,
+                if *command == "ShouldNotBeOnUart" { Some(false) } else { options.first_only },
+                options.pause,
             ))
+        }
+        ["ClearTerminalTesterReport", id @ ..] if id.len() <= 1 => {
+            let id = id.first().map(|id| {
+                id.strip_prefix("testerId=").ok_or("expected testerId=N")?
+                    .parse::<usize>().map_err(|_| "invalid UART tester ID")
+            }).transpose()?;
+            Some(Action::ClearUartTesterReport(id))
         }
         [
             command @ ("RegisterFailingUartString" | "UnregisterFailingUartString"),
             ..,
         ] => {
-            let (pattern, arguments) = quoted_argument(text[command.len()..].trim_start())
-                .filter(|(pattern, _)| !pattern.is_empty())
-                .ok_or("expected quoted failing UART pattern")?;
+            let (pattern, arguments) = uart_text_argument(text[command.len()..].trim_start(), variables)?;
+            if pattern.is_empty() {
+                return Err("failing UART pattern must be nonempty".into());
+            }
             let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Failure)?;
             let regex = options
                 .regex
                 .then(|| {
-                    regex::Regex::new(pattern)
+                    regex::Regex::new(&pattern)
                         .map_err(|e| format!("invalid failing UART regex: {e}"))
                 })
                 .transpose()?;
             Some(Action::SetUartFailure(
                 options.id,
                 FailingUartPattern {
-                    pattern: pattern.into(),
+                    pattern,
                     regex,
                 },
                 *command == "RegisterFailingUartString",
@@ -1708,10 +3921,37 @@ fn execute(
                 timeout,
             ))
         }
+        ["WriteTesterUart", ..] => {
+            let argument = text["WriteTesterUart".len()..].trim_start();
+            let (value, options) = uart_text_argument(argument, variables)?;
+            let args: Vec<_> = options.split_whitespace().collect();
+            let [ending, echo, selector @ ..] = args.as_slice() else {
+                return Err("expected UART ending and echo option".into());
+            };
+            let ending: &[u8] = match *ending {
+                "CR" => b"\r",
+                "None" => b"",
+                _ => return Err("expected UART ending CR or None".into()),
+            };
+            let echo = (*echo != "default").then(|| parse_tester_bool(resolve(echo)?)).transpose()?;
+            let mut id = None;
+            let mut pause = None;
+            for option in selector {
+                match option.split_once('=') {
+                    Some(("testerId", value)) if id.is_none() => {
+                        id = Some(crate::parse_address(resolve(value)?)? as usize);
+                    }
+                    Some(("pauseEmulation", value)) if pause.is_none() => {
+                        pause = Some(parse_tester_bool(resolve(value)?)?);
+                    }
+                    _ => return Err(format!("unsupported or duplicate UART write option {option:?}")),
+                }
+            }
+            Some(Action::WriteTesterUart(id, value, ending, echo, pause))
+        }
         [target, "WriteLine", ..] => {
             let args = text[target.len()..].trim_start()["WriteLine".len()..].trim();
-            let (line, ending) = quoted_argument(args)
-                .ok_or("expected USART WriteLine \"literal text\" [line ending]")?;
+            let (line, ending) = uart_text_argument(args, variables)?;
             let ending: &[u8] = match ending {
                 "" | "CR" | "true" => b"\r",
                 "LF" => b"\n",
@@ -1725,7 +3965,7 @@ fn execute(
             };
             Some(Action::WriteUartLine(
                 resolve(target)?.to_owned(),
-                line.to_owned(),
+                line,
                 ending,
             ))
         }
@@ -1746,6 +3986,16 @@ fn execute(
                 hold,
             ))
         }
+        [target, "PC", address] if address.starts_with('`') && address.ends_with('`') => {
+            let expression = &address[1..address.len() - 1];
+            let words = command_words(expression)?;
+            let ["sysbus", "GetSymbolAddress", symbol] = words.as_slice() else {
+                return Err("unsupported program counter expression".into());
+            };
+            Some(Action::CpuSymbolPc(
+                resolve(target)?.trim_start_matches("sysbus.").into(), unquote(resolve(symbol)?).into(),
+            ))
+        }
         [target, "PC", address] if boot.started || !boot.runtime.is_empty() => {
             let cpu = resolve(target)?;
             Some(Action::CpuPc(
@@ -1756,10 +4006,15 @@ fn execute(
         ["sysbus", "UnhandledAccessBehaviour", policy] => {
             let policy = match resolve(policy)? {
                 "DoNotReport" => UnhandledAccess::DoNotReport,
+                "Report" => UnhandledAccess::Report,
                 "ThrowException" => UnhandledAccess::ThrowException,
                 "ThrowExceptionIfNotTagged" => UnhandledAccess::ThrowExceptionIfNotTagged,
                 other => return Err(format!("unsupported UnhandledAccessBehaviour {other:?}")),
             };
+            if *machine && !boot.started && boot.runtime.is_empty() {
+                boot.unhandled_access = Some(policy);
+                return Ok(());
+            }
             Some(Action::UnhandledAccess(policy))
         }
         ["sysbus", "Tag", ..] => {
@@ -1856,12 +4111,19 @@ fn execute(
             Some(Action::WriteBytes(address, bytes))
         }
 
-        [target, "Step", count] => {
+        ["AssertMonitorPC", cpu, value] => Some(Action::AssertCpuValue(
+            resolve(cpu)?.trim_start_matches("sysbus.").into(), None,
+            crate::parse_address64(resolve(value)?)?,
+        )),
+        ["AssertMonitorRegister", cpu, register, value] => Some(Action::AssertCpuValue(
+            resolve(cpu)?.trim_start_matches("sysbus.").into(), Some(unquote(resolve(register)?).into()),
+            crate::parse_address64(resolve(value)?)?,
+        )),
+        [target, "Step", count @ ..] if count.len() <= 1 => {
             let cpu = resolve(target)?;
-            Some(Action::CpuStep(
-                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
-                u64::from(crate::parse_address(resolve(count)?)?),
-            ))
+            let count = count.first().map(|count| crate::parse_address64(resolve(count)?))
+                .transpose()?.unwrap_or(1);
+            Some(Action::CpuStep(cpu.trim_start_matches("sysbus.").into(), count))
         }
         [target, "EvaluateConditionCode", condition] => {
             let cpu = resolve(target)?;
@@ -1888,14 +4150,20 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
             ))
         }
-        [target, "SetRegister", register, value] if boot.started || !boot.runtime.is_empty() => {
+        [target, "SetRegister", register, value]
+            if boot.started || !boot.runtime.is_empty() || boot.image.is_some() || !boot.binaries.is_empty()
+                || (boot.has_platform() && crate::parse_address(unquote(resolve(register)?)).is_err()) =>
+        {
             Some(Action::CpuRegister(
                 resolve(target)?.trim_start_matches("sysbus.").into(),
                 unquote(resolve(register)?).into(),
                 Some(crate::parse_address64(resolve(value)?)?),
             ))
         }
-        [target, "GetRegister", register] if boot.started || !boot.runtime.is_empty() => {
+        [target, "GetRegister", register]
+            if boot.started || !boot.runtime.is_empty() || boot.image.is_some() || !boot.binaries.is_empty()
+                || (boot.has_platform() && crate::parse_address(unquote(resolve(register)?)).is_err()) =>
+        {
             Some(Action::CpuRegister(
                 resolve(target)?.trim_start_matches("sysbus.").into(),
                 unquote(resolve(register)?).into(),
@@ -1918,9 +4186,12 @@ fn execute(
                 resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(), value,
             ))
         }
-        [target, register @ ("MEPC" | "MCAUSE" | "MTVAL")] => {
+        [target, register @ ("MSTATUS" | "MEPC" | "MCAUSE" | "MTVAL"), value @ ..]
+            if value.is_empty() || (*register == "MTVAL" && value.len() == 1) =>
+        {
+            let value = value.first().map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
             Some(Action::CpuRegister(
-                resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(), None,
+                resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(), value,
             ))
         }
         [target, "AddHook", ..] if !text.contains("`sysbus GetSymbolAddress ") => {
@@ -1949,7 +4220,7 @@ fn execute(
             ))
         }
         ["logLevel", "-1", target] => Some(Action::NvicLog(resolve(target)?.to_owned())),
-        [target, "WriteDoubleWord", offset, value] => Some(Action::NvicWrite(
+        [target, "WriteDoubleWord", offset, value] => Some(Action::PeripheralWrite(
             resolve(target)?.to_owned(),
             crate::parse_address(resolve(offset)?)?,
             crate::parse_address(resolve(value)?)?,
@@ -1994,7 +4265,14 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
             ))
         }
-        ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunFor(1)),
+        ["emulation", "SetGlobalQuantum" | "SetQuantum", duration] | ["machine", "SetQuantum", duration] => {
+            let quantum = duration_steps(resolve(duration)?).map_err(|error| format!("invalid emulation quantum: {error}"))?;
+            if quantum == 0 {
+                return Err("emulation quantum must be positive".into());
+            }
+            Some(Action::SetQuantum(quantum))
+        }
+        ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunToSyncPoint),
         ["machine" | "mach", "Reset"] => Some(Action::MachineReset(Vec::new())),
         [target, "Reset"] => {
             let cpu = resolve(target)?;
@@ -2008,6 +4286,9 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
                 *state == "Set",
             ))
+        }
+        ["emulation", "RunUntil", timestamp] => {
+            Some(Action::RunUntil(duration_steps(resolve(timestamp)?)?))
         }
         ["emulation", "RunFor", duration] => {
             Some(Action::RunFor(duration_steps(resolve(duration)?)?))
@@ -2066,18 +4347,45 @@ fn execute(
         _ => None,
     };
     if let Some(action) = action {
-        if boot.platform.is_none()
-            || (boot.image.is_none()
+        let empty_machine_command = *machine && !boot.has_platform() && is_empty_machine_action(&action);
+        if !empty_machine_command && !is_console_action(&action) && !is_monitor_snapshot_action(&action)
+            && !matches!(action, Action::MonitorLog(_) | Action::EmulationIsStarted)
+            && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
                     action,
                     Action::BusScalar(_)
+                        | Action::AssembleBlock(..)
+                        | Action::AssertCpuValue(..)
+                        | Action::ReadCpuPc(_)
+                        | Action::ExecutionMode(..)
+                        | Action::CpuPc(..)
+                        | Action::CpuStep(..)
+                        | Action::CpuRegister(..)
+                        | Action::SetEmulationPaused(_)
+                        | Action::DefaultUartTimeout(_)
+                        | Action::PeripheralWrite(..)
+                        | Action::CreateUartTester(..)
+                        | Action::DefaultUartTester(_)
+                        | Action::ClearUartTesterReport(_)
+                        | Action::UartIdle(..)
+                        | Action::WaitForBytes(..)
+                        | Action::WaitForTester(..)
+                        | Action::RunFor(_)
+                        | Action::RunUntil(_)
+                        | Action::RunToSyncPoint
+                        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_)
+                        | Action::DescribeSnapshotPlatform
+                        | Action::SaveMemory(..)
+                        | Action::ClearMemory
+                        | Action::LoadMemory(_)
+                        | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)
                         | Action::RtcMode(_)
                         | Action::RtcDateTime
                         | Action::UserState(_)
-                ))
+                )))
         {
             return Err("runtime commands require a loaded platform and firmware".into());
         }
@@ -2088,19 +4396,9 @@ fn execute(
         });
         return Ok(());
     }
-    // A terminal tester can attach before start. The next runtime wait drives
-    // the machine with the tester already attached.
-    if words == ["start"]
-        && !boot.started
-        && matches!(
-            boot.runtime.as_slice(),
-            [RuntimeCommand { action: Action::CreateUartTester(..), .. }]
-        )
+    if boot.started || boot.runtime.iter().any(|entry|
+        !is_console_action(&entry.action) && !is_log_capture_setup(&entry.action))
     {
-        boot.started = true;
-        return Ok(());
-    }
-    if boot.started || !boot.runtime.is_empty() {
         if matches!(
             boot.runtime.last().map(|entry| &entry.action),
             Some(Action::RunFor(_))
@@ -2124,60 +4422,65 @@ fn execute(
         return Err("commands after start are unsupported in a boot script".into());
     }
     match words {
-        ["mach" | "machine", "create", name @ ..] if name.len() <= 1 => {
-            if let Some(name) = name.first() {
-                resolve(*name)?;
-            }
-            if std::mem::replace(machine, true) {
+        ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.has_platform() => {
+            boot.cpu_mips = Some(resolve(value)?.parse().map_err(|_| "invalid PerformanceInMips")?);
+        }
+        ["mach" | "machine", "create" | "add", name @ ..] if name.len() <= 1 => {
+            if *machine {
                 return Err("multiple machines are unsupported".into());
             }
+            let name = name.first().map(|name| resolve(name)).transpose()?.unwrap_or("machine-0");
+            boot.session.machine = Some(unquote(name).to_owned());
+            boot.session.machine_cleared = false;
+            *machine = true;
         }
         ["machine", "LoadPlatformDescription", value] if *machine && boot.platform.is_none() => {
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @platform-path")?;
-            boot.platform = Some(local_path(&path_value(file), script, root));
+            boot.platform = Some(platform_path(value, script, root, variables)?);
         }
-        ["machine", "SdCardFromFile", args @ ..] if boot.platform.is_some() => {
+        ["machine", "SdCardFromFile", args @ ..] if boot.has_platform() => {
             boot.sd_cards
                 .push(SdAttachment::parse(args, resolve, script)?);
         }
         ["sysbus", "LoadELF", value, options @ ..]
-            if boot.platform.is_some() && boot.image.is_none() && options.len() <= 1 =>
+            if boot.has_platform() && boot.image.is_none() && options.len() <= 1 =>
         {
             boot.use_virtual_elf_addresses = match options {
                 [] | ["false" | "False"] => false,
                 ["true" | "True"] => true,
                 _ => return Err("expected a boolean LoadELF address option".into()),
             };
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @firmware-path")?;
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             boot.image = Some(Asset::new(file, script));
         }
-        ["sysbus", "LoadHEX", value] if boot.platform.is_some() && boot.image.is_none() => {
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @firmware-path")?;
+        ["sysbus", "LoadHEX", value] if boot.has_platform() && boot.image.is_none() => {
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             boot.image = Some(Asset::new(file, script));
             boot.hex = true;
         }
-        [cpu, "VectorTableOffset", value] if boot.platform.is_some() => {
+        [cpu, "VectorTableOffset", value] if boot.has_platform() => {
             boot.vector_tables.push((
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
                 crate::parse_address(resolve(value)?)?,
             ));
         }
-        ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.platform.is_some() => {
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @firmware-path")?;
+        ["sysbus", "LoadFdt", value, address, args, append @ ..]
+            if boot.has_platform() && append.len() <= 1 =>
+        {
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
+            let mut asset = Asset::new(file, script);
+            let args = monitor_string(resolve(args)?).ok_or("expected quoted FDT boot arguments")?;
+            let append = append.first().map(|value| parse_tester_bool(resolve(value)?)).transpose()?.unwrap_or(true);
+            asset.fdt_bootargs = Some((args, append));
+            boot.binaries.push((asset, crate::parse_address64(resolve(address)?)?));
+        }
+        ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.has_platform() => {
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             boot.binaries.push((
                 Asset::new(file, script),
-                crate::parse_address(resolve(address)?)?,
+                crate::parse_address64(resolve(address)?)?,
             ));
         }
-        [device, "LoadPCM" | "Output", value] if boot.platform.is_some() => {
+        [device, "LoadPCM" | "Output", value] if boot.has_platform() => {
             let device = device.strip_prefix("sysbus.").unwrap_or(device).to_string();
             let path = resolve(value)?
                 .strip_prefix('@')
@@ -2234,7 +4537,7 @@ fn execute(
             let name = unquote(resolve(name)?);
             boot.network.file = Some((Asset::new(file, script), name.into()));
         }
-        ["sysbus", "SilenceRange", start, size] if boot.platform.is_some() => {
+        ["sysbus", "SilenceRange", start, size] if boot.has_platform() => {
             let start = start
                 .strip_prefix('<')
                 .ok_or("expected SilenceRange <start size>")?;
@@ -2244,23 +4547,13 @@ fn execute(
             boot.silence_ranges
                 .push((crate::parse_address(start)?, crate::parse_address(size)?));
         }
-        ["sysbus", "LoadSymbolsFrom", value] if boot.platform.is_some() => {
+        ["sysbus", "LoadSymbolsFrom", value] if boot.has_platform() => {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @symbol-path")?;
             boot.symbols.push(file.to_string());
         }
-        ["emulation", "SetGlobalQuantum", value] => {
-            let seconds: f64 = resolve(value)?
-                .trim_matches('"')
-                .parse()
-                .map_err(|_| "invalid emulation quantum")?;
-            if !seconds.is_finite() || seconds <= 0.0 {
-                return Err("invalid emulation quantum".into());
-            }
-            // Single-machine execution already synchronizes after each instruction.
-        }
-        [target, "Pressed" | "Released"] if boot.platform.is_some() && target.contains('.') => {
+        [target, "Pressed" | "Released"] if boot.has_platform() && target.contains('.') => {
             let (gpio, button) = target.rsplit_once('.').unwrap();
             boot.mpfs_buttons.push((
                 gpio.trim_start_matches("sysbus.").to_string(),
@@ -2268,17 +4561,16 @@ fn execute(
                 words[1] == "Pressed",
             ));
         }
-        [
-            cpu,
-            "AddHook",
-            "`sysbus",
-            "GetSymbolAddress",
-            symbol,
-            callback,
-        ] if boot.platform.is_some() => {
-            let symbol = symbol
-                .strip_prefix('"')
-                .and_then(|s| s.strip_suffix("\"`"))
+        [cpu, "AddHook", address, callback]
+            if boot.has_platform() && address.starts_with("`sysbus GetSymbolAddress ") =>
+        {
+            let expression = address.strip_prefix('`').and_then(|s| s.strip_suffix('`'))
+                .ok_or("expected quoted hook address")?;
+            let words = command_words(expression)?;
+            let ["sysbus", "GetSymbolAddress", symbol] = words.as_slice() else {
+                return Err("expected a hook symbol address".into());
+            };
+            let symbol = symbol.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
                 .ok_or("expected quoted hook symbol")?;
             let name = callback.strip_prefix('$').ok_or("expected a named CPU hook")?;
             let hook = match boot.hooks.get(name) {
@@ -2312,7 +4604,7 @@ fn execute(
         ["emulation", "SetGlobalSerialExecution", "True"] => {
             // The interpreter already executes harts serially.
         }
-        [cpu, "PC", arguments @ ..] if boot.platform.is_some() && arguments.len() <= 1 => {
+        [cpu, "PC", arguments @ ..] if boot.has_platform() && arguments.len() <= 1 => {
             let value = arguments
                 .first()
                 .map(|value| crate::parse_address(resolve(value)?))
@@ -2322,20 +4614,20 @@ fn execute(
                 value,
             ));
         }
-        ["cpu" | "sysbus.cpu", "ResetVector", value] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "ResetVector", value] if boot.has_platform() => {
             boot.cpu_control
                 .push(CpuControl::ResetVector(crate::parse_address(resolve(
                     value,
                 )?)?));
         }
-        ["cpu" | "sysbus.cpu", "Reset"] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "Reset"] if boot.has_platform() => {
             boot.cpu_control.push(CpuControl::Reset);
         }
         [
             "cpu" | "sysbus.cpu",
             register @ ("MTVEC" | "STVEC"),
             arguments @ ..,
-        ] if boot.platform.is_some() && arguments.len() <= 1 => {
+        ] if boot.has_platform() && arguments.len() <= 1 => {
             let register = if *register == "MTVEC" {
                 TrapVector::Machine
             } else {
@@ -2352,7 +4644,7 @@ fn execute(
             "cpu" | "sysbus.cpu",
             "LogFunctionNames",
             value @ ("true" | "false"),
-        ] if boot.platform.is_some() => {
+        ] if boot.has_platform() => {
             boot.log_function_names = *value == "true";
         }
         [
@@ -2360,7 +4652,7 @@ fn execute(
             command @ ("ConfigCSRRead" | "AddressCSRRead" | "ConfigCSRWrite" | "AddressCSRWrite"),
             index,
             arguments @ ..,
-        ] if boot.platform.is_some()
+        ] if boot.has_platform()
             && arguments.len() == usize::from(command.ends_with("Write")) =>
         {
             let path = device.strip_prefix("sysbus.").unwrap_or(device);
@@ -2376,36 +4668,37 @@ fn execute(
                 value,
             ));
         }
-        ["cpu" | "sysbus.cpu", "GetRegister", index] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "GetRegister", index] if boot.has_platform() => {
             let index = crate::parse_address(unquote(resolve(index)?))?;
             boot.cpu_registers
                 .push(CpuRegisterCommand::Integer(index, None));
         }
-        ["cpu" | "sysbus.cpu", "SetRegister", index, value] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "SetRegister", index, value] if boot.has_platform() => {
             let index = crate::parse_address(unquote(resolve(index)?))?;
             let value = crate::parse_address(resolve(value)?)?;
             boot.cpu_registers
                 .push(CpuRegisterCommand::Integer(index, Some(value)));
         }
-        ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.has_platform() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
         }
-        ["cpu" | "sysbus.cpu", "SetSupervisorIrqMask", value] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "SetSupervisorIrqMask", value] if boot.has_platform() => {
             boot.supervisor_mask = Some(crate::parse_address(resolve(value)?)?);
         }
-        [button, action @ ("Press" | "Release" | "Toggle")] if boot.platform.is_some() => {
+        [button, action @ ("Press" | "Release" | "Toggle")] if boot.has_platform() => {
             let action = crate::litex_panel::ButtonAction::parse(action).unwrap();
             boot.buttons.push((button.to_string(), action));
         }
-        ["start"]
-            if boot.platform.is_some() && (boot.image.is_some() || !boot.binaries.is_empty()) =>
+        ["start" | "s"]
+            if boot.has_platform() && (boot.image.is_some() || !boot.binaries.is_empty()) =>
         {
             boot.started = true;
+            boot.initial_start = true;
         }
-        ["showAnalyzer", "sysbus.uart" | "uart"] if boot.platform.is_some() => {
+        ["showAnalyzer", "sysbus.uart" | "uart"] if boot.has_platform() => {
             // UART output is already connected to stdout.
         }
-        ["showAnalyzer", analyzer] if boot.platform.is_some() => {
+        ["showAnalyzer", analyzer] if boot.has_platform() => {
             if analyzer
                 .rsplit('.')
                 .next()
@@ -2561,9 +4854,13 @@ enum TesterOptionsKind {
 
 struct TesterWaitOptions {
     id: Option<usize>,
-    timeout: u64,
+    timeout: Option<u64>,
     match_start: bool,
     regex: bool,
+    capture_groups: bool,
+    first_only: Option<bool>,
+    unfinished: bool,
+    pause: Option<bool>,
 }
 
 fn tester_wait_options<'a>(
@@ -2575,6 +4872,10 @@ fn tester_wait_options<'a>(
     let mut timeout = None;
     let mut match_start = None;
     let mut regex = None;
+    let mut capture_groups = None;
+    let mut first_only = None;
+    let mut unfinished = None;
+    let mut pause = None;
     for option in options.split_whitespace() {
         match option.split_once('=') {
             Some(("testerId", value)) if id.is_none() => {
@@ -2588,7 +4889,25 @@ fn tester_wait_options<'a>(
             {
                 match_start = Some(parse_tester_bool(resolve(value)?)?);
             }
-            Some(("treatAsRegex", value)) if kind != TesterOptionsKind::Line && regex.is_none() => {
+            Some(("includeUnfinishedLine", value))
+                if kind == TesterOptionsKind::Line && unfinished.is_none() =>
+            {
+                unfinished = Some(parse_tester_bool(resolve(value)?)?);
+            }
+            Some(("matchNextLine", value))
+                if kind == TesterOptionsKind::Line && first_only.is_none() =>
+            {
+                first_only = Some(parse_tester_bool(resolve(value)?)?);
+            }
+            Some(("captureGroups", value))
+                if kind == TesterOptionsKind::Line && capture_groups.is_none() =>
+            {
+                capture_groups = Some(parse_tester_bool(resolve(value)?)?);
+            }
+            Some(("pauseEmulation", value)) if kind != TesterOptionsKind::Failure && pause.is_none() => {
+                pause = Some(parse_tester_bool(resolve(value)?)?);
+            }
+            Some(("treatAsRegex", value)) if regex.is_none() => {
                 regex = Some(parse_tester_bool(resolve(value)?)?);
             }
             _ => {
@@ -2600,9 +4919,13 @@ fn tester_wait_options<'a>(
     }
     Ok(TesterWaitOptions {
         id,
-        timeout: timeout.unwrap_or(8 * CORTEX_M_STEP_HZ),
+        timeout,
         match_start: match_start.unwrap_or(false),
         regex: regex.unwrap_or(false),
+        capture_groups: capture_groups.unwrap_or(false),
+        first_only,
+        unfinished: unfinished.unwrap_or(false),
+        pause,
     })
 }
 
@@ -2644,6 +4967,25 @@ fn hex_pattern(value: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
+fn uart_text_argument<'a>(value: &'a str, variables: &HashMap<String, String>) -> Result<(String, &'a str), String> {
+    if value.starts_with('$') {
+        let (variable, rest) = value.split_once(char::is_whitespace).unwrap_or((value, ""));
+        let text = monitor_string(resolve(variables, variable)?).ok_or("expected a UART string variable")?;
+        return Ok((text, rest.trim()));
+    }
+    if let Some(encoded) = value.strip_prefix("hex:") {
+        let (text, rest) = encoded.split_once(char::is_whitespace).unwrap_or((encoded, ""));
+        if text.len() % 2 != 0 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("UART text requires complete hexadecimal bytes".into());
+        }
+        let text = String::from_utf8(hex_pattern(text)?).map_err(|_| "UART text must be UTF-8")?;
+        return Ok((text, rest.trim()));
+    }
+    quoted_argument(value)
+        .map(|(text, rest)| (text.to_owned(), rest))
+        .ok_or_else(|| "expected quoted or hex-encoded UART text".into())
+}
+
 fn quoted_argument(value: &str) -> Option<(&str, &str)> {
     let (text, rest) = value.strip_prefix('"')?.split_once('"')?;
     (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| (text, rest.trim()))
@@ -2660,10 +5002,19 @@ fn duration_steps(value: &str) -> Result<u64, String> {
         })
         .unwrap_or(value);
     let seconds = seconds.strip_suffix('s').unwrap_or(seconds);
-    let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
-    let invalid =
-        || format!("expected nonnegative decimal seconds at 10 ns resolution, got {value:?}");
-    let whole: u64 = whole.parse().map_err(|_| invalid())?;
+    let invalid = || format!("expected a nonnegative time interval at 10 ns resolution, got {value:?}");
+    let mut parts = seconds.rsplit(':');
+    let last = parts.next().ok_or_else(invalid)?;
+    let (whole, fraction) = last.split_once('.').unwrap_or((last, ""));
+    let mut whole: u64 = whole.parse().map_err(|_| invalid())?;
+    for (part, multiplier) in parts.by_ref().take(2).zip([60, 3600]) {
+        let field: u64 = part.parse().map_err(|_| invalid())?;
+        whole = field.checked_mul(multiplier).and_then(|field| whole.checked_add(field))
+            .ok_or_else(invalid)?;
+    }
+    if parts.next().is_some() {
+        return Err(invalid());
+    }
     let fraction = fraction.trim_end_matches('0');
     if fraction.len() > 8 || !fraction.bytes().all(|digit| digit.is_ascii_digit()) {
         return Err(invalid());
@@ -2680,18 +5031,29 @@ fn path_value(value: &str) -> String {
     value.replace(r"\ ", " ")
 }
 
+const UNTERMINATED_ARGUMENT: &str = "unterminated quoted argument";
+
 fn command_words(text: &str) -> Result<Vec<&str>, String> {
+    command_tokens(text, None)
+}
+
+fn command_tokens<'a>(text: &'a str, mut separators: Option<&mut Vec<usize>>) -> Result<Vec<&'a str>, String> {
     let mut words = Vec::new();
     let mut start = None;
     let mut quote = None;
     let mut escaped = false;
-    for (index, character) in text.char_indices() {
+    let mut triple = false;
+    let mut chars = text.char_indices();
+    while let Some((index, character)) = chars.next() {
         if std::mem::take(&mut escaped) {
             continue;
         }
         if character == '\\'
             && (quote.is_some()
-                || start.is_some_and(|start| text[start..].starts_with('@'))
+                || start.is_some_and(|start| {
+                    let token = &text[start..index];
+                    token.starts_with('@') || path_anchor(token).is_some()
+                })
                     && text[index + 1..].starts_with(' '))
         {
             escaped = true;
@@ -2699,6 +5061,15 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
         }
         if quote.is_none() && character == '#' && start.is_none() {
             return Ok(words);
+        }
+        if quote.is_none() && character == ';'
+            && let Some(separators) = separators.as_deref_mut()
+        {
+            if let Some(start) = start.take() {
+                words.push(&text[start..index]);
+            }
+            separators.push(index);
+            continue;
         }
         if quote.is_none() && character.is_whitespace() {
             if let Some(start) = start.take() {
@@ -2709,15 +5080,32 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
         let new_word = start.is_none();
         start.get_or_insert(index);
         if quote == Some(character) {
+            if triple && !text[index..].starts_with("\"\"\"") {
+                continue;
+            }
+            if triple {
+                chars.next();
+                chars.next();
+            }
             quote = None;
-        } else if (new_word || start.is_some_and(|start| &text[start..index] == "@"))
-            && matches!(character, '"' | '\'')
+            triple = false;
+        } else if quote.is_none()
+            && (new_word || start.is_some_and(|start| {
+                let prefix = &text[start..index];
+                prefix == "@" || prefix.ends_with('=')
+            }))
+            && matches!(character, '"' | '\'' | '`')
         {
             quote = Some(character);
+            triple = text[index..].starts_with("\"\"\"");
+            if triple {
+                chars.next();
+                chars.next();
+            }
         }
     }
     if quote.is_some() {
-        return Err("unterminated quoted argument".into());
+        return Err(UNTERMINATED_ARGUMENT.into());
     }
     if let Some(start) = start {
         words.push(&text[start..]);
@@ -2728,9 +5116,18 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
 impl Asset {
     pub(crate) fn new(value: &str, script: &Path) -> Self {
         Self {
+            fdt_bootargs: None,
             value: path_value(unquote(value)),
             script: script.into(),
         }
+    }
+
+    pub fn input_path(&self, root: &Path, assets: Option<&Path>) -> Result<PathBuf, String> {
+        let path = self.resolve(root, assets)?;
+        if self.value.contains("://") && !path.is_file() {
+            return Err(format!("monitor asset unavailable: {}", self.value));
+        }
+        Ok(path)
     }
 
     pub fn resolve(&self, root: &Path, assets: Option<&Path>) -> Result<PathBuf, String> {
@@ -2750,6 +5147,31 @@ impl Asset {
     }
 }
 
+fn platform_file_missing(path: &Path) -> bool {
+    match path.metadata() {
+        Ok(metadata) => metadata.is_dir(),
+        Err(error) => error.kind() == io::ErrorKind::NotFound,
+    }
+}
+
+fn monitor_path_token(value: &str) -> Option<&str> {
+    value.strip_prefix('@').map(|path| path.trim_start_matches('@'))
+}
+
+fn platform_path(
+    value: &str, script: &Path, root: &Path, variables: &HashMap<String, String>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
+        return Ok(path);
+    }
+    let value = resolve(variables, value)?;
+    if let Some(path) = monitor_string(value) {
+        return Ok(PathBuf::from(path));
+    }
+    let file = monitor_path_token(value).ok_or("expected a platform path")?;
+    Ok(local_path(&path_value(unquote(file)), script, root))
+}
+
 fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
     let local = script.parent().unwrap_or(Path::new(".")).join(value);
     if local.is_file() {
@@ -2764,6 +5186,305 @@ mod tests {
     use super::*;
 
     #[test]
+    fn platform_and_snapshot_paths_accept_repeated_at_signs() {
+        let root = Path::new("/tmp/penv-path-token");
+        let variables = HashMap::from([("global.board".into(), "@@@board.repl".into())]);
+        assert_eq!(
+            platform_path("$board", Path::new("boot.resc"), root, &variables).unwrap(),
+            root.join("board.repl"),
+        );
+        assert_eq!(
+            snapshot_path("@@state.save", root, &variables).unwrap(),
+            root.join("state.save"),
+        );
+        assert!(snapshot_path("state.save", root, &variables).is_err());
+    }
+
+    #[test]
+    fn live_repl_overlay_uses_the_repl_parser_for_gpio_connections() {
+        let root = Path::new(".");
+        let links = parse_gpio_overlay("gpioPortA: { 6 -> gpioPortD@12 }", root).unwrap();
+        assert_eq!(links, [("gpioPortA".into(), 6, "gpioPortD".into(), 12)]);
+        assert!(parse_gpio_overlay("gpioPortA: { someProperty: 1 }", root).is_err());
+    }
+
+    #[test]
+    fn log_command_resolves_utf8_pattern_and_duration_separately() {
+        let variables = HashMap::from([
+            ("global.pattern".into(), r#""µ original""#.into()),
+            ("global.timeout".into(), r#""0.002s""#.into()),
+        ]);
+        assert_eq!(
+            resolve_log_command("WaitForMonitorLog $timeout literal keep any $pattern", &variables).unwrap(),
+            "WaitForMonitorLog 0.002s literal keep any c2b5206f726967696e616c",
+        );
+        assert_eq!(
+            resolve_log_command("RegisterFailingMonitorLog regex $pattern", &variables).unwrap(),
+            "RegisterFailingMonitorLog regex c2b5206f726967696e616c",
+        );
+    }
+
+    #[test]
+    fn uart_argument_resolves_quoted_variables_without_consuming_options() {
+        let variables = HashMap::from([
+            ("global.pattern".into(), r#""a b""#.into()),
+            ("global.invalid".into(), "123".into()),
+        ]);
+        assert_eq!(
+            uart_text_argument("$pattern timeout=0", &variables).unwrap(),
+            ("a b".into(), "timeout=0"),
+        );
+        assert!(uart_text_argument("$invalid timeout=0", &variables).is_err());
+    }
+
+    #[test]
+    fn uart_capture_payload_preserves_utf8_and_unmatched_groups() {
+        let regex = regex::Regex::new("(µ)(missing)?()").unwrap();
+        assert_eq!(uart_capture_payload("µ", Some(&regex)), "c2b5\tc2b5\t\t");
+    }
+
+    #[test]
+    fn startup_stream_preserves_bytes_for_the_live_session() {
+        let startup = concat!(
+            "set global.board @boards/test.repl\n",
+            "mach create \"example board\"\n",
+            "mach set \"example board\"\n",
+            "machine LoadPlatformDescription $board\n",
+        );
+        let runtime = "PENV-COMMAND 5\npause";
+        let input = format!("PENV-STARTUP {}\n{startup}{runtime}", startup.len());
+        let mut stream = io::Cursor::new(input.into_bytes());
+        let StartupInput::Boot(boot) = load_session_stream(&mut stream, Path::new(".")).unwrap() else {
+            panic!("expected a startup script");
+        };
+        assert_eq!(boot.session.machine.as_deref(), Some("example board"));
+        assert_eq!(resolve(&boot.session.variables, "$board").unwrap(), "@boards/test.repl");
+        let mut remaining = String::new();
+        stream.read_to_string(&mut remaining).unwrap();
+        assert_eq!(remaining, runtime);
+    }
+
+    #[test]
+    fn monitor_alias_expands_arguments_and_rejects_cycles() {
+        let script = r#"alias say echo
+alias greet say
+greet "hello world"
+"#;
+        let boot = load_script(Path::new("aliases.resc"), Path::new("."), false, Some(script)).unwrap();
+        let mut output = Vec::new();
+        run_console_script(&boot, &mut output).unwrap();
+        assert_eq!(output, b"hello world\n");
+
+        let cycle = "alias first second\nalias second first\nfirst";
+        let result = load_script(Path::new("aliases.resc"), Path::new("."), false, Some(cycle));
+        assert!(result.err().unwrap().contains("recursive"));
+    }
+
+    #[test]
+    fn command_chains_preserve_quoted_separators_and_observe_updates() {
+        let script = r#"set marker "one;two";echo $marker;set marker "end";echo $marker"#;
+        let boot = load_script(Path::new("chain.resc"), Path::new("."), false, Some(script)).unwrap();
+        let mut output = Vec::new();
+        run_console_script(&boot, &mut output).unwrap();
+        assert_eq!(output, b"one;two\nend\n");
+    }
+
+    #[test]
+    fn preboot_inspection_uses_monitor_state_without_a_machine() {
+        let inspect = |startup: &str, command: &str| {
+            let input = format!(
+                "PENV-INSPECT {}\n{startup}PENV-COMMAND {}\n{command}",
+                startup.len(), command.len()
+            );
+            let StartupInput::Reply(status, value) =
+                load_session_stream(io::Cursor::new(input), Path::new(".")).unwrap()
+            else {
+                panic!("expected an inspection reply");
+            };
+            (status, value)
+        };
+        assert_eq!(inspect("$var=1234\n$var?=5678\n", "echo $var"), ("OK", "1234".into()));
+        assert_eq!(inspect("mach create\nstart\n", "echo $var").0, "DEFER");
+        let (status, output) = inspect("log \"marker\"\n", "lastLog 0x1");
+        assert_eq!(status, "OK");
+        assert!(output.contains("[INFO] Script: marker"));
+        assert_eq!(inspect("", r#"lastLog "1""#).0, "REJECTED");
+        assert_eq!(inspect("", "set var 1234").0, "DEFER");
+        let machine = "mach create \"bench board\"\n";
+        assert_eq!(inspect("", "emulation IsStarted"), ("OK", "False\n".into()));
+        assert_eq!(inspect(machine, "emulation IsStarted"), ("OK", "False\n".into()));
+        assert_eq!(inspect("mach create\nstart\n", "emulation IsStarted").0, "DEFER");
+        assert_eq!(inspect(machine, "mach set 0").0, "DEFER");
+        assert_eq!(inspect(machine, "mach set 9").0, "REJECTED");
+        assert_eq!(inspect(machine, "logLevel 4").0, "REJECTED");
+        assert_eq!(
+            inspect(&format!("{machine}set marker ready\n"), "echo $marker"),
+            ("OK", "ready".into()),
+        );
+        let missing_repl = format!("/tmp/penv-missing-platform-{}.repl", std::process::id());
+        let startup = format!("{machine}$board=@{missing_repl}\n");
+        assert_eq!(
+            inspect(&startup, "machine LoadPlatformDescription $board"),
+            ("REJECTED", format!("Could not find file '{missing_repl}'.")),
+        );
+        assert_eq!(inspect("", "machine LoadPlatformDescription @missing.repl").0, "DEFER");
+        assert_eq!(inspect(machine, "machine LoadPlatformDescription @.").0, "REJECTED");
+        assert_eq!(inspect(machine, r#"machine LoadPlatformDescription ".""#).0, "REJECTED");
+        assert_eq!(platform_path(r#""relative board.repl""#, Path::new("script/boot.resc"),
+            Path::new("root"), &HashMap::new()).unwrap(), Path::new("relative board.repl"));
+        let missing = format!("@/tmp/penv-missing-snapshot-{}.save", std::process::id());
+        assert_eq!(inspect(machine, &format!("Load {missing}")).0, "REJECTED");
+        let no_directory = format!("@/tmp/penv-missing-snapshot-directory-{}/state.save", std::process::id());
+        assert_eq!(inspect(machine, &format!("Save {no_directory}")).0, "REJECTED");
+        assert_eq!(inspect(machine, "Save @.").0, "REJECTED");
+        assert_eq!(inspect(machine, "Load @.").0, "REJECTED");
+        let pending = format!("{machine}Save {missing}\n");
+        assert_eq!(inspect(&pending, &format!("Load {missing}")).0, "DEFER");
+        assert_eq!(inspect(machine, "logLevel 2").0, "DEFER");
+        assert_eq!(inspect(machine, "mach set \"missing\"").0, "REJECTED");
+        assert_eq!(inspect("", "echo $var").0, "ERROR");
+        let macro_setup = "macro greet \"echo $label\"\nset label ready\n";
+        assert_eq!(inspect(macro_setup, "runMacro $greet"), ("OK", "ready\n".into()));
+        assert_eq!(inspect(macro_setup, "runMacro $missing").0, "ERROR");
+        let nested = "macro inner \"set label changed\"\nmacro outer \"runMacro $inner\"\nrunMacro $outer\n";
+        assert_eq!(inspect(nested, "echo $label"), ("OK", "changed".into()));
+        let recursive = "macro repeat \"runMacro $repeat\"\n";
+        let (status, message) = inspect(recursive, "runMacro $repeat");
+        assert_eq!(status, "ERROR");
+        assert!(message.contains("recursive"));
+        assert_eq!(inspect("mach create\n", "runMacro $greet").0, "DEFER");
+        let (status, value) = inspect("log \"hello world\"\n", "lastLog 1");
+        assert_eq!(status, "OK");
+        assert!(value.ends_with("[INFO] Script: hello world\n"));
+
+    }
+
+    #[test]
+    fn uart_pause_on_buffered_match_and_resume_on_following_wait() {
+        let mut machine = Machine::without_default_ram();
+        machine.cpu_less = true;
+        machine.bus.map_trivial_uart(0x1000, "uart0").unwrap();
+        let id = machine.bus.create_uart_tester("uart0", false, None, false).unwrap();
+        let mut output = io::sink();
+        for byte in b"A\n" {
+            machine.bus.write(0x1000, 4, u32::from(*byte), &mut output).unwrap();
+        }
+        let watch = machine.bus.watch_uart_tester_text(Some(id), "A", None, UartWaitMode::Lf, None).unwrap();
+        assert_eq!(run_uart_watch(&mut machine, watch, 0, Some(true), &mut output).unwrap().0, Stop::OutputMatch);
+        assert!(machine.primary.monitor_paused);
+        assert_eq!(machine.elapsed_steps(), 0);
+
+        let watch = machine.bus.watch_uart_tester_text(Some(id), "B", None, UartWaitMode::Lf, None).unwrap();
+        assert_eq!(run_uart_watch(&mut machine, watch, 10, Some(false), &mut output).unwrap().0, Stop::Limit);
+        assert!(!machine.primary.monitor_paused);
+        assert_eq!(machine.elapsed_steps(), 10);
+
+        machine.bus.default_uart_pause = true;
+        assert_eq!(wait_for_uart_idle(&mut machine, Some(id), 10, None, 5, &mut output).unwrap().0, Stop::Limit);
+        assert!(!machine.primary.monitor_paused);
+        assert_eq!(wait_for_uart_idle(&mut machine, Some(id), 10, None, 10, &mut output).unwrap().0, Stop::Limit);
+        assert!(machine.primary.monitor_paused);
+        assert_eq!(machine.elapsed_steps(), 25);
+    }
+
+    #[test]
+    fn virtual_time_commands_use_restored_arguments() {
+        let path = std::env::temp_dir().join(format!("penv-restored-time-{}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        let directory = GeneratedRepl(path);
+        let script = directory.0.join("clock.resc");
+        for verb in ["RunFor", "RunUntil"] {
+            let content = format!(r#"mach create
+set interval "0.001"
+Save @clock.save
+set interval "0.003"
+emulation SetGlobalQuantum $interval
+emulation {verb} $interval
+emulation GetTimeSourceInfo
+Load @clock.save
+emulation SetGlobalQuantum $interval
+emulation {verb} $interval
+emulation GetTimeSourceInfo
+"#);
+            let mut boot = load_script(&script, &directory.0, false, Some(&content)).unwrap();
+            let mut machine = Machine::without_default_ram();
+            machine.cpu_less = true;
+            machine.empty_monitor = boot.empty_machine;
+            let mut output = Vec::new();
+            run(&mut machine, &mut boot.session, &boot.runtime, u64::MAX, &mut output).unwrap();
+            assert_eq!(output, concat!(
+                "Elapsed Virtual Time: 00:00:00.003000000\nQuantum: 00:00:00.003000000\n",
+                "Elapsed Virtual Time: 00:00:00.001000000\nQuantum: 00:00:00.001000000\n",
+            ).as_bytes());
+        }
+    }
+
+    #[test]
+    fn restorable_snapshot_reconstructs_named_uart_platform() {
+        let directory = std::env::temp_dir().join(format!("penv-restorable-snapshot-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let dir = GeneratedRepl(directory);
+        let snapshot = dir.0.join("clock state.save");
+        let script = dir.0.join("restore.resc");
+        fs::write(&script, "RestoreMonitorSnapshot $ORIGIN/clock\\ state.save\n").unwrap();
+
+        let mut source = Machine::without_default_ram();
+        source.cpu_less = true;
+        source.bus.map_trivial_uart(0x2340, "uart1").unwrap();
+        source.bus.monitor_user_state = "saved state".into();
+        source.run(9, &mut io::sink()).unwrap();
+        let session = Session {
+            machine: Some("clock board".into()),
+            machine_cleared: true,
+            number_mode: NumberMode::Both,
+            variables: HashMap::from([("global.marker".into(), "42".into())]),
+            ..Session::default()
+        };
+        session.save(&source, &snapshot).unwrap();
+        assert_eq!(inspect_snapshot_input(&snapshot), None);
+        let invalid = dir.0.join("invalid.save");
+        fs::write(&invalid, b"invalid snapshot").unwrap();
+        assert!(inspect_snapshot_input(&invalid).unwrap().contains("unknown snapshot format"));
+
+        let mut boot = load(&script, &dir.0).unwrap();
+        assert_eq!(boot.session.machine.as_deref(), Some("clock board"));
+        assert_eq!(fs::read_to_string(boot.platform.as_ref().unwrap()).unwrap(),
+            "uart1: UART.TrivialUart @ sysbus 0x2340\n");
+
+        let mut restored = Machine::without_default_ram();
+        restored.cpu_less = true;
+        restored.bus.map_trivial_uart(0x2340, "uart1").unwrap();
+        run(&mut restored, &mut boot.session, &boot.runtime, u64::MAX, &mut io::sink()).unwrap();
+        assert_eq!(restored.elapsed_steps(), 9);
+        assert_eq!(restored.bus.monitor_user_state, "saved state");
+        assert!(matches!(boot.session.number_mode, NumberMode::Both));
+        assert_eq!(boot.session.selected_machine(), None);
+        assert_eq!(boot.session.machine.as_deref(), Some("clock board"));
+        assert_eq!(resolve(&boot.session.variables, "$marker").unwrap(), "42");
+    }
+
+    #[test]
+    fn platform_paths_use_the_nested_script_origin() {
+        let directory = std::env::temp_dir().join(format!("penv-nested-platform-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let dir = GeneratedRepl(directory);
+        let child = dir.0.join("nested");
+        fs::create_dir(&child).unwrap();
+        let board = child.join("board.repl");
+        fs::write(&board, "uart0: UART.TrivialUart @ sysbus 0x1000\n").unwrap();
+        fs::write(child.join("child.resc"), "set board $ORIGIN/board.repl\n").unwrap();
+        let script = dir.0.join("boot.resc");
+        fs::write(&script, concat!(
+            "mach create\n",
+            "include $ORIGIN/nested/child.resc\n",
+            "machine LoadPlatformDescription $board\n",
+        )).unwrap();
+
+        let boot = load_for_session(&script, &dir.0).unwrap();
+        assert_eq!(boot.platform, Some(board.canonicalize().unwrap()));
+    }
+
+    #[test]
     fn monitor_tokens_keep_quoted_include_paths_together() {
         assert_eq!(
             command_words(r#"include @"scripts/a file.resc""#).unwrap(),
@@ -2773,6 +5494,19 @@ mod tests {
             command_words(r"i @scripts/a\ file.resc").unwrap(),
             ["i", r"@scripts/a\ file.resc"],
         );
+    }
+
+    #[test]
+    fn explicit_global_lookup_does_not_fall_back_to_machine_variables() {
+        let mut variables = HashMap::new();
+        assign_variable("set value 41", &["set", "value", "41"], None, &mut variables, None).unwrap();
+        assign_variable("set value 42", &["set", "value", "42"], Some("demo"), &mut variables, None).unwrap();
+        assign_variable("set local 43", &["set", "local", "43"], Some("demo"), &mut variables, None).unwrap();
+
+        assert_eq!(resolve(&variables, "$value"), Ok("42"));
+        assert_eq!(resolve(&variables, "$demo.value"), Ok("42"));
+        assert_eq!(resolve(&variables, "$global.value"), Ok("41"));
+        assert!(resolve(&variables, "$global.local").is_err());
     }
 
     #[test]
@@ -2843,7 +5577,7 @@ mod tests {
                 .unwrap();
             for _ in 0..2 {
                 assert_eq!(
-                    run(&mut machine, script, &boot.runtime, 0, &mut output).unwrap(),
+                    run(&mut machine, &mut Session::default(), &boot.runtime, 0, &mut output).unwrap(),
                     (Stop::ScriptComplete, 0)
                 );
                 assert_eq!(machine.bus.read::<4>(GPIO + 0x10).unwrap() & 1, 0);
@@ -2889,6 +5623,7 @@ mod tests {
         let mut boot = Boot {
             platform: Some("board.repl".into()),
             image: Some(Asset {
+                fdt_bootargs: None,
                 value: "test.hex".into(),
                 script: "test.resc".into(),
             }),
@@ -2907,7 +5642,7 @@ mod tests {
             1,
         )
         .unwrap();
-        run(&mut machine, script, &boot.runtime, 0, &mut io::sink()).unwrap();
+        run(&mut machine, &mut Session::default(), &boot.runtime, 0, &mut io::sink()).unwrap();
         assert_eq!(machine.bus.read::<4>(ICSR).unwrap(), 1 << 31);
         assert!(machine.bus.pend_nvic_exception("other", 2).is_err());
         assert!(machine.bus.pend_nvic_exception("nvic", 4).is_err());
@@ -2935,6 +5670,13 @@ mod tests {
         assert_eq!(budget, 2);
 
         machine.bus.write(gpio + 0x18, 4, 1, &mut output).unwrap(); // set pin
+        machine.primary.monitor_paused = true;
+        let error =
+            wait_for_led(&mut machine, "led", true, 0, 2, &mut budget, &mut output).unwrap_err();
+        assert!(error.contains("hold ended before completion (Paused)"));
+        assert_eq!(machine.elapsed_steps(), 0);
+        machine.primary.monitor_paused = false;
+
         machine.bus.write(0, 2, 0x6001, &mut output).unwrap(); // str r1, [r0]
         machine.primary.configure_cortex_m(Some(0), false);
         machine.primary.pc = 0;
@@ -3006,6 +5748,7 @@ mod tests {
         let mut uart = ScriptOutput {
             output: &mut output,
             history: Some(history),
+            replies: None,
         };
         uart.write_all(b"ADC reading: \n745\r\n").unwrap();
         assert!(!uart.history.as_ref().unwrap().matched());
@@ -3143,7 +5886,7 @@ sysbus LoadELF @hss.elf
 
     #[test]
     fn reads_boot_commands_and_reports_macro_source_lines() {
-        let directory = std::env::temp_dir().join(format!("penv-resc-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("penv-common-resc-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let script = directory.join("boot.resc");
         let content = concat!(

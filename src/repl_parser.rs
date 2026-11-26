@@ -441,6 +441,20 @@ fn registration_points(
     Ok(points)
 }
 
+pub(crate) fn declaration_separator(line: &str) -> Option<usize> {
+    let mut depth = 0;
+    for (index, delimiter) in unquoted_delimiters(line, &['{', '}', ';']) {
+        match delimiter {
+            '{' => depth += 1,
+            '}' if depth > 0 => depth -= 1,
+            '}' => return None,
+            ';' if depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn inline_body<'a>(
     declaration: &'a str,
     source: &SourceLine,
@@ -879,10 +893,24 @@ fn parse_text(
     let mut seen_usings = HashSet::new();
     let mut comments = ReplComments::default();
     let mut lines = content.lines().enumerate().peekable();
-    while let Some((index, raw)) = lines.next() {
-        let line = comments
-            .first_line(raw)
-            .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
+    let mut remainder = None;
+    loop {
+        let (index, mut line) = if let Some(remainder) = remainder.take() {
+            remainder
+        } else if let Some((index, raw)) = lines.next() {
+            let line = comments
+                .first_line(raw)
+                .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
+            (index, line)
+        } else {
+            break;
+        };
+        if !line.starts_with(char::is_whitespace)
+            && let Some(separator) = declaration_separator(&line)
+        {
+            remainder = Some((index, line[separator + 1..].trim_start().to_owned()));
+            line.truncate(separator);
+        }
         let text = line.trim();
         let lineno = index + 1;
         let source = SourceLine {

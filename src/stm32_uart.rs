@@ -189,12 +189,33 @@ impl Stm32Usart {
         Some(ticks)
     }
 
+    fn tester_frame_ticks(&self) -> Option<u64> {
+        self.frame_ticks().or_else(|| {
+            // Renode's F7 receiver clamps a zero baud divisor to one.
+            let UsartLayout::F7 { low_power } = self.layout else { return None };
+            let frequency = u64::from(self.frequency?);
+            let multiplier = if low_power { 256 } else if self.registers[0] & (1 << 15) != 0 { 2 } else { 1 };
+            let parity_bits = u64::from(self.registers[0] & (1 << 10) != 0);
+            let stop_half_bits = [2, 1, 4, 3][(self.registers[1] >> 12 & 3) as usize];
+            Some((CORTEX_M_STEP_HZ * (18 + 2 * parity_bits + stop_half_bits))
+                .div_ceil(2 * frequency * multiplier))
+        })
+    }
+
     fn cancel_receive(&mut self) {
         self.pending_receive.clear();
         self.receive_deadline = None;
     }
 
     pub fn queue_input(&mut self, bytes: impl IntoIterator<Item = u8>) {
+        self.queue_input_with_period(bytes, self.frame_ticks());
+    }
+
+    pub(crate) fn queue_tester_input(&mut self, bytes: impl IntoIterator<Item = u8>) {
+        self.queue_input_with_period(bytes, self.tester_frame_ticks());
+    }
+
+    fn queue_input_with_period(&mut self, bytes: impl IntoIterator<Item = u8>, period: Option<u64>) {
         if !self.receiver_enabled() {
             return;
         }
@@ -202,7 +223,7 @@ impl Stm32Usart {
         if bytes.peek().is_none() {
             return;
         }
-        if let Some(ticks) = self.frame_ticks() {
+        if let Some(ticks) = period {
             if self.pending_receive.is_empty() {
                 self.receive_deadline = Some(ticks);
             }
@@ -226,7 +247,11 @@ impl Stm32Usart {
             self.legacy_rxne_cleared = false;
             // The same interval measures the next queued frame or the
             // idle period that starts after the last byte is delivered.
-            self.receive_deadline = self.frame_ticks();
+            self.receive_deadline = if self.pending_receive.is_empty() {
+                self.frame_ticks()
+            } else {
+                self.tester_frame_ticks()
+            };
         } else {
             self.idle = true;
             self.receive_deadline = None;
@@ -661,6 +686,24 @@ mod tests {
         run_us(&mut uart, 10);
         assert_empty(&mut uart);
         assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+    }
+
+    #[test]
+    fn tester_input_uses_virtual_time_when_f7_baud_divisor_is_zero() {
+        let mut uart = Stm32Usart::new("uart".into(), 0, None, false);
+        uart.frequency = Some(200_000_000);
+        write(&mut uart, CR1, UE | RE);
+        uart.queue_tester_input([b'X', b'Y']);
+        for byte in [b'X', b'Y'] {
+            for _ in 0..4 {
+                assert_empty(&mut uart);
+                uart.tick();
+            }
+            assert_empty(&mut uart);
+            uart.tick();
+            assert_eq!(uart.read(RDR, 4), u32::from(byte));
+        }
+        assert_empty(&mut uart);
     }
 
     #[test]

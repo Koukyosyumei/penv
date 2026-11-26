@@ -728,12 +728,12 @@ impl Peripheral {
         }
     }
 
-    pub fn tick(&mut self, sleeping: bool) {
+    pub fn tick(&mut self, sleeping: bool, ticks: u64) {
         match &mut self.device {
-            Device::Rtc(rtc) => rtc.tick(),
-            Device::Timer(timer) => timer.tick(),
-            Device::Rng(rng) => rng.tick(),
-            Device::Watchdog(watchdog) => watchdog.tick(sleeping),
+            Device::Rtc(rtc) => rtc.advance(ticks),
+            Device::Timer(timer) => timer.advance(ticks),
+            Device::Rng(rng) => rng.advance(ticks),
+            Device::Watchdog(watchdog) => watchdog.advance(sleeping, ticks),
             _ => {}
         }
     }
@@ -886,7 +886,10 @@ impl Peripheral {
                 _ => None,
             },
             Device::Clock(clock) => clock.read(offset),
-            Device::Twi(twi) => twi.read(offset),
+            Device::Twi(twi) => Some(twi.read(offset).unwrap_or_else(|| {
+                crate::monitor_log::record(2, &format!("{}: Unhandled read from offset 0x{offset:X}.", self.name));
+                0
+            })),
             Device::Spi(spi) => spi.read(offset),
             Device::Timer(timer) => timer.read(offset),
             Device::I2s(i2s) => i2s.read(offset),
@@ -978,7 +981,14 @@ impl Peripheral {
             Device::Watchdog(watchdog) => watchdog.write(offset, value),
             Device::Uarte(uart) => uart.write(offset, value, bus, output)?,
             Device::Rtc(rtc) => rtc.write(offset, value),
-            Device::Twi(twi) => twi.write(offset, value),
+            Device::Twi(twi) => {
+                if !twi.write(offset, value) {
+                    crate::monitor_log::record(2, &format!(
+                        "{}: Unhandled write to offset 0x{offset:X}, value 0x{value:X}.", self.name
+                    ));
+                }
+                true
+            },
             Device::Spi(spi) => {
                 if offset == 0x51c {
                     spi.sample_cs(bus);
@@ -1304,12 +1314,17 @@ impl Default for Rtc {
 impl Rtc {
     const MASK: u32 = 0x00ff_ffff;
 
+    #[cfg(test)]
     fn tick(&mut self) {
+        self.advance(1);
+    }
+
+    fn advance(&mut self, ticks: u64) {
         if !self.running {
             return;
         }
         let period = crate::bus::CORTEX_M_STEP_HZ * (u64::from(self.prescaler) + 1);
-        self.phase += 32_768;
+        self.phase += 32_768 * ticks;
         if self.phase >= period {
             self.phase -= period;
             self.counter = (self.counter + 1) & Self::MASK;

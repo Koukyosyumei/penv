@@ -93,7 +93,7 @@ class MonitorInput:
         return name, token
 
     def path(self, token):
-        value = unquote(self.expand(token).removeprefix("@"))
+        value = unquote(self.expand(token).lstrip("@"))
         path = Path(value)
         for directory in (self.out, self.root, self.assets):
             candidate = (directory / path).resolve()

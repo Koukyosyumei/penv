@@ -4,6 +4,7 @@ mod bit_field;
 mod bitmanip;
 mod bus;
 pub mod circular_buffer;
+mod clic;
 mod clint;
 mod collapsed_profile;
 mod compressed;
@@ -22,6 +23,7 @@ mod float;
 mod ft5336;
 mod host_pty;
 mod iis2mdc;
+mod fdt;
 mod image;
 mod image64;
 mod ina228;
@@ -179,6 +181,7 @@ Options:
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
+                     Use - with --monitor-stdio for a PENV-STARTUP byte frame
   --monitor-stdio    Run a framed monitor session on stdin/stdout
   --raw              Load a flat binary (default: ELF)
   --rv64             Run a raw image on an RV64IM CPU
@@ -1388,6 +1391,7 @@ fn run() -> Result<ExitCode, String> {
     let mut pcm_inputs = Vec::new();
     let mut pcm_outputs = Vec::new();
     let mut run_steps = None;
+    let mut monitor_quantum = None;
     let mut post_run = Vec::new();
     let mut sd_cards = Vec::new();
     let mut sd_setup_only = false;
@@ -1403,7 +1407,16 @@ fn run() -> Result<ExitCode, String> {
     let mut trace_memory = Vec::new();
     let mut riscv_wfi_as_nop = Vec::new();
     let mut monitor_user_state = None;
+    let mut monitor_unhandled_access = None;
+    let mut monitor_uart_timeout = None;
     let mut monitor_output = Vec::new();
+    let mut empty_monitor_machine = false;
+    let mut initial_monitor_start = false;
+    let mut monitor_session = monitor::Session::default();
+    let mut _generated_repl = None;
+    if monitor_stdio || script.is_some() {
+        monitor_log::enable_history();
+    }
     if let Some(capacity) = monitor_log_capacity {
         if !monitor_stdio {
             return Err("--monitor-log-capacity requires --monitor-stdio".into());
@@ -1423,7 +1436,9 @@ fn run() -> Result<ExitCode, String> {
         let root = platform_root
             .as_deref()
             .unwrap_or(std::path::Path::new("."));
-        if let Ok(content) = fs::read_to_string(script)
+        let from_stdin = script == std::path::Path::new("-");
+        if !from_stdin
+            && let Ok(content) = fs::read_to_string(script)
             && content
                 .lines()
                 .any(|line| line.trim_start().starts_with("machine PyDevFromString"))
@@ -1436,13 +1451,26 @@ fn run() -> Result<ExitCode, String> {
                 return Ok(ExitCode::SUCCESS);
             }
         }
-        let parsed = if monitor_stdio {
+        let parsed = if from_stdin {
+            if !monitor_stdio {
+                return Err("--script - requires --monitor-stdio".into());
+            }
+            match monitor::load_session_stream(io::stdin().lock(), root)? {
+                monitor::StartupInput::Boot(boot) => Ok(*boot),
+                monitor::StartupInput::Reply(status, reply) => {
+                    monitor::frame(&mut io::stdout().lock(), status, reply.as_bytes())
+                        .map_err(|error| error.to_string())?;
+                    return Ok(ExitCode::SUCCESS);
+                }
+            }
+        } else if monitor_stdio {
             monitor::load_for_session(script, root)
         } else {
             monitor::load(script, root)
         };
         let boot = match parsed {
             Ok(boot) if uart_log_dir.is_none() => boot,
+            result if from_stdin => result?,
             result => {
                 let plan =
                     network_monitor::Plan::load(script, root).map_err(|error| match result {
@@ -1497,7 +1525,7 @@ fn run() -> Result<ExitCode, String> {
                     .boot
                     .binaries
                     .into_iter()
-                    .map(|(image, address)| (monitor::Asset::new(&image, &boot.source), address))
+                    .map(|(image, address)| (monitor::Asset::new(&image, &boot.source), u64::from(address)))
                     .collect();
                 common.boot_pcs = boot.boot.boot_pcs;
                 common.mtvec = boot.boot.mtvec;
@@ -1505,15 +1533,30 @@ fn run() -> Result<ExitCode, String> {
                 common
             }
         };
+        if let Some(capacity) = boot.initial_log_capacity {
+            monitor_log::attach(capacity)?;
+        }
+        if boot.console_only {
+            if path.is_some() {
+                return Err("console-only scripts do not accept a firmware override".into());
+            }
+            monitor::run_console_script(&boot, &mut io::stdout().lock())?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        empty_monitor_machine = boot.empty_machine;
+        initial_monitor_start = boot.initial_start;
         sd_setup_only = boot.is_sd_setup_only() && boot.image.is_none() && boot.binaries.is_empty();
         if let Some(server) = boot.network.into_tftp()? {
-            let file = server.file.resolve(root, asset_dir.as_deref())?;
+            let file = server.file.input_path(root, asset_dir.as_deref())?;
             let data = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             tftp = Some((
                 server.ethernet,
                 litex_tftp::Server::new(server.ip, server.port, server.filename, data),
             ));
         }
+        _generated_repl = boot.generated_repl;
+        virtual_mips = boot.cpu_mips.or(virtual_mips);
+        monitor_session = boot.session;
         platform_path = boot.platform;
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
         mtvec = mtvec.or(boot.mtvec.map(u64::from));
@@ -1523,6 +1566,8 @@ fn run() -> Result<ExitCode, String> {
         trace_memory = boot.trace_memory;
         riscv_wfi_as_nop = boot.riscv_wfi_as_nop;
         monitor_user_state = boot.monitor_user_state;
+        monitor_unhandled_access = boot.unhandled_access;
+        monitor_uart_timeout = boot.uart_timeout;
         monitor_output = boot.monitor_output;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
@@ -1535,20 +1580,20 @@ fn run() -> Result<ExitCode, String> {
         if path.is_none()
             && let Some(image) = boot.image
         {
-            path = Some(image.resolve(root, asset_dir.as_deref())?);
+            path = Some(image.input_path(root, asset_dir.as_deref())?);
         }
         for (value, address) in boot.binaries {
-            let path = value.resolve(root, asset_dir.as_deref())?;
-            binaries.push((path, u64::from(address)));
+            let path = value.input_path(root, asset_dir.as_deref())?;
+            binaries.push((path, address, value.fdt_bootargs));
         }
         sd_cards = boot.sd_cards;
         mpfs_buttons = boot.mpfs_buttons;
         for (cpu, symbol, source, file) in boot.python_hooks {
-            let file = file.resolve(root, asset_dir.as_deref())?;
+            let file = file.input_path(root, asset_dir.as_deref())?;
             python_hooks.push((cpu, symbol, source, file));
         }
         for (cpu, symbol, target, value) in boot.halt_hooks {
-            let file = monitor::Asset::new(&value, script).resolve(root, asset_dir.as_deref())?;
+            let file = monitor::Asset::new(&value, script).input_path(root, asset_dir.as_deref())?;
             let address = fs::read(&file)
                 .map_err(|e| e.to_string())
                 .and_then(|bytes| image64::symbol(&bytes, &symbol))
@@ -1556,10 +1601,11 @@ fn run() -> Result<ExitCode, String> {
             halt_hooks.push((cpu, address, target));
         }
         for (device, input) in boot.pcm_inputs {
-            pcm_inputs.push((device, input.resolve(root, asset_dir.as_deref())?));
+            pcm_inputs.push((device, input.input_path(root, asset_dir.as_deref())?));
         }
         pcm_outputs = boot.pcm_outputs;
         run_steps = boot.run_steps;
+        monitor_quantum = boot.quantum;
         post_run = boot.post_run;
         boot_pcs = boot.boot_pcs;
         vector_tables = boot.vector_tables;
@@ -1581,7 +1627,7 @@ fn run() -> Result<ExitCode, String> {
     {
         return Err("--max-steps requires a positive integer outside memory setup".into());
     }
-    let memory_only = !has_firmware
+    let memory_only = empty_monitor_machine || !has_firmware
         && platform_path.is_some()
         && (max_steps == Some(0) || static_memory_script || sd_setup_only || monitor_stdio);
     let inspect_only = path.is_none()
@@ -1636,6 +1682,15 @@ fn run() -> Result<ExitCode, String> {
                         })?
                 }
             }
+            None if empty_monitor_machine => {
+                if ram_mib.is_some() || !extra_ram.is_empty() || clint.is_some() {
+                    return Err("empty monitor machines cannot use manual memory mappings".into());
+                }
+                let mut machine = Machine::without_default_ram();
+                machine.cpu_less = true;
+                machine.empty_monitor = true;
+                machine
+            }
             None => {
                 if platform_root.is_some() {
                     return Err("--platform-root requires --platform".into());
@@ -1685,13 +1740,21 @@ fn run() -> Result<ExitCode, String> {
         if script_elf_addresses.is_some() && !machine.is_cortex_m() {
             machine.bus.use_renode_unmapped_data();
         }
-        if let Some(mips) = cli_mips.or(virtual_mips) {
-            if !machine.is_cortex_m() {
-                return Err("--virtual-mips requires Cortex-M".into());
-            }
-            machine
-                .bus
-                .set_step_hz(mips.checked_mul(1_000_000).ok_or("virtual MIPS overflow")?);
+        if let Some(timeout) = monitor_uart_timeout {
+            machine.bus.set_default_uart_timeout(timeout);
+        }
+        if let Some(policy) = monitor_unhandled_access {
+            machine.bus.unhandled_access = Some(policy);
+        }
+        // The pinned Renode BaseCPU starts at 100 MIPS unless the script
+        // overrides it. Configure the CPU budget and SysTick from one rate.
+        let renode_default_mips = (script.is_some() && machine.is_cortex_m())
+            .then_some((bus::CORTEX_M_STEP_HZ / 1_000_000) as u32);
+        if cli_mips.is_some() && !machine.is_cortex_m() {
+            return Err("--virtual-mips requires Cortex-M".into());
+        }
+        if let Some(mips) = cli_mips.or(virtual_mips).or(renode_default_mips) {
+            machine.set_monitor_cpu_rate(mips)?;
         }
         if let Some((name, server)) = &tftp {
             machine.bus.attach_litex_tftp(name, server.clone())?;
@@ -1870,13 +1933,23 @@ fn run() -> Result<ExitCode, String> {
                     .set_mtvec(u32::try_from(value).map_err(|_| "mtvec exceeds 32 bits")?);
             }
         }
-        for (path, address) in &binaries {
-            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            image::load_binary(&mut machine, file, *address)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+        for (path, address, fdt_bootargs) in &binaries {
+            let result = if let Some((args, append)) = fdt_bootargs {
+                fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
+                    let updated = fdt::with_bootargs(&bytes, args, *append).map_err(str::to_owned)?;
+                    let memory = machine.bus.memory64(*address, updated.len())
+                        .ok_or_else(|| format!("unmapped RAM access at {address:#x}"))?;
+                    memory.copy_from_slice(&updated);
+                    Ok(())
+                })
+            } else {
+                File::open(path).map_err(|e| e.to_string())
+                    .and_then(|file| image::load_binary(&mut machine, file, *address))
+            };
+            result.map_err(|e| format!("{}: {e}", path.display()))?;
         }
         machine.bus.renode_unmapped_data = renode_unmapped_data
-            || (monitor_stdio && !machine.is_cortex_m());
+            || (monitor_stdio && !empty_monitor_machine && !machine.is_cortex_m());
         for action in &setup_actions {
             match action {
                 SetupAction::Assemble(cpu, address, instruction) => {
@@ -2149,8 +2222,27 @@ fn run() -> Result<ExitCode, String> {
         }
         Ok(machine)
     };
+    if !monitor_stdio && !monitor_output.is_empty() {
+        let mut output = io::stdout().lock();
+        for message in &monitor_output {
+            writeln!(output, "{message}").map_err(|error| error.to_string())?;
+        }
+    }
     let mut machine = boot_machine()?;
-    if inspect_only {
+    if initial_monitor_start {
+        machine.set_monitor_active(true);
+    }
+    let command_budget = max_steps.unwrap_or(if machine.cpu_less { u64::MAX } else { 10_000_000 });
+    machine.monitor_firmware.clone_from(&path);
+    if let Some(quantum) = monitor_quantum {
+        machine.monitor_quantum = quantum;
+    }
+    let run_steps = run_steps
+        .map(|duration| monitor::duration_cycles(
+            duration, bus::CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
+        ))
+        .transpose()?;
+    if inspect_only && runtime.is_empty() && !monitor_stdio {
         return Ok(ExitCode::SUCCESS);
     }
     let mut uart_triggers = Vec::new();
@@ -2186,23 +2278,24 @@ fn run() -> Result<ExitCode, String> {
                 return Err(format!("monitor script stopped before completion: {stop:?}"));
             }
         }
+        let mut output = monitor_output.join("\r\n").into_bytes();
+        if !output.is_empty() {
+            output.extend_from_slice(b"\r\n");
+        }
         if !runtime.is_empty() {
-            let (stop, _) = monitor::run(
+            let (stop, _) = monitor::run_startup(
                 &mut machine,
-                script.as_deref().ok_or("missing monitor script")?,
+                &mut monitor_session,
                 &runtime,
-                max_steps.unwrap_or(10_000_000),
+                command_budget,
                 &mut io::stderr().lock(),
+                &mut output,
             )?;
             if stop != Stop::ScriptComplete {
                 return Err(format!("monitor script stopped before completion: {stop:?}"));
             }
         }
-        let mut output = monitor_output.join("\r\n");
-        if !output.is_empty() {
-            output.push_str("\r\n");
-        }
-        monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock(), &output)?;
+        monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock(), &output, monitor_session, platform_root.as_deref().unwrap_or(std::path::Path::new(".")))?;
         return Ok(ExitCode::SUCCESS);
     }
     if max_steps == Some(0) && !static_memory_script {
@@ -2271,7 +2364,7 @@ fn run() -> Result<ExitCode, String> {
     let start = Instant::now();
     let limit = match (max_steps, run_steps) {
         (Some(cli), Some(script)) => cli.min(script),
-        (cli, script) => cli.or(script).unwrap_or(10_000_000),
+        (cli, script) => cli.or(script).unwrap_or(command_budget),
     };
     if let Some(check) = uart_check {
         if uart_transcript.is_some() || uart_reply.is_some() {
@@ -2312,10 +2405,8 @@ fn run() -> Result<ExitCode, String> {
         } else {
             machine.run_radio_pair(&mut peer, limit, &mut output)
         }
-    } else if let Some(script) = script.as_deref().filter(|_| {
-        !runtime.is_empty() && (machine.is_cortex_m() || static_memory_script)
-    }) {
-        monitor::run(&mut machine, script, &runtime, limit, &mut output)
+    } else if script.is_some() && !runtime.is_empty() {
+        monitor::run(&mut machine, &mut monitor_session, &runtime, limit, &mut output)
     } else {
         run_machine(
             &mut machine,

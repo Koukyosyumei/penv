@@ -23,11 +23,7 @@ impl Default for VectorState {
 
 impl VectorState {
     pub(crate) fn new(bits: u64) -> Result<Self, &'static str> {
-        if !(ELEN..=MAX_VLEN).contains(&bits) || !bits.is_power_of_two() {
-            return Err(
-                "RV64 vector register length must be a power of two between 64 and 65536 bits",
-            );
-        }
+        Self::validate_length(bits)?;
         Ok(Self {
             start: 0,
             control: 0,
@@ -36,6 +32,25 @@ impl VectorState {
             bits,
             registers: vec![0; 32 * (bits / 8) as usize],
         })
+    }
+
+    fn validate_length(bits: u64) -> Result<(), &'static str> {
+        if !(ELEN..=MAX_VLEN).contains(&bits) || !bits.is_power_of_two() {
+            return Err(
+                "RV64 vector register length must be a power of two between 64 and 65536 bits",
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_length(&mut self, bits: u64) -> Result<(), &'static str> {
+        Self::validate_length(bits)?;
+        let bytes = 32 * (bits / 8) as usize;
+        if bytes > self.registers.len() {
+            self.registers.resize(bytes, 0);
+        }
+        self.bits = bits;
+        Ok(())
     }
 
     pub(crate) fn read(&self, csr: u32) -> Option<u64> {
@@ -306,7 +321,7 @@ impl Rv64 {
         output: &mut impl Write,
     ) -> Result<(), Fault> {
         let illegal = || Fault::new(2, u64::from(inst.0));
-        if self.privilege.status & VS == 0 {
+        if self.privilege.status & VS == 0 && !self.privilege.renode_vector_memory {
             return Err(illegal());
         }
         let vector = self.privilege.vector.as_ref().ok_or_else(illegal)?;
@@ -330,7 +345,9 @@ impl Rv64 {
             let address = base.wrapping_add((lane as u64).wrapping_mul(stride));
             self.trace_stack_access(inst, address, width, inst.opcode() == 0x27);
             self.privilege.vector.as_mut().expect("vector state").start = lane as u64;
-            self.privilege.status |= VS;
+            if !self.privilege.renode_vector_memory {
+                self.privilege.status |= VS;
+            }
             if inst.opcode() == 0x07 {
                 let value = self.load(bus, address, width)?;
                 self.privilege
@@ -349,7 +366,9 @@ impl Rv64 {
             }
         }
         self.privilege.vector.as_mut().expect("vector state").start = 0;
-        self.privilege.status |= VS;
+        if !self.privilege.renode_vector_memory {
+            self.privilege.status |= VS;
+        }
         Ok(())
     }
 }

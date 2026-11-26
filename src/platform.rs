@@ -296,14 +296,21 @@ fn parse(
     let mut registration_depth: i32 = 0;
     let mut property_block = false;
     let mut lines = content.lines().enumerate();
-    while let Some((index, raw)) = lines.next() {
+    let mut remainder = None;
+    while let Some((index, raw)) = remainder.take().or_else(|| lines.next()) {
         if multiline_script {
             if raw.contains("'''") {
                 multiline_script = false;
             }
             continue;
         }
-        let line = without_comment(raw);
+        let mut line = without_comment(raw);
+        if !property_block && registration_depth == 0 && !line.starts_with(char::is_whitespace)
+            && let Some(separator) = crate::repl_parser::declaration_separator(line)
+        {
+            remainder = Some((index, line[separator + 1..].trim_start()));
+            line = &line[..separator];
+        }
         let text = line.trim();
         let lineno = index + 1;
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
@@ -443,11 +450,25 @@ fn brace_depth(value: &str) -> i32 {
         .sum()
 }
 
-fn apply_litex_irq_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
+fn apply_repl_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
     let mut declarations = HashMap::<String, usize>::new();
     let mut merged: Vec<Entry> = Vec::with_capacity(entries.len());
     for entry in std::mem::take(entries) {
         if entry.model.is_empty()
+            && entry.registration.is_none()
+            && entry.name != "sysbus"
+            && !entry.body.is_empty()
+            && entry.body.iter().all(|(_, text)| property_key(text).is_some())
+            && let Some(&index) = declarations.get(&entry.name)
+            && !merged[index].model.is_empty()
+        {
+            let properties: HashSet<_> = entry.body.iter()
+                .filter_map(|(_, text)| property_key(text)).collect();
+            merged[index].body.retain(|(_, text)| {
+                property_key(text).is_none_or(|key| !properties.contains(key))
+            });
+            merged[index].body.extend(entry.body);
+        } else if entry.model.is_empty()
             && entry.name != "sysbus"
             && entry.registration.is_none()
             && let Some(&index) = declarations.get(&entry.name)
@@ -538,7 +559,7 @@ fn load_platform(
             )
         })?;
     }
-    apply_litex_irq_overrides(&mut entries)?;
+    apply_repl_overrides(&mut entries)?;
     if entries.iter().any(|entry| entry.model == "CPU.RiscV64") {
         return crate::rv64_platform::load(
             entries,
@@ -558,6 +579,7 @@ fn load_platform(
     let mut cpus = Vec::new();
     let mut external_pmps = HashMap::new();
     let mut clint = None;
+    let mut clic = None;
     let mut nvic = None;
     let mut exti = None;
     let mut combiners = Vec::new();
@@ -824,7 +846,7 @@ fn load_platform(
                 }
             }
             "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
-            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
+            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
                 }
@@ -838,6 +860,11 @@ fn load_platform(
             "IRQControllers.NVIC" => {
                 if nvic.replace(entry).is_some() {
                     return Err(entry.error("only one NVIC is supported"));
+                }
+            }
+            "IRQControllers.CoreLocalInterruptController" => {
+                if clic.replace(entry).is_some() {
+                    return Err(entry.error("only one CLIC is supported"));
                 }
             }
             "IRQControllers.CoreLevelInterruptor" => {
@@ -946,6 +973,16 @@ fn load_platform(
             .map_err(|e| controller.error(&e))?;
     } else if let Some(controller) = flash_controller {
         return Err(controller.error("expected an attached Micron MT25Q flash chip"));
+    }
+    if let [entry] = entries.as_slice()
+        && entry.model == "UART.TrivialUart"
+    {
+        keys(entry, &[])?;
+        machine.bus.map_trivial_uart(entry.address()?, &entry.name).map_err(|e| entry.error(&e))?;
+        machine.cpu_less = true;
+        // The master clock's unit is 10 ns even with no CPU attached.
+        machine.bus.set_step_hz(crate::bus::CORTEX_M_STEP_HZ as u32);
+        return Ok(machine);
     }
     if cpus.is_empty() || (require_ram && !ram) {
         return Err(format!(
@@ -2072,6 +2109,8 @@ fn load_platform(
                 }
                 ("hartId", value) => id = number(value).map_err(|e| entry.error(&e))? as usize,
                 ("privilegedArchitecture", "PrivilegedArchitecture.Priv1_10") => {}
+                ("privilegedArchitecture", "PrivilegedArchitecture.PrivUnratified")
+                | ("timeProvider", "empty") if clic.is_some() => {}
                 ("privilegedArchitecture", "PrivilegedArchitecture.Priv1_11")
                 | ("timeProvider", "empty")
                     if ibex => {}
@@ -2318,6 +2357,37 @@ fn load_platform(
         // and discards an unmapped data write.
         machine.bus.use_renode_unmapped_data();
     }
+    if let Some(entry) = clic {
+        let properties = keys(entry, &["cpu", "machineLevelBits"])?;
+        if configs.len() != 1 || !properties.contains(&("cpu", cpu.name.as_str())) {
+            return Err(entry.error("CLIC requires one named RV32 CPU"));
+        }
+        let registrations = entry
+            .registration_list()
+            .ok_or_else(|| entry.error("missing CLIC registrations"))?;
+        let range = |register: &str| {
+            let (name, range) = register.split_once(char::is_whitespace)?;
+            let (base, size) = range.trim().strip_prefix('<')?.strip_suffix('>')?.split_once(',')?;
+            Some((name.to_owned(), number(base.trim()).ok()?,
+                  number(size.trim().strip_prefix('+')?).ok()?))
+        };
+        let regions: Vec<_> = registrations.iter().filter_map(|reg| range(reg)).collect();
+        let base = regions.iter().find_map(|(name, base, size)| {
+            (name == "sysbus" && *size == crate::clic::Clic::SIZE).then_some(*base)
+        }).ok_or_else(|| entry.error("unsupported CLIC system bus range"))?;
+        if registrations.len() != 2 || !regions.contains(&(cpu.name.clone(), 0x1000, 0x4a1)) {
+            return Err(entry.error("unsupported CLIC indirect CSR range"));
+        }
+        let machine_levels = properties.iter()
+            .find_map(|(key, value)| (*key == "machineLevelBits").then_some(*value))
+            .map(number).transpose().map_err(|e| entry.error(&e))?.unwrap_or(8);
+        if machine_levels > 8 {
+            return Err(entry.error("CLIC machineLevelBits must be between 0 and 8"));
+        }
+        machine.bus.map_clic(base, &entry.name, machine_levels as u8)
+            .map_err(|e| entry.error(&e))?;
+        machine.primary.enable_clic();
+    }
     if let Some(entry) = clint {
         let mut target_count = None;
         let mut frequency = None;
@@ -2364,7 +2434,7 @@ fn load_platform(
                 "[{},{}]->{}@[{software},{timer}]",
                 2 * slot,
                 2 * slot + 1,
-                target.name
+                clic.unwrap_or(target).name
             );
             if !wires.contains(&expected) {
                 return Err(entry.error(&format!("expected CLINT connection {expected}")));
@@ -2495,7 +2565,10 @@ fn load_platform(
         map_litex_i2s(entry, &configs, &mut machine.bus)?;
     }
     if let Some(entry) = uart {
-        if entry.model == "UART.Murax_UART" {
+        if entry.model == "UART.TrivialUart" {
+            keys(entry, &[])?;
+            machine.bus.map_trivial_uart(entry.address()?, &entry.name).map_err(|e| entry.error(&e))?;
+        } else if entry.model == "UART.Murax_UART" {
             let connected = direct_irq(entry, &cpu.name, 11)?;
             machine
                 .bus
@@ -3583,6 +3656,27 @@ fn keys_in<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_multiple_inline_declarations_on_one_line() {
+        let directory = std::env::temp_dir().join(format!("penv-inline-declarations-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("platform.repl");
+        fs::write(&path, concat!(
+            "first: Memory.MappedMemory @ sysbus 0x1000 { size: 0x100; }; ",
+            "second: Memory.MappedMemory @ sysbus 0x2000 { size: 0x200 }\n",
+        )).unwrap();
+
+        let mut entries = Vec::new();
+        let result = parse(&path, &directory, &mut HashSet::new(), &mut entries);
+        fs::remove_dir_all(directory).unwrap();
+        result.unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "first");
+        assert_eq!(entries[0].body, [(1, "size: 0x100".into())]);
+        assert_eq!(entries[1].name, "second");
+        assert_eq!(entries[1].body, [(1, "size: 0x200".into())]);
+    }
 
     #[test]
     fn loads_litex_phy_and_clock_controller_from_repl() {

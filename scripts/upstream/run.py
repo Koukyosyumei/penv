@@ -132,6 +132,13 @@ def run_robot(case, provider, options, renode, binary, out, assets, negative):
             worker.join()
     executed, = result.suite.tests
     last = endpoint.measurements[-1]["result"] if endpoint.measurements else None
+    if endpoint.measurements and endpoint.measurements[-1].get("stage") == "monitor_inspection":
+        # An inspection evaluates the prefix it receives. Require any later
+        # queued command to reach another inspection or a booted machine.
+        latest_monitor = next((call for call in reversed(endpoint.calls)
+                               if call.get("stage") == "queued_monitor_command" or "monitor" in call), None)
+        if latest_monitor and latest_monitor.get("stage") == "queued_monitor_command":
+            last = None
     xml = out / "robot.xml"
     failures = ET.parse(xml).getroot().iter("msg")
     missing_keyword = any(msg.get("level") == "FAIL" and re.search(
@@ -276,7 +283,11 @@ def main():
     parser.add_argument("--all", action="store_true", help="queue all host-selected Robot suites")
     parser.add_argument("--jobs", type=int, choices=range(1, 11), default=10)
     parser.add_argument("--suite", action="append", help="manifest-relative Robot suite path")
-    parser.add_argument("--case", help="exact Robot test name")
+    parser.add_argument("--case", action="append", help="exact Robot test name, repeatable for dependencies")
+    parser.add_argument("--host-case-timeout", type=int, default=130,
+                        help="elapsed host seconds allowed per Robot case (default 130)")
+    parser.add_argument("--rust-monitor", action="store_true",
+                        help="forward monitor commands unchanged to the Rust session")
     parser.add_argument("--negative-control", action="store_true", help="additional short-deadline HEX pilot")
     parser.add_argument("--nunit-root", type=Path, help="writable pinned clone with upstream build prerequisites")
     parser.add_argument("--dotnet", default="dotnet")
@@ -296,10 +307,12 @@ def main():
                 exclude=["excluded", f"exclude_{system}", f"exclude_host_{arch}"],
                 skip=["skipped", f"skip_{system}"])
     rows, projects, providers, options = inventory(renode, host)
+    if args.host_case_timeout < 1:
+        parser.error("--host-case-timeout must be positive")
     if args.all and (args.suite or args.case):
         parser.error("--all cannot be combined with --suite or --case")
     selected = [row for row in rows if (args.all or row["path"] in (args.suite or DEFAULT_ROBOT))
-                and (args.case is None or row["name"] == args.case)]
+                and (args.case is None or row["name"] in args.case)]
     if not args.inventory_only and not selected:
         parser.error("no host-selected Robot cases match")
     nunit_root = args.nunit_root.resolve() if args.nunit_root else None
@@ -312,7 +325,7 @@ def main():
                     invocation=[sys.executable, *sys.argv], cwd=os.getcwd(),
                     renode=str(renode), robot_suites=len(providers), robot_instances=len(rows),
                     robot_host_skipped=sum(row["skipped"] for row in rows),
-                    nunit_projects=len(projects))
+                    nunit_projects=len(projects), host_case_timeout_s=args.host_case_timeout)
     write_json(out / "inventory.json", dict(metadata=metadata, robot=rows, nunit=projects))
     results, nunit_runs, nunit = [], [], []
     if not args.inventory_only:
@@ -331,7 +344,8 @@ def main():
             assets = out / "assets"
             assets.mkdir()
             from batch import run_batch
-            results.extend(run_batch(selected, options, renode, binary, out, assets, args.jobs))
+            results.extend(run_batch(selected, options, renode, binary, out, assets, args.jobs,
+                                     args.host_case_timeout, args.rust_monitor))
             if args.negative_control:
                 pilot, = [row for row in rows if row["path"] == DEFAULT_ROBOT[0]
                           and row["name"] == "Should Load HEX"]

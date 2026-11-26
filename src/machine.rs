@@ -30,6 +30,7 @@ use crate::{
 mod floating;
 
 pub const MAX_HARTS: usize = 8;
+const DEFAULT_MONITOR_QUANTUM: u64 = 10_000; // 100 microseconds in 10 ns monitor units.
 pub const VIRTUAL_STEPS_PER_SECOND: u32 = 1_000_000;
 
 #[derive(Clone)]
@@ -124,6 +125,10 @@ impl PcTrace {
 }
 
 pub struct Machine {
+    pub(crate) cpu_less: bool,
+    pub(crate) empty_monitor: bool,
+    monitor_active: bool,
+    pub(crate) monitor_single_step_blocking: bool,
     pub bus: Bus,
     pub primary: Hart,
     pub function_symbols: Option<BTreeMap<u32, String>>,
@@ -135,6 +140,9 @@ pub struct Machine {
     halted: u8,
     pub(crate) stop_when_halted: bool,
     elapsed_steps: u64,
+    boot_memory_cleared: bool,
+    pub(crate) monitor_firmware: Option<std::path::PathBuf>,
+    pub(crate) monitor_quantum: u64,
     cpu_paused: bool,
     cpu_halted: bool,
     cpu_clock_stopped: bool,
@@ -410,6 +418,13 @@ impl Machine {
             halted: 0,
             stop_when_halted: false,
             elapsed_steps: 0,
+            cpu_less: false,
+            empty_monitor: false,
+            monitor_active: false,
+            monitor_single_step_blocking: true,
+            boot_memory_cleared: false,
+            monitor_firmware: None,
+            monitor_quantum: DEFAULT_MONITOR_QUANTUM,
             cpu_paused: false,
             cpu_halted: false,
             cpu_clock_stopped: false,
@@ -480,6 +495,20 @@ impl Machine {
                 (hart.name.as_deref() == Some(name) && hart.rv64.is_some()).then_some(id)
             })
             .ok_or_else(|| format!("unknown named RV64 CPU {name:?}"))
+    }
+
+    pub(crate) fn configure_rv64_vlen(&mut self, name: &str, bits: u64) -> Result<(), String> {
+        let id = self.rv64_hart_by_name(name)?;
+        let vector = self.hart_mut(id).rv64.as_mut().expect("validated RV64 CPU")
+            .privilege.vector.as_mut().ok_or("VectorRegisterLength requires the V extension")?;
+        vector.set_length(bits).map_err(str::to_owned)
+    }
+
+    pub(crate) fn enable_rv64_stack_access_trace(&mut self, name: &str) -> Result<(), String> {
+        let id = self.rv64_hart_by_name(name)?;
+        self.hart_mut(id).rv64.as_mut().expect("validated RV64 CPU").stack_access_trace_name =
+            Some(name.to_owned());
+        Ok(())
     }
 
     pub(crate) fn rv64_translate_read(&mut self, name: &str, address: u64) -> Result<u64, String> {
@@ -556,6 +585,18 @@ impl Machine {
         ];
         let hart = self.named_hart(name)?;
         let register = register.to_ascii_lowercase();
+        if hart.thumb.is_some() && register != "resetvector" {
+            let index = match register.as_str() {
+                "sp" => Some(13),
+                "lr" => Some(14),
+                "pc" => Some(15),
+                name => crate::parse_address(name.strip_prefix('r').unwrap_or(name)).ok(),
+            }.filter(|index| *index < 16)
+                .ok_or_else(|| format!("unsupported Cortex-M monitor register {register}"))?;
+            let value = value.map(u32::try_from).transpose()
+                .map_err(|_| "register value exceeds Cortex-M width")?;
+            return hart.monitor_integer_register(index, value).map(|value| value.map(u64::from));
+        }
         if register == "resetvector" {
             if let Some(cpu) = &mut hart.rv64 {
                 return Ok(match value {
@@ -584,7 +625,28 @@ impl Machine {
                 .map_err(|_| "trap vector exceeds RV32 width")?;
             return hart.monitor_trap_vector(vector, value).map(|value| value.map(u64::from));
         }
-        if value.is_none() && matches!(register.as_str(), "mepc" | "mcause" | "mtval") {
+        if let Some(value) = value.filter(|_| register == "mstatus") {
+            if let Some(cpu) = &mut hart.rv64 {
+                cpu.initialize_mstatus(value);
+                return Ok(None);
+            }
+            if hart.thumb.is_none() {
+                hart.set_mstatus(u32::try_from(value).map_err(|_| "mstatus exceeds RV32 width")?);
+                return Ok(None);
+            }
+        }
+        if let Some(value) = value.filter(|_| register == "mtval") {
+            if let Some(cpu) = &mut hart.rv64 {
+                cpu.privilege.set_monitor_trap_value(value);
+                return Ok(None);
+            }
+            if hart.thumb.is_none() {
+                let value = u32::try_from(value).map_err(|_| "MTVAL exceeds RV32 width")?;
+                hart.csr.set_monitor_trap_value(value);
+                return Ok(None);
+            }
+        }
+        if value.is_none() && matches!(register.as_str(), "mstatus" | "mepc" | "mcause" | "mtval") {
             let result = match &hart.rv64 {
                 Some(cpu) => cpu.monitor_register(&register),
                 None if hart.thumb.is_none() => hart.csr.monitor_trap_register(&register).map(u64::from),
@@ -672,6 +734,18 @@ impl Machine {
         self.run_selected(steps, Some(index), output, |_, _| false)
     }
 
+    pub(crate) fn set_monitor_symbol_pc(&mut self, cpu: &str, symbol: &str) -> Result<(), String> {
+        let path = self.monitor_firmware.as_deref().ok_or("no firmware ELF for symbol lookup")?;
+        let address = crate::cpu_python_hook::symbol(path, symbol)?;
+        if let Some(rv64) = &mut self.named_hart(cpu)?.rv64 {
+            rv64.set_program_counter(address);
+            Ok(())
+        } else {
+            let address = u32::try_from(address).map_err(|_| "symbol address exceeds CPU width")?;
+            self.set_named_entry(cpu, address)
+        }
+    }
+
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
         let hart = self.named_hart(name)?;
         if let Some(cpu) = &mut hart.rv64 {
@@ -701,6 +775,9 @@ impl Machine {
     }
 
     fn named_hart(&mut self, name: &str) -> Result<&mut Hart, String> {
+        if self.cpu_less {
+            return Err("the platform has no CPU".into());
+        }
         std::iter::once(&mut self.primary)
             .chain(&mut self.secondary)
             .find(|hart| hart.name.as_deref() == Some(name))
@@ -884,54 +961,218 @@ impl Machine {
         Ok(())
     }
 
-    pub fn save_memory_snapshot(&self, path: &Path) -> Result<(), String> {
+    fn cpu_less_snapshot_prefix(&self) -> Result<Vec<u8>, String> {
+        if self.recorder.is_some() || !self.replay.is_empty() || !self.inputs.is_empty() {
+            return Err("CPU-less snapshots require an idle event queue".into());
+        }
+        if self.empty_monitor {
+            if self.bus.unhandled_access.is_some() {
+                return Err("empty monitor snapshots require the default unmapped access policy".into());
+            }
+            return Ok(Vec::new());
+        }
+        let (base, name) = self.bus.snapshot_trivial_uart()?;
+        let mut data = base.to_le_bytes().to_vec();
+        data.extend_from_slice(&(name.len() as u64).to_le_bytes());
+        data.extend_from_slice(name.as_bytes());
+        Ok(data)
+    }
+
+    fn write_cpu_less_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
+        let mut data = if self.empty_monitor { b"PENVIOST\x03" } else { b"PENVIOST\x02" }.to_vec();
+        data.extend_from_slice(&self.cpu_less_snapshot_prefix()?);
+        data.extend_from_slice(&self.elapsed_steps().to_le_bytes());
+        data.extend_from_slice(&self.monitor_quantum.to_le_bytes());
+        data.push(u8::from(self.primary.monitor_paused));
+        data.extend_from_slice(&self.bus.default_uart_timeout().to_le_bytes());
+        output.write_all(&data).map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn read_cpu_less_snapshot_platform(input: &mut impl Read) -> Result<Option<(u32, String)>, String> {
+        fn read_bytes<const N: usize>(input: &mut impl Read) -> Result<[u8; N], String> {
+            let mut bytes = [0; N];
+            input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+            Ok(bytes)
+        }
+        if Self::cpu_less_snapshot_version(input)? == 3 {
+            return Ok(None);
+        }
+        let address = u32::from_le_bytes(read_bytes(input)?);
+        let length = u64::from_le_bytes(read_bytes(input)?);
+        // Bound the allocation before reading an untrusted snapshot.
+        let length = usize::try_from(length).ok().filter(|length| *length <= 4096)
+            .ok_or("snapshot UART name exceeds size limit")?;
+        let mut name = vec![0; length];
+        input.read_exact(&mut name).map_err(|e| e.to_string())?;
+        Ok(Some((address, String::from_utf8(name).map_err(|e| e.to_string())?)))
+    }
+
+    fn cpu_less_snapshot_version(input: &mut impl Read) -> Result<u8, String> {
+        let mut header = [0; 9];
+        input.read_exact(&mut header).map_err(|e| e.to_string())?;
+        Self::cpu_less_snapshot_format(&header)
+    }
+
+    fn cpu_less_snapshot_format(header: &[u8; 9]) -> Result<u8, String> {
+        match header {
+            b"PENVIOST\x01" => Ok(1),
+            b"PENVIOST\x02" => Ok(2),
+            b"PENVIOST\x03" => Ok(3),
+            _ => Err("unknown CPU-less snapshot format".into()),
+        }
+    }
+
+    fn cortex_snapshot_has_registers(header: &[u8; 9]) -> std::io::Result<bool> {
+        match header {
+            b"PENVBOOT\x01" => Ok(false),
+            b"PENVBOOT\x02" => Ok(true),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown snapshot format")),
+        }
+    }
+
+    pub(crate) fn validate_boot_snapshot_header(input: &mut impl Read) -> Result<(), String> {
+        let mut header = [0; 9];
+        input.read_exact(&mut header).map_err(|error| error.to_string())?;
+        if Self::cpu_less_snapshot_format(&header).is_ok() || Self::cortex_snapshot_has_registers(&header).is_ok() {
+            Ok(())
+        } else {
+            Err("unknown snapshot format".into())
+        }
+    }
+
+    fn read_cpu_less_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
+        let prefix = self.cpu_less_snapshot_prefix()?;
+        let version = Self::cpu_less_snapshot_version(input)?;
+        if (version == 3) != self.empty_monitor {
+            return Err("CPU-less snapshot does not match the platform or format".into());
+        }
+        let has_uart_timeout = version >= 2;
+        let mut data = vec![0; prefix.len() + if has_uart_timeout { 25 } else { 17 }];
+        input.read_exact(&mut data).map_err(|error| error.to_string())?;
+        if !data.starts_with(&prefix) || input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {
+            return Err("CPU-less snapshot does not match the platform or format".into());
+        }
+        let state = &data[prefix.len()..];
+        let steps = u64::from_le_bytes(state[..8].try_into().unwrap());
+        let quantum = u64::from_le_bytes(state[8..16].try_into().unwrap());
+        if steps == u64::MAX || quantum == 0 || state[16] > 1 {
+            return Err("invalid CPU-less snapshot clock state".into());
+        }
+        self.reset_monitor_time(steps, quantum);
+        self.primary.monitor_paused = state[16] != 0;
+        if has_uart_timeout {
+            self.bus.set_default_uart_timeout(u64::from_le_bytes(state[17..25].try_into().unwrap()));
+        }
+        self.boot_memory_cleared = false;
+        Ok(())
+    }
+
+    pub(crate) fn set_monitor_active(&mut self, active: bool) {
+        self.monitor_active = active;
+        self.primary.monitor_paused = !active;
+    }
+
+    pub(crate) fn monitor_is_active(&self) -> bool {
+        self.monitor_active && !self.primary.monitor_paused
+    }
+
+    fn reset_monitor_time(&mut self, steps: u64, quantum: u64) {
+        self.monitor_active = false;
+        self.time_source = TimeSource::default();
+        self.time_source.grant_until(steps);
+        self.elapsed_steps = steps;
+        self.monitor_quantum = quantum;
+        self.bus.monitor_clock_ns = 0;
+        self.bus.monitor_clock_step = 0;
+        self.bus.uart_clock_step = steps;
+    }
+
+    pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
+        if self.boot_memory_cleared {
+            return Err("Load a boot snapshot after Clear".into());
+        }
+        if self.cpu_less {
+            return self.write_cpu_less_snapshot(output);
+        }
         self.check_memory_snapshot()?;
-        let save = || -> std::io::Result<()> {
-            let mut file = std::fs::File::create(path)?;
-            file.write_all(b"PENVBOOT\x01")?;
-            file.write_all(&self.raw_load_address().to_le_bytes())?;
-            self.bus.save_memory(&mut file)
-        };
-        save().map_err(|e| format!("{}: {e}", path.display()))
+        (|| -> std::io::Result<()> {
+            output.write_all(b"PENVBOOT\x02")?;
+            output.write_all(&self.raw_load_address().to_le_bytes())?;
+            for value in self.primary.registers[..15].iter().copied().chain([self.primary.pc]) {
+                output.write_all(&value.to_le_bytes())?;
+            }
+            self.bus.save_memory(output)
+        })().map_err(|e| e.to_string())
     }
 
     pub fn clear_memory_snapshot(&mut self) -> Result<(), String> {
+        if self.cpu_less {
+            self.cpu_less_snapshot_prefix()?;
+            self.reset_monitor_time(0, DEFAULT_MONITOR_QUANTUM);
+            self.primary.monitor_paused = false;
+            self.boot_memory_cleared = true;
+            return Ok(());
+        }
         self.check_memory_snapshot()?;
         self.bus.clear_memory();
-        self.reset_cortex_m_machine()
+        self.bus.reset_cortex_m_machine_devices();
+        self.primary.thumb.as_mut().unwrap().reset_state();
+        self.primary.monitor_halted = false;
+        self.primary.registers.fill(0);
+        self.primary.pc = 0;
+        self.boot_memory_cleared = true;
+        Ok(())
     }
 
-    pub fn load_memory_snapshot(&mut self, path: &Path) -> Result<(), String> {
+    pub(crate) fn read_boot_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
+        if self.cpu_less {
+            return self.read_cpu_less_snapshot(input);
+        }
         self.check_memory_snapshot()?;
-        let mut load = || -> std::io::Result<u32> {
-            let mut file = std::fs::File::open(path)?;
-            let mut header = [0; 9];
-            file.read_exact(&mut header)?;
-            if &header != b"PENVBOOT\x01" {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "unknown snapshot format",
-                ));
+        let mut load = || -> std::io::Result<_> {
+            fn read_word(input: &mut impl Read) -> std::io::Result<u32> {
+                let mut bytes = [0; 4];
+                input.read_exact(&mut bytes)?;
+                Ok(u32::from_le_bytes(bytes))
             }
-            let mut address = [0; 4];
-            file.read_exact(&mut address)?;
-            let address = u32::from_le_bytes(address);
+            let mut header = [0; 9];
+            input.read_exact(&mut header)?;
+            let has_registers = Self::cortex_snapshot_has_registers(&header)?;
+            let address = read_word(input)?;
             if address & 0x7f != 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "invalid snapshot vector table address",
                 ));
             }
-            self.bus.restore_memory(&mut file)?;
-            Ok(address)
+            let mut registers = [0; 16];
+            if has_registers {
+                for value in &mut registers {
+                    *value = read_word(input)?;
+                }
+            }
+            self.bus.restore_memory(input)?;
+            Ok((address, has_registers.then_some(registers)))
         };
-        let address = load().map_err(|e| format!("{}: {e}", path.display()))?;
-        self.primary
-            .thumb
-            .as_mut()
-            .unwrap()
-            .set_vector_base(address);
-        self.primary.reset_cortex_m(&mut self.bus)
+        let (address, registers) = load().map_err(|e| e.to_string())?;
+        let thumb = self.primary.thumb.as_mut().unwrap();
+        thumb.set_vector_base(address);
+        let Some(registers) = registers else {
+            self.primary.reset_cortex_m(&mut self.bus)?;
+            self.boot_memory_cleared = false;
+            return Ok(());
+        };
+        thumb.reset_state();
+        if let Some(nvic) = self.bus.nvic.as_mut() {
+            nvic.set_vector_base(address);
+            nvic.lockup = false;
+            nvic.set_active_exceptions(0);
+        }
+        self.primary.registers.fill(0);
+        self.primary.registers[..15].copy_from_slice(&registers[..15]);
+        self.primary.pc = registers[15];
+        self.boot_memory_cleared = false;
+        Ok(())
     }
 
     pub fn schedule_reset(&mut self, step: u64) -> Result<(), String> {
@@ -1366,6 +1607,21 @@ impl Machine {
         self.time_source.elapsed()
     }
 
+    pub(crate) fn monitor_elapsed_ns(&self) -> u128 {
+        self.bus.monitor_time_ns(self.elapsed_steps())
+    }
+
+    pub(crate) fn set_monitor_cpu_rate(&mut self, mips: u32) -> Result<(), String> {
+        if self.cpu_less {
+            return Err("the platform has no CPU".into());
+        }
+        let now = self.monitor_elapsed_ns();
+        self.bus.set_monitor_cpu_mips(mips)?;
+        self.bus.monitor_clock_ns = now;
+        self.bus.monitor_clock_step = self.elapsed_steps();
+        Ok(())
+    }
+
     pub fn run_until<W: Write>(
         &mut self,
         limit: u64,
@@ -1395,6 +1651,26 @@ impl Machine {
         output: &mut W,
         matched: impl Fn(&Bus, &W) -> bool,
     ) -> Result<(Stop, u64), String> {
+        if self.boot_memory_cleared {
+            return Err("Load a boot snapshot after Clear".into());
+        }
+        if self.cpu_less {
+            if selected.is_some() {
+                return Err("the platform has no CPU".into());
+            }
+            let end = self.time_source.elapsed().saturating_add(limit);
+            self.time_source.grant_until(end);
+            self.elapsed_steps = self.time_source.elapsed();
+            self.bus.uart_clock_step = self.elapsed_steps;
+            return Ok((Stop::Limit, 0));
+        }
+        if selected.is_none() && limit != 0 && self.monitor_single_step_blocking
+            && std::iter::once(&self.primary).chain(&self.secondary).enumerate().any(|(index, hart)| {
+                hart.monitor_single_step && !hart.monitor_halted && self.halted & (1 << index) == 0
+            })
+        {
+            return Ok((if matched(&self.bus, output) { Stop::OutputMatch } else { Stop::Paused }, 0));
+        }
         let all_harts = ((1u16 << self.hart_count()) - 1) as u8;
         let stop_when_halted = self.stop_when_halted && selected.is_none();
         if stop_when_halted && self.halted == all_harts {
@@ -1414,6 +1690,7 @@ impl Machine {
             self.time_source
                 .grant_until(self.time_source.elapsed().saturating_add(1));
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
+            self.bus.uart_clock_step = self.elapsed_steps;
             while let Some(index) = self
                 .uart_device_events
                 .iter()
@@ -2020,6 +2297,10 @@ impl Hart {
         self.translations.clear();
     }
 
+    pub(crate) fn enable_clic(&mut self) {
+        self.csr.enable_clic();
+    }
+
     pub fn configure_interrupt_mode(&mut self, mode: crate::csr::InterruptMode) {
         self.csr.configure_interrupt_mode(mode);
     }
@@ -2064,7 +2345,21 @@ impl Hart {
         value: Option<u32>,
     ) -> Result<Option<u32>, String> {
         if self.thumb.is_some() {
-            return Err("RISC-V register command requires a RISC-V CPU".into());
+            if index >= 16 {
+                return Err(format!("Wrong Cortex-M register index: {index}"));
+            }
+            let target = if index == 15 { &mut self.pc } else { &mut self.registers[index as usize] };
+            return match value {
+                Some(value) => {
+                    *target = value;
+                    if index == 15 {
+                        self.pc_written = true;
+                        self.reset_pc_written |= self.reset_held;
+                    }
+                    Ok(None)
+                }
+                None => Ok(Some(*target)),
+            };
         }
         let count = if self.csr.embedded_base { 16 } else { 32 };
         let register = self.registers[..count]
@@ -2243,6 +2538,28 @@ impl Hart {
         }
         let clint = bus.clint.as_mut().map_or(0, |clint| clint.tick(self.slot));
         let mut pending = clint;
+        if let Some(clic) = bus.clic.as_mut() {
+            clic.sample_clint(clint);
+            if self.csr.clic_mode() {
+                pending = 0;
+                if let Some(interrupt) = clic.interrupt()
+                    && let Some((target, indirect)) = self.csr.clic_interrupt(self.pc, interrupt)
+                {
+                    self.waiting_for_interrupt = false;
+                    clic.acknowledge();
+                    if indirect {
+                        clic.clear_edge(interrupt.id);
+                    }
+                    self.pc = if indirect {
+                        bus.read_scalar::<4>(target, false)
+                            .map_err(|e| format!("CLIC vector at {target:#x}: {e}"))?
+                    } else {
+                        target
+                    };
+                    return Ok(Step::Trap);
+                }
+            }
+        }
         let mut time = bus
             .clint
             .as_ref()
@@ -2734,17 +3051,29 @@ impl Hart {
             }
             0x73 if insn == 0x3020_0073 => {
                 next = self.csr.return_from_trap().ok_or_else(illegal)?;
+                if self.csr.clic_return_uses_vector_entry(false) {
+                    next = bus.read_scalar::<4>(next, false)
+                        .map_err(|error| Fault::Bus(Access::Load, error.at_virtual(next)))? & !1;
+                }
                 None
             }
             0x73 if insn == 0x1020_0073 => {
                 next = self.csr.return_from_supervisor_trap().ok_or_else(illegal)?;
+                if self.csr.clic_return_uses_vector_entry(true) {
+                    next = bus.read_scalar::<4>(next, false)
+                        .map_err(|error| Fault::Bus(Access::Load, error.at_virtual(next)))? & !1;
+                }
                 None
             }
             0x73 if matches!(funct3, 1..=3 | 5..=7) => {
-                let value = self
-                    .csr
-                    .access(insn, a)
-                    .map_err(|error| Fault::InvalidCsr(insn, error))?;
+                let value = if self.csr.clic_mode() && matches!(insn >> 20, 0x145 | 0x345) {
+                    bus.clic.as_mut().and_then(|clic| self.csr.clic_next_interrupt(insn, a, clic))
+                        .ok_or_else(illegal)?
+                } else if matches!(insn >> 20, 0x351..=0x356) && let Some(clic) = bus.clic.as_mut() {
+                    self.csr.clic_indirect_access(insn, a, clic).ok_or_else(illegal)?
+                } else {
+                    self.csr.access(insn, a).map_err(|error| Fault::InvalidCsr(insn, error))?
+                };
                 if insn >> 20 == crate::andes_csr::MMISC_CTL
                     && (funct3 & 3 == 1 || (insn >> 15) & 31 != 0)
                     && let Some(andes) = self.csr.andes.as_ref()
@@ -2835,6 +3164,67 @@ mod tests {
             machine.bus.read::<4>(0xe000e018).unwrap(),
             machine.bus.read::<4>(0xe0001004).unwrap(),
         )
+    }
+
+    #[test]
+    fn cpu_less_snapshot_rewinds_clock_and_rejects_other_uart_layouts() {
+        let device = |base| {
+            let mut machine = Machine::without_default_ram();
+            machine.cpu_less = true;
+            machine.bus.map_trivial_uart(base, "uart0").unwrap();
+            machine
+        };
+        let mut machine = device(0x1000);
+        machine.run(5, &mut std::io::sink()).unwrap();
+        machine.monitor_quantum = 20;
+        machine.bus.set_default_uart_timeout(200);
+        let mut snapshot = Vec::new();
+        machine.write_boot_snapshot(&mut snapshot).unwrap();
+        machine.run(7, &mut std::io::sink()).unwrap();
+        machine.bus.set_default_uart_timeout(300);
+        assert_eq!(machine.elapsed_steps(), 12);
+
+        let mut other = device(0x2000);
+        assert!(other.read_boot_snapshot(&mut snapshot.as_slice()).is_err());
+        assert_eq!(other.elapsed_steps(), 0);
+
+        machine.clear_memory_snapshot().unwrap();
+        assert!(machine.run(1, &mut std::io::sink()).is_err());
+        machine.read_boot_snapshot(&mut snapshot.as_slice()).unwrap();
+        assert_eq!(machine.elapsed_steps(), 5);
+        assert_eq!(machine.monitor_quantum, 20);
+        assert_eq!(machine.bus.default_uart_timeout(), 200);
+        machine.run(2, &mut std::io::sink()).unwrap();
+        assert_eq!(machine.elapsed_steps(), 7);
+    }
+
+    #[test]
+    fn boot_snapshot_restores_registers_only_after_validating_memory() {
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(0, 4096).unwrap();
+        machine.primary.configure_cortex_m(Some(0), false);
+        machine.primary.pc = 0x102;
+        machine.primary.registers[0] = 42;
+        machine.bus.write(0x200, 4, 7, &mut std::io::sink()).unwrap();
+        let mut snapshot = Vec::new();
+        machine.write_boot_snapshot(&mut snapshot).unwrap();
+
+        machine.primary.pc = 0x104;
+        machine.primary.registers[0] = 84;
+        machine.bus.write(0x200, 4, 8, &mut std::io::sink()).unwrap();
+        let mut truncated = &snapshot[..snapshot.len() - 1];
+        assert!(machine.read_boot_snapshot(&mut truncated).is_err());
+        assert_eq!(machine.primary.pc, 0x104);
+        assert_eq!(machine.primary.registers[0], 84);
+        assert_eq!(machine.bus.read_ram::<4>(0x200).unwrap(), 8);
+
+        machine.clear_memory_snapshot().unwrap();
+        assert_eq!(machine.bus.read_ram::<4>(0x200).unwrap(), 0);
+        assert!(machine.run(1, &mut std::io::sink()).is_err());
+        machine.read_boot_snapshot(&mut snapshot.as_slice()).unwrap();
+        assert_eq!(machine.primary.pc, 0x102);
+        assert_eq!(machine.primary.registers[0], 42);
+        assert_eq!(machine.bus.read_ram::<4>(0x200).unwrap(), 7);
     }
 
     #[test]
@@ -5649,6 +6039,25 @@ mem: Memory.MappedMemory @ sysbus 0x1000 {{ size: 0x40000 }}
         assert_eq!(machine.primary.csr.access(0xc020_2073, 0).unwrap(), 43);
         assert_eq!(machine.primary.csr.access(0xc000_2073, 0).unwrap(), 4);
         assert_eq!(machine.primary.csr.access(0xc010_2073, 0).unwrap(), 6);
+    }
+
+    #[test]
+    fn blocking_single_step_holds_continuous_harts_until_released() {
+        let mut machine = Machine::new(64).unwrap();
+        machine.bus.memory(RAM_BASE, 8).unwrap()
+            .copy_from_slice(&0x0000_0013u32.to_le_bytes().repeat(2));
+        machine.configure_harts(2);
+        machine.secondary[0].monitor_single_step = true;
+        let mut output = std::io::sink();
+        assert_eq!(machine.run(2, &mut output).unwrap(), (Stop::Paused, 0));
+        assert_eq!(machine.elapsed_steps(), 0);
+        assert_eq!(machine.run_selected(1, Some(1), &mut output, |_, _| false).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, RAM_BASE);
+        assert_eq!(machine.secondary[0].pc, RAM_BASE + 4);
+        machine.monitor_single_step_blocking = false;
+        assert_eq!(machine.run(2, &mut output).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, RAM_BASE + 4);
+        assert_eq!(machine.secondary[0].pc, RAM_BASE + 4);
     }
 
     #[test]

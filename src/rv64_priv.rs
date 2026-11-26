@@ -118,6 +118,7 @@ pub struct Privilege {
     pub levels: Levels,
     pub zicboz: bool,
     pub(crate) renode_menvcfg: bool,
+    pub(crate) renode_vector_memory: bool,
     menvcfg: u64,
     senvcfg: u64,
     pub status: u64,
@@ -316,6 +317,10 @@ impl Privilege {
         }
     }
 
+    pub(crate) fn set_monitor_trap_value(&mut self, value: u64) {
+        self.machine.value = value;
+    }
+
     pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
         Some(match name {
             "vstart" => return self.vector.as_ref()?.read(0x008),
@@ -425,11 +430,13 @@ impl Privilege {
     }
 
     pub(crate) fn configure_vector(&mut self, kind: u64, avl: Option<u64>) -> Option<u64> {
-        if self.status & VS == 0 {
+        if self.status & VS == 0 && !self.renode_vector_memory {
             return None;
         }
         let length = self.vector.as_mut()?.configure(kind, avl);
-        self.status |= VS;
+        if !self.renode_vector_memory {
+            self.status |= VS;
+        }
         Some(length)
     }
 

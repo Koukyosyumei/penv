@@ -124,6 +124,15 @@ fn set_counter_half(counter: &mut u64, value: u32, high: bool) {
     *counter = (*counter & !(u64::from(u32::MAX) << shift)) | (u64::from(value) << shift);
 }
 
+const CLIC_CAUSE_ALIAS: u32 = 0x3800_0000;
+
+#[derive(Clone, Copy, Default)]
+struct ClicState {
+    table: u32,
+    threshold: u8,
+    level: u8,
+}
+
 #[derive(Clone)]
 pub struct Csr {
     pub hart_id: usize,
@@ -160,6 +169,8 @@ pub struct Csr {
     vex_dcache_info: u32,
     vector: Option<u32>,
     interrupt_mode: Option<InterruptMode>,
+    clic: Option<[ClicState; 2]>,
+    clic_iselect: u32,
     scratch: u32,
     exception_pc: u32,
     cause: u32,
@@ -203,6 +214,8 @@ impl Default for Csr {
             vex_dcache_info: 0,
             vector: None,
             interrupt_mode: None,
+            clic: None,
+            clic_iselect: 0,
             scratch: 0,
             exception_pc: 0,
             cause: 0,
@@ -377,6 +390,109 @@ impl Csr {
         }
     }
 
+    pub(crate) fn enable_clic(&mut self) {
+        self.clic = Some([ClicState::default(); 2]);
+    }
+
+    pub(crate) fn clic_return_uses_vector_entry(&self, supervisor: bool) -> bool {
+        self.clic_mode() && self.clic_cause(supervisor) & 0x4000_0000 != 0
+    }
+
+    fn clic_cause(&self, supervisor: bool) -> u32 {
+        if supervisor { self.supervisor.as_ref().map_or(0, |s| s.cause) } else { self.cause }
+    }
+
+    pub(crate) fn clic_mode(&self) -> bool {
+        self.clic.is_some() && self.vector.is_some_and(|vector| vector & 3 == 3)
+    }
+
+    pub(crate) fn clic_interrupt(
+        &mut self, pc: u32, interrupt: crate::clic::Interrupt,
+    ) -> Option<(u32, bool)> {
+        let supervisor = interrupt.supervisor;
+        let (mode, enabled) = if supervisor {
+            self.supervisor.as_ref()?;
+            (Privilege::Supervisor, SIE)
+        } else {
+            (Privilege::Machine, MIE)
+        };
+        let index = usize::from(supervisor);
+        let state = self.clic.as_ref()?[index];
+        if !self.clic_mode() || self.privilege as u32 > mode as u32
+            || (self.privilege == mode && (self.status & enabled == 0
+                || interrupt.level <= state.threshold.max(state.level)))
+        {
+            return None;
+        }
+        let entry = state.table.wrapping_add(interrupt.id * 4);
+        let cause = INTERRUPT | interrupt.id;
+        let target = if supervisor {
+            self.supervisor_trap(pc, cause, None)?
+        } else {
+            self.trap(pc, cause, self.trap_value)?
+        };
+        self.clic.as_mut().unwrap()[index].level = interrupt.level;
+        Some(if interrupt.vectored { (entry, true) } else { (target, false) })
+    }
+
+    pub(crate) fn clic_next_interrupt(
+        &mut self, instruction: u32, register_value: u32, controller: &mut crate::clic::Clic,
+    ) -> Option<u32> {
+        let supervisor = instruction >> 20 == 0x145;
+        let mode = if supervisor { Privilege::Supervisor } else { Privilege::Machine };
+        let enabled = if supervisor { SIE } else { MIE };
+        if !self.clic_mode() || (self.privilege as u32) < mode as u32
+            || (supervisor && self.supervisor.is_none())
+        {
+            return None;
+        }
+        let operation = (instruction >> 12) & 7;
+        let source = (instruction >> 15) & 31;
+        let operand = if operation & 4 != 0 { source } else { register_value } & 0x1f;
+        match operation & 3 {
+            2 => self.status |= operand & enabled,
+            3 => self.status &= !(operand & enabled),
+            _ => return None,
+        }
+        let previous_level = (self.clic_cause(supervisor) >> 16) as u8;
+        let state = &mut self.clic.as_mut().unwrap()[usize::from(supervisor)];
+        let Some(interrupt) = controller.interrupt().filter(|irq| {
+            irq.supervisor == supervisor && !irq.vectored
+                && irq.level > previous_level.max(state.threshold)
+        }) else {
+            return Some(0);
+        };
+        if operand != 0 {
+            state.level = interrupt.level;
+            let cause = if supervisor { &mut self.supervisor.as_mut()?.cause } else { &mut self.cause };
+            *cause = (*cause & !0xfff) | INTERRUPT | interrupt.id;
+            controller.clear_edge(interrupt.id);
+        }
+        Some(state.table.wrapping_add(interrupt.id * 4))
+    }
+
+    pub(crate) fn clic_indirect_access(
+        &self, instruction: u32, register_value: u32, controller: &mut crate::clic::Clic,
+    ) -> Option<u32> {
+        if self.privilege != Privilege::Machine {
+            return None;
+        }
+        let register = (instruction >> 20) - 0x351;
+        let operation = (instruction >> 12) & 7;
+        let source = (instruction >> 15) & 31;
+        let operand = if operation & 4 != 0 { source } else { register_value };
+        let previous = controller.read_indirect(self.clic_iselect, register);
+        let value = match operation & 3 {
+            1 => operand,
+            2 | 3 if source == 0 => return Some(previous),
+            2 => previous | operand,
+            3 => previous & !operand,
+            _ => return None,
+        };
+        controller.write_indirect(self.clic_iselect, register, value);
+        Some(previous)
+    }
+
     pub fn access(&mut self, instruction: u32, register_value: u32) -> Result<u32, String> {
         let address = instruction >> 20;
         let operation = (instruction >> 12) & 7;
@@ -412,6 +528,20 @@ impl Csr {
         {
             return Ok(0);
         }
+        if self.clic_mode() && operation & 3 == 1 && matches!(address, 0x148 | 0x149 | 0x348 | 0x349) {
+            let supervisor = address & 0x200 == 0;
+            let swap = if address & 1 != 0 {
+                ((self.clic_cause(supervisor) >> 16) as u8 == 0)
+                    != (self.clic.as_ref().unwrap()[usize::from(supervisor)].level == 0)
+            } else if supervisor {
+                self.privilege as u32 != u32::from(self.status & SPP != 0)
+            } else {
+                self.privilege != self.decode_privilege((self.status & MPP) >> 11)
+            };
+            let scratch = if supervisor { &mut self.supervisor.as_mut().ok_or_else(error)?.scratch }
+                else { &mut self.scratch };
+            return Ok(if swap { std::mem::replace(scratch, operand) } else { operand });
+        }
         let previous = self.read(address).ok_or_else(error)?;
         // A hardware SEIP level is visible to CSR reads but must not become
         // latched as a software-injected interrupt by CSRRS/CSRRC.
@@ -434,9 +564,14 @@ impl Csr {
             .ok_or_else(error)
     }
 
+    pub(crate) fn set_monitor_trap_value(&mut self, value: u32) {
+        self.write(0x343, value);
+    }
+
     pub(crate) fn monitor_trap_register(&self, name: &str) -> Option<u32> {
         self.read(match name {
             "mepc" => 0x341,
+            "mstatus" => 0x300,
             "mcause" => 0x342,
             "mtval" => 0x343,
             _ => return None,
@@ -454,11 +589,17 @@ impl Csr {
             0x100 if self.supervisor.is_some() => {
                 self.status & (SSTATUS | self.extension_status_mask()) | self.status_summary()
             }
+            0x104 | 0x144 | 0x303 if self.clic_mode() => 0,
             0x104 => self.interrupt_enable & self.supervisor.as_ref()?.interrupt_delegation,
             0x144 => self.pending_interrupts() & self.supervisor.as_ref()?.interrupt_delegation,
             0x303 => self.supervisor.as_ref()?.interrupt_delegation,
             0x106 if self.supervisor.is_some() => self.counters.supervisor_enable,
-            0x105 => self.supervisor.as_ref()?.vector,
+            0x105 => self.supervisor.as_ref()?.vector | if self.clic_mode() { 3 } else { 0 },
+            0x107 => self.clic.as_ref()?[1].table,
+            0x147 => u32::from(self.clic.as_ref()?[1].threshold),
+            0xdb1 => u32::from(self.clic.as_ref()?[1].level) << 8,
+            0x142 if self.clic_mode() => (self.supervisor.as_ref()?.cause & !CLIC_CAUSE_ALIAS)
+                | ((self.status & SPP) << 20) | ((self.status & SPIE) << 22),
             0x140 => self.supervisor.as_ref()?.scratch,
             0x141 => self.supervisor.as_ref()?.epc,
             0x142 => self.supervisor.as_ref()?.cause,
@@ -481,6 +622,15 @@ impl Csr {
                     | (u32::from(self.user_supported) << 20)
                     | (u32::from(self.supervisor.is_some()) << 18)
             }
+            0x304 if self.clic_mode() => 0,
+            0x344 if self.clic_mode() => 0,
+            0x350 if self.clic.is_some() => self.clic_iselect,
+            0x307 => self.clic.as_ref()?[0].table,
+            0x347 => u32::from(self.clic.as_ref()?[0].threshold),
+            0xfb1 => (u32::from(self.clic.as_ref()?[0].level) << 24)
+                | (u32::from(self.clic.as_ref()?[1].level) << 8),
+            0x342 if self.clic_mode() => (self.cause & !CLIC_CAUSE_ALIAS)
+                | ((self.status & MPP) << 17) | ((self.status & MPIE) << 20),
             0x304 => self.interrupt_enable,
             0x305 => self.vector.unwrap_or(0),
             0x306 => self.counters.machine_enable,
@@ -560,6 +710,7 @@ impl Csr {
                 let mask = SSTATUS | self.extension_status_mask();
                 self.status = (self.status & !mask) | (value & mask);
             }
+            0x104 | 0x144 | 0x303 if self.clic_mode() => {},
             0x104 if let Some(supervisor) = self.supervisor.as_ref() => {
                 let mask = supervisor.interrupt_delegation;
                 self.interrupt_enable = (self.interrupt_enable & !mask) | (value & mask);
@@ -581,6 +732,13 @@ impl Csr {
             }
             0x303 if let Some(supervisor) = self.supervisor.as_mut() => {
                 supervisor.interrupt_delegation = value & SUPERVISOR_INTERRUPTS;
+            }
+            0x107 if let Some(clic) = self.clic.as_mut() => clic[1].table = value & !63,
+            0x147 if let Some(clic) = self.clic.as_mut() => clic[1].threshold = value as u8,
+            0x142 if self.clic_mode() && self.supervisor.is_some() => {
+                self.supervisor.as_mut().unwrap().cause = value;
+                self.status = (self.status & !(SPP | SPIE))
+                    | ((value >> 20) & SPP) | ((value >> 22) & SPIE);
             }
             0x105 if self.supervisor.is_some() => {
                 let vector = self.correct_vector("STVEC", value, true);
@@ -613,6 +771,10 @@ impl Csr {
                     | supervisor
                     | (value & self.extension_status_mask());
             }
+            0x304 | 0x344 if self.clic_mode() => {},
+            0x350 if self.clic.is_some() => self.clic_iselect = value,
+            0x307 if let Some(clic) = self.clic.as_mut() => clic[0].table = value & !63,
+            0x347 if let Some(clic) = self.clic.as_mut() => clic[0].threshold = value as u8,
             0x304 => {
                 let supervisor_mask = if self.supervisor.is_some() {
                     SUPERVISOR_INTERRUPTS
@@ -667,7 +829,16 @@ impl Csr {
             0xcc0 if self.vex && self.local_irq_mask.is_some() => self.vex_dcache_info = value,
             0x340 => self.scratch = value,
             0x341 => self.exception_pc = value & self.epc_mask(),
-            0x342 => self.cause = value,
+            0x342 => {
+                self.cause = value;
+                if self.clic_mode() {
+                    let mpp = (value >> 28) & 3;
+                    let allowed = mpp == 3 || (mpp == 0 && self.user_supported)
+                        || (mpp == 1 && self.supervisor.is_some());
+                    let mpp = if allowed { mpp << 11 } else { self.status & MPP };
+                    self.status = (self.status & !(MPP | MPIE)) | mpp | ((value >> 20) & MPIE);
+                }
+            }
             0x343 => self.trap_value = value,
             0x344 if let Some(supervisor) = self.supervisor.as_mut() => {
                 supervisor.injected_interrupts = value & SUPERVISOR_INTERRUPTS;
@@ -718,6 +889,9 @@ impl Csr {
     }
 
     fn correct_vector(&self, register: &str, value: u32, software: bool) -> u32 {
+        if register == "MTVEC" && self.clic.is_some() && value & 3 == 3 {
+            return (value & !63) | (value & 3);
+        }
         let Some(mode) = self.interrupt_mode else {
             return value & !2;
         };
@@ -762,9 +936,11 @@ impl Csr {
 
     pub fn trap(&mut self, pc: u32, cause: u32, value: u32) -> Option<u32> {
         let code = cause & !INTERRUPT;
+        let clic = self.clic_mode();
         if self.privilege != Privilege::Machine
             && code < 32
-            && let Some(supervisor) = self.supervisor.as_mut()
+            && (!clic || cause & INTERRUPT == 0)
+            && let Some(supervisor) = self.supervisor.as_ref()
             && (if cause & INTERRUPT == 0 {
                 supervisor.delegation
             } else {
@@ -772,27 +948,37 @@ impl Csr {
             }) & (1 << code)
                 != 0
         {
-            supervisor.epc = pc;
-            supervisor.cause = cause;
-            supervisor.value = value;
-            let spp = if self.privilege == Privilege::Supervisor {
-                SPP
-            } else {
-                0
-            };
-            self.status = (self.status & !(SPP | SPIE | SIE)) | spp | ((self.status & SIE) << 4);
-            self.privilege = Privilege::Supervisor;
-            return Some(vector_target(supervisor.vector, cause));
+            return self.supervisor_trap(pc, cause, (!clic || !matches!(code, 3 | 8..=11)).then_some(value));
         }
         let vector = self.vector?;
         self.exception_pc = pc;
         self.cause = cause;
-        self.trap_value = value;
+        if self.clic_mode() {
+            self.cause |= u32::from(self.clic.as_ref().unwrap()[0].level) << 16;
+        }
+        if !clic || cause & INTERRUPT != 0 || !matches!(code, 3 | 8..=11) {
+            self.trap_value = value;
+        }
         self.status = (self.status & !(MPP | MPIE | MIE))
             | ((self.privilege as u32) << 11)
             | ((self.status & MIE) << 4);
         self.privilege = Privilege::Machine;
-        Some(vector_target(vector, cause))
+        Some(if self.clic_mode() { vector & !63 } else { vector_target(vector, cause) })
+    }
+
+    fn supervisor_trap(&mut self, pc: u32, cause: u32, value: Option<u32>) -> Option<u32> {
+        let clic = self.clic_mode();
+        let level = if clic { u32::from(self.clic.as_ref()?[1].level) << 16 } else { 0 };
+        let supervisor = self.supervisor.as_mut()?;
+        supervisor.epc = pc;
+        supervisor.cause = cause | level;
+        if let Some(value) = value {
+            supervisor.value = value;
+        }
+        let spp = if self.privilege == Privilege::Supervisor { SPP } else { 0 };
+        self.status = (self.status & !(SPP | SPIE | SIE)) | spp | ((self.status & SIE) << 4);
+        self.privilege = Privilege::Supervisor;
+        Some(if clic { supervisor.vector & !63 } else { vector_target(supervisor.vector, cause) })
     }
 
     fn pending_interrupts(&self) -> u32 {
@@ -866,6 +1052,9 @@ impl Csr {
         if self.privilege != Privilege::Machine {
             return None;
         }
+        if self.clic_mode() {
+            self.clic.as_mut().unwrap()[0].level = (self.cause >> 16) as u8;
+        }
         self.privilege = self.decode_privilege((self.status & MPP) >> 11);
         let least_privilege = if self.user_supported { 0 } else { MPP };
         self.status = (self.status & !(MPP | MPIE | MIE))
@@ -885,6 +1074,9 @@ impl Csr {
             return None;
         }
         let epc = self.supervisor.as_ref()?.epc;
+        if self.clic_mode() {
+            self.clic.as_mut().unwrap()[1].level = (self.supervisor.as_ref()?.cause >> 16) as u8;
+        }
         self.privilege = if self.status & SPP == 0 {
             Privilege::User
         } else {
