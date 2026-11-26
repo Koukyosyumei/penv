@@ -494,7 +494,7 @@ fn apply_repl_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
             && let Some(&index) = declarations.get(&entry.name)
             && matches!(
                 merged[index].model.as_str(),
-                "Timers.STM32_Timer" | "GPIOPort.STM32_GPIOPort"
+                "Timers.STM32_Timer" | "GPIOPort.STM32_GPIOPort" | "GPIOPort.STM32F1GPIOPort"
             )
             && entry.body.iter().all(|(_, text)| {
                 text.split_once("->").is_some_and(|(source, _)| {
@@ -664,6 +664,7 @@ fn load_platform(
     let mut stm32_spis = Vec::new();
     let mut spi_shifts = Vec::new();
     let mut stm32_gpios = Vec::new();
+    let mut stm32f1_afio = None;
     let mut gpio_leds = Vec::new();
     let mut gpio_pwm_testers = Vec::new();
     let mut gpio_buttons = Vec::new();
@@ -931,7 +932,12 @@ fn load_platform(
                 }
             }
             "IRQControllers.PlatformLevelInterruptController" | "IRQControllers.AndesNCEPLIC100" => plic.push(entry),
-            "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
+            "GPIOPort.STM32_GPIOPort" | "GPIOPort.STM32F1GPIOPort" => stm32_gpios.push(entry),
+            "GPIOPort.STM32F1AFIO" => {
+                if stm32f1_afio.replace(entry).is_some() {
+                    return Err(entry.error("expected at most one STM32F1 AFIO controller"));
+                }
+            }
             "Miscellaneous.LED" => gpio_leds.push(entry),
             "Dynamic.SubobjectTester" => {
                 keys(entry, &[])?;
@@ -1858,6 +1864,42 @@ fn load_platform(
                 .map_stm32_gpio(port)
                 .map_err(|e| entry.error(&e))?;
         }
+        if let Some(afio) = stm32f1_afio {
+            let mut ports = Vec::new();
+            let mut outputs = [0; 16];
+            for (_, line) in &afio.body {
+                if let Some(value) = line.strip_prefix("gpioPorts:") {
+                    if !ports.is_empty() {
+                        return Err(afio.error("duplicate AFIO GPIO port list"));
+                    }
+                    let names = value.trim().strip_prefix('[').and_then(|value| value.strip_suffix(']'))
+                        .ok_or_else(|| afio.error("expected AFIO GPIO port list"))?;
+                    for name in names.split(',').map(str::trim) {
+                        let (base, _) = gpio_ports.get(name)
+                            .filter(|_| stm32_gpios.iter().any(|port| port.name == name && port.model == "GPIOPort.STM32F1GPIOPort"))
+                            .ok_or_else(|| afio.error(&format!("unknown STM32F1 GPIO port {name:?}")))?;
+                        ports.push(*base);
+                    }
+                    continue;
+                }
+                let (source, destination) = line.split_once("->").ok_or_else(|| afio.error("invalid AFIO EXTI wiring"))?;
+                let (target, input) = destination.split_once('@').ok_or_else(|| afio.error("invalid AFIO EXTI destination"))?;
+                if exti.is_none_or(|exti| exti.name != target.trim()) {
+                    return Err(afio.error("AFIO outputs must connect to EXTI"));
+                }
+                let from = irq_list(source, 16).map_err(|error| afio.error(&error))?;
+                let to = irq_list(input, exti_lines).map_err(|error| afio.error(&error))?;
+                if from.len() != to.len() {
+                    return Err(afio.error("mismatched AFIO EXTI wiring widths"));
+                }
+                for (source, target) in from.into_iter().zip(to) {
+                    outputs[source as usize] |= 1 << target;
+                }
+            }
+            let ports = ports.try_into().map_err(|_| afio.error("AFIO requires ports A through G"))?;
+            let model = crate::stm32_gpio::F1Afio::new(afio.address()?, ports, outputs);
+            machine.bus.map_stm32f1_afio(model).map_err(|error| afio.error(&error))?;
+        }
         for tester in gpio_pwm_testers {
             keys(tester, &[])?;
             let (parent, _) = tester.registration.as_deref()
@@ -2594,6 +2636,9 @@ fn load_platform(
     }
     if let Some(rtc) = stm32_rtc {
         return Err(rtc.error("STM32 RTC requires a Cortex-M platform"));
+    }
+    if let Some(afio) = stm32f1_afio {
+        return Err(afio.error("STM32F1 AFIO requires a Cortex-M platform"));
     }
     if let Some(dma) = stm32_dma {
         return Err(dma.error("STM32 DMA requires a Cortex-M platform"));
@@ -3946,7 +3991,11 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
             _ => return Err(entry.error("unsupported STM32 GPIO property")),
         }
     }
-    let mut port = Stm32Gpio::new(base, size, reset, alternate_count);
+    let mut port = if entry.model == "GPIOPort.STM32F1GPIOPort" {
+        Stm32Gpio::new_f1(base, size)
+    } else {
+        Stm32Gpio::new(base, size, reset, alternate_count)
+    };
     port.name = Some(entry.name.clone());
     if let Some(pins) = inverted_pins {
         let mut remaining = pins

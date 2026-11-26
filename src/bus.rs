@@ -538,6 +538,7 @@ pub struct Bus {
     renesas_gpio: Vec<crate::renesas_ra_gpio::Port>,
     renesas_gpio_protection: Vec<crate::renesas_ra_gpio::Protection>,
     stm32_gpios: Vec<Stm32Gpio>,
+    stm32f1_afio: Option<crate::stm32_gpio::F1Afio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
     nrf_led_routes: OwnedNrfGpioRoutes,
@@ -3571,6 +3572,7 @@ impl Bus {
                 let other = u64::from(timer.base);
                 start < other + u64::from(Stm32Timer::SIZE) && other < end
             })
+            || self.stm32f1_afio.as_ref().is_some_and(|afio| overlaps_range(start, end, afio.base, crate::stm32_gpio::F1Afio::SIZE))
             || self.stm32_gpios.iter().any(|gpio| {
                 let other = u64::from(gpio.base);
                 start < other + u64::from(gpio.size) && other < end
@@ -4649,6 +4651,10 @@ impl Bus {
         }
         for port in &mut self.stm32_gpios {
             port.reset();
+        }
+        if let Some(afio) = self.stm32f1_afio.as_mut() {
+            afio.reset();
+            afio.apply(&mut self.stm32_gpios);
         }
         for timer in &mut self.stm32_timers {
             timer.reset();
@@ -5964,6 +5970,18 @@ impl Bus {
             ));
         }
         self.stm32_gpios.push(gpio);
+        Ok(())
+    }
+
+    pub(crate) fn map_stm32f1_afio(&mut self, afio: crate::stm32_gpio::F1Afio) -> Result<(), String> {
+        let start = u64::from(afio.base);
+        let end = start + u64::from(crate::stm32_gpio::F1Afio::SIZE);
+        if self.stm32f1_afio.is_some() || start % 4 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping STM32F1 AFIO registration at {start:#x}"));
+        }
+        afio.apply(&mut self.stm32_gpios);
+        self.stm32f1_afio = Some(afio);
+        self.refresh_gpio_wiring();
         Ok(())
     }
 
@@ -8898,6 +8916,11 @@ impl Bus {
                 0
             });
         }
+        if N == 4 && address & 3 == 0
+            && let Some(afio) = self.stm32f1_afio.as_ref().filter(|afio| afio.contains(address))
+        {
+            return Ok(afio.read(address));
+        }
         if matches!(N, 2 | 4)
             && address as usize & (N - 1) == 0
             && let Some(gpio) = self
@@ -9935,6 +9958,15 @@ impl Bus {
                 timer.write_halfword(address, value);
             } else {
                 timer.write(address, value);
+            }
+            return Ok(());
+        }
+        if width == 4 && address & 3 == 0
+            && let Some(afio) = self.stm32f1_afio.as_mut().filter(|afio| afio.contains(address))
+        {
+            if afio.write(address, value) {
+                afio.apply(&mut self.stm32_gpios);
+                self.refresh_gpio_wiring();
             }
             return Ok(());
         }
