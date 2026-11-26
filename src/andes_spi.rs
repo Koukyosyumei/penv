@@ -7,6 +7,7 @@ pub(crate) struct AndesSpi {
     registers: [u32; 32],
     receive: VecDeque<u8>,
     flash: Option<PuyaFlash>,
+    loopback: bool,
     address_assigned: bool,
     tx_count: u64,
     rx_count: u64,
@@ -61,10 +62,24 @@ impl AndesSpi {
             registers: [0; 32],
             receive: VecDeque::new(),
             flash: flash_size.map(PuyaFlash::new),
+            loopback: false,
             address_assigned: false,
             tx_count: 0,
             rx_count: 0,
             dma: None,
+        }
+    }
+
+    pub fn with_loopback(mut self) -> Self {
+        self.loopback = true;
+        self
+    }
+
+    fn exchange(&mut self, byte: u8) -> Option<u8> {
+        if self.loopback {
+            Some(byte)
+        } else {
+            Some(self.flash.as_mut()?.transfer(byte))
         }
     }
 
@@ -92,8 +107,9 @@ impl AndesSpi {
     }
 
     fn transfer(&mut self, byte: u8) {
-        let Some(flash) = &mut self.flash else { return };
-        let received = flash.transfer(byte);
+        let Some(received) = self.exchange(byte) else {
+            return;
+        };
         let mode = self.mode();
         if matches!(mode, 0 | 2) {
             self.receive.push_back(received);
@@ -113,7 +129,7 @@ impl AndesSpi {
 
     fn command(&mut self, byte: u8) {
         let transfer = self.registers[Self::TRANSFER];
-        if self.flash.is_none() {
+        if !self.loopback && self.flash.is_none() {
             self.warn(
                 "Trying to issue a transaction to a slave peripheral, but nothing is connected",
             );
@@ -143,8 +159,7 @@ impl AndesSpi {
                 }
                 self.address_assigned = false;
             }
-        } else if let Some(flash) = &mut self.flash {
-            flash.transfer(byte);
+        } else if self.exchange(byte).is_some() {
             self.flag(Self::TX_THRESHOLD, true);
         }
     }
@@ -154,17 +169,16 @@ impl AndesSpi {
     }
 
     pub(crate) fn complete_dma(&mut self, request: &SpiDma, tx: &[u8], rx: &mut [u8]) {
-        let Some(flash) = &mut self.flash else { return };
         if request.tx.is_some() {
-            flash.transfer(request.command);
+            self.exchange(request.command);
             for &byte in tx {
-                flash.transfer(byte);
+                self.exchange(byte);
             }
         }
         if request.rx.is_some() {
-            flash.transfer(request.command);
+            self.exchange(request.command);
             for byte in rx {
-                *byte = flash.transfer(0);
+                *byte = self.exchange(0).unwrap_or(0);
                 self.receive.push_back(*byte);
             }
         }

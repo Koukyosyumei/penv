@@ -974,9 +974,6 @@ fn load_platform(
             .map_litex_io(spi.addresses()?, IoDevice::Spi(controller))
             .map_err(|e| spi.error(&e))?;
     }
-    if let Some(entry) = spi_loopbacks.first() {
-        return Err(entry.error("expected attachment to a LiteX SPI controller"));
-    }
     if let Some(controller) = litex_i2c {
         let sensor = sensor
             .map(|sensor| parse_si70xx(sensor, controller))
@@ -2752,9 +2749,24 @@ fn load_platform(
             irq = machine.bus.plic_index(target.trim()).map(|index| (index, source));
         }
         let size = flash_sizes.get(entry.name.as_str()).map(|&size| size as usize);
-        machine.bus.map_andes_spi(crate::andes_spi::AndesSpi::new(
-            entry.address()?, entry.name.clone(), irq, size,
-        )).map_err(|error| entry.error(&error))?;
+        let mut attached = false;
+        spi_loopbacks.retain(|child| {
+            if !attached && child.registration.as_deref() == Some(entry.name.as_str()) {
+                attached = true;
+                false
+            } else {
+                true
+            }
+        });
+        if attached && size.is_some() {
+            return Err(entry.error("Andes SPI supports one attached peripheral"));
+        }
+        let spi = crate::andes_spi::AndesSpi::new(entry.address()?, entry.name.clone(), irq, size);
+        let spi = if attached { spi.with_loopback() } else { spi };
+        machine.bus.map_andes_spi(spi).map_err(|error| entry.error(&error))?;
+    }
+    if let Some(entry) = spi_loopbacks.first() {
+        return Err(entry.error("expected attachment to a compatible SPI controller"));
     }
     for entry in andes_watchdogs {
         let mut frequency = None;
