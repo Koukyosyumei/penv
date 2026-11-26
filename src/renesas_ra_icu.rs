@@ -75,6 +75,10 @@ impl Icu {
         }
     }
 
+    pub(crate) fn has_pending(&self) -> bool {
+        self.pending.iter().any(|&pending| pending != 0)
+    }
+
     pub(crate) fn sample(&self, nvic: &mut Nvic, active: &ActiveExceptions) {
         for (word, mut pending) in self.pending.into_iter().enumerate() {
             while pending != 0 {
@@ -122,7 +126,13 @@ impl Icu {
             .filter(|&line| line < self.links.len())
         {
             let old = self.read(address & !3, 4);
-            let new = (old & !mask) | (value & mask);
+            let clear_pending = mask & PENDING != 0 && value & PENDING == 0;
+            let link_mask = mask & EVENT_MASK;
+            let new = (old & !link_mask) | (value & link_mask);
+            let new = if clear_pending { new & !PENDING } else { new };
+            if old == new {
+                return;
+            }
             self.links[line] = (new & EVENT_MASK) as u16;
             let bit = 1 << (line % 64);
             if new & PENDING == 0 {
@@ -151,6 +161,10 @@ mod tests {
         icu.set_event(1, true);
         icu.set_event(1, false);
         assert_eq!(icu.read(link, 4), 1 | PENDING);
+        let mut nvic = Nvic::new(0xff, None);
+        nvic.set_external_lines(96);
+        icu.sample(&mut nvic, &ActiveExceptions::default());
+        assert_eq!(nvic.read(0xe000_e204, 4), Some(1 << 8));
 
         icu.write(link + 2, 1, 0);
         assert_eq!(icu.read(link, 4), 1);

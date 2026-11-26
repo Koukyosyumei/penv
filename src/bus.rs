@@ -2770,6 +2770,7 @@ impl Bus {
             || !self.gpio_pwm_leds.is_empty()
             || !self.stm32_regular_adcs.is_empty()
             || self.stm32_adc.is_some() || self.stm32_dma.as_ref().is_some_and(Stm32Dma::has_enabled_channels)
+            || self.renesas_ra_icu.as_ref().is_some_and(crate::renesas_ra_icu::Icu::has_pending)
             || self.nvic.as_ref().is_some_and(Nvic::has_wake_event)
             || self.systick.as_ref().is_some_and(|timer| timer.pending_exceptions() != 0)
             || self.stm32_uarts.iter().any(Stm32Usart::has_pending_receive_timing)
