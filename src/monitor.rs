@@ -552,6 +552,7 @@ enum Action {
     AddCpuHook(String, Option<u32>, CpuHook),
     NvicLog(String),
     PeripheralWrite(String, u32, u32),
+    PeripheralRead(String, u32),
     SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
@@ -723,7 +724,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
-                    | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
+                    | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
@@ -1170,12 +1171,21 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::NvicLog(target) => machine.bus.enable_nvic_log(target).map(|()| None),
+            Action::PeripheralRead(target, offset) => {
+                let address = machine.bus.plic_register(target, *offset)
+                    .ok_or_else(|| format!("unknown peripheral register {target} {offset:#x}"))?;
+                let value = machine.bus.read_scalar::<4>(address, true).map_err(|error| error.to_string())?;
+                writeln!(output.reply(), "0x{value:08x}").map(|()| None).map_err(|error| error.to_string())
+            }
             Action::PeripheralWrite(target, offset, value) => {
                 if let Some(address) = machine.bus.trivial_uart_register(target, *offset) {
                     machine.bus.write_scalar(address, 4, *value, &mut io::sink(), true)
                         .map(|()| None).map_err(|error| error.to_string())
                 } else {
-                    let address = machine.bus.nvic_register_address(target, *offset)?;
+                    let address = match machine.bus.plic_register(target, *offset) {
+                        Some(address) => address,
+                        None => machine.bus.nvic_register_address(target, *offset)?,
+                    };
                     machine.bus.write_scalar(address, 4, *value, &mut output, true)
                         .map(|()| None).map_err(|error| error.to_string())
                 }
@@ -4543,6 +4553,9 @@ fn execute(
             ))
         }
         ["logLevel", "-1", target] => Some(Action::NvicLog(resolve(target)?.to_owned())),
+        [target, "ReadDoubleWord", offset] => Some(Action::PeripheralRead(
+            resolve(target)?.into(), crate::parse_address(resolve(offset)?)?,
+        )),
         [target, "WriteDoubleWord", offset, value] => Some(Action::PeripheralWrite(
             resolve(target)?.to_owned(),
             crate::parse_address(resolve(offset)?)?,
@@ -4689,7 +4702,7 @@ fn execute(
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)
-                        | Action::PeripheralWrite(..)
+                        | Action::PeripheralWrite(..) | Action::PeripheralRead(..)
                         | Action::CreateUartTester(..)
                         | Action::DefaultUartTester(_)
                         | Action::ClearUartTesterReport(_)

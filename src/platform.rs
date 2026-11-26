@@ -614,7 +614,7 @@ fn load_platform(
     let mut stm32_rtc = None;
     let mut stm32f4_rcc = None;
     let mut stm32_dma = None;
-    let mut plic = None;
+    let mut plic = Vec::new();
     let mut timer = None;
     let mut litex_timer = None;
     let mut litex_cpu_timer = None;
@@ -800,11 +800,7 @@ fn load_platform(
                     return Err(entry.error("only one LiteX SoC controller is supported"));
                 }
             }
-            "IRQControllers.PlatformLevelInterruptController" => {
-                if plic.replace(entry).is_some() {
-                    return Err(entry.error("only one PLIC is currently supported"));
-                }
-            }
+            "IRQControllers.PlatformLevelInterruptController" | "IRQControllers.AndesNCEPLIC100" => plic.push(entry),
             "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
             "Miscellaneous.LED" => gpio_leds.push(entry),
             "Miscellaneous.Button" => gpio_buttons.push(entry),
@@ -1021,7 +1017,7 @@ fn load_platform(
     if let Some(entry) = cpus.iter().find(|entry| entry.model == "CPU.CortexM") {
         if cpus.len() != 1
             || clint.is_some()
-            || plic.is_some()
+            || !plic.is_empty()
             || timer.is_some()
             || litex_timer.is_some()
             || litex_cpu_timer.is_some()
@@ -2572,80 +2568,77 @@ fn load_platform(
             .map_litex_cpu_timer(entry.address()?, frequency)
             .map_err(|e| entry.error(&e))?;
     }
-    let plic_config = plic
-        .map(|entry| {
-            let mut outputs = [0; 2];
-            let mut sources = None;
-            let mut contexts = None;
-            let mut priorities = None;
-            for (_, line) in &entry.body {
-                if let Some((context, target)) = line.split_once("->") {
-                    let (name, lines) = target
-                        .split_once('@')
-                        .ok_or_else(|| entry.error("invalid PLIC connection"))?;
-                    let contexts =
-                        irq_list(context, outputs.len() as u32).map_err(|e| entry.error(&e))?;
-                    let lines = irq_list(lines, 32).map_err(|e| entry.error(&e))?;
-                    if name.trim() != cpu.name || contexts.len() != lines.len() {
-                        return Err(entry.error("invalid PLIC connection"));
-                    }
-                    for (context, line) in contexts.into_iter().zip(lines) {
-                        let context = usize::from(context);
-                        if !matches!(line, 9 | 11)
-                            || outputs[context] != 0
-                            || outputs.contains(&(1 << line))
-                        {
-                            return Err(entry.error("invalid or duplicate PLIC connection"));
-                        }
-                        outputs[context] = 1 << line;
-                    }
-                } else if let Some((key, value)) = line.split_once(':') {
-                    match key.trim() {
-                        "numberOfSources" if sources.is_none() => {
-                            sources = Some(number(value.trim()).map_err(|e| entry.error(&e))?)
-                        }
-                        "numberOfContexts" if contexts.is_none() => {
-                            contexts = Some(number(value.trim()).map_err(|e| entry.error(&e))?)
-                        }
-                        "prioritiesEnabled" if priorities.is_none() => {
-                            priorities = Some(
-                                value
-                                    .trim()
-                                    .parse::<bool>()
-                                    .map_err(|_| entry.error("invalid prioritiesEnabled"))?,
-                            );
-                        }
-                        _ => return Err(entry.error("unsupported PLIC property")),
-                    }
-                } else {
-                    return Err(entry.error("unsupported PLIC wiring"));
+    let mut plic_config = None;
+    for entry in plic {
+        let andes = entry.model == "IRQControllers.AndesNCEPLIC100";
+        let mut outputs = vec![0; if andes { 32 } else { 2 }];
+        let mut sources = None;
+        let mut contexts = None;
+        let mut priorities = None;
+        for (_, line) in &entry.body {
+            if let Some((context, target)) = line.split_once("->") {
+                let (name, lines) = target
+                    .split_once('@')
+                    .ok_or_else(|| entry.error("invalid PLIC connection"))?;
+                let contexts =
+                    irq_list(context, outputs.len() as u32).map_err(|e| entry.error(&e))?;
+                let lines = irq_list(lines, 32).map_err(|e| entry.error(&e))?;
+                if name.trim() != cpu.name || contexts.len() != lines.len() {
+                    return Err(entry.error("invalid PLIC connection"));
                 }
+                for (context, line) in contexts.into_iter().zip(lines) {
+                    let context = usize::from(context);
+                    if !(matches!(line, 9 | 11) || andes && line == 3)
+                        || outputs[context] != 0
+                        || outputs.contains(&(1 << line))
+                    {
+                        return Err(entry.error("invalid or duplicate PLIC connection"));
+                    }
+                    outputs[context] = 1 << line;
+                }
+            } else if let Some((key, value)) = line.split_once(':') {
+                match key.trim() {
+                    "numberOfSources" if sources.is_none() => {
+                        sources = Some(number(value.trim()).map_err(|e| entry.error(&e))?)
+                    }
+                    "numberOfContexts" if contexts.is_none() => {
+                        contexts = Some(number(value.trim()).map_err(|e| entry.error(&e))?)
+                    }
+                    "prioritiesEnabled" if priorities.is_none() => {
+                        priorities = Some(
+                            value
+                                .trim()
+                                .parse::<bool>()
+                                .map_err(|_| entry.error("invalid prioritiesEnabled"))?,
+                        );
+                    }
+                    _ => return Err(entry.error("unsupported PLIC property")),
+                }
+            } else {
+                return Err(entry.error("unsupported PLIC wiring"));
             }
-            let count = contexts
-                .filter(|count| (1..=2).contains(count))
-                .ok_or_else(|| entry.error("PLIC requires one or two contexts"))?
-                as usize;
-            if outputs[..count].iter().all(|&line| line == 0)
-                || outputs[count..].iter().any(|&line| line != 0)
-                || !matches!(cpu.model.as_str(), "CPU.RiscV32" | "CPU.VexRiscv")
-            {
-                return Err(
-                    entry.error("expected PLIC context outputs wired to standard RISC-V IRQs")
-                );
-            }
-            let sources = sources.ok_or_else(|| entry.error("missing PLIC numberOfSources"))?;
-            machine
-                .bus
-                .map_plic(
-                    entry.address()?,
-                    sources,
-                    &outputs[..count],
-                    priorities.unwrap_or(true),
-                )
-                .map_err(|e| entry.error(&e))?;
-            Ok((entry, sources))
-        })
-        .transpose()?;
+        }
+        let count = contexts
+            .filter(|count| (1..=outputs.len() as u32).contains(count))
+            .ok_or_else(|| entry.error("invalid PLIC context count"))?
+            as usize;
+        if outputs[..count].iter().all(|&line| line == 0)
+            || outputs[count..].iter().any(|&line| line != 0)
+            || !matches!(cpu.model.as_str(), "CPU.RiscV32" | "CPU.VexRiscv")
+        {
+            return Err(
+                entry.error("expected PLIC context outputs wired to standard RISC-V IRQs")
+            );
+        }
+        let sources = sources.ok_or_else(|| entry.error("missing PLIC numberOfSources"))?;
+        if andes {
+            let (base, size) = sysbus_range(entry, crate::plic::Plic::SIZE as u32)?;
+            machine.bus.map_andes_plic(&entry.name, base, size, sources, &outputs[..count], priorities.unwrap_or(true))
+        } else {
+            machine.bus.map_plic(entry.address()?, sources, &outputs[..count], priorities.unwrap_or(true))
+        }.map_err(|e| entry.error(&e))?;
+        plic_config.get_or_insert((entry, sources));
+    }
     for entry in sifive_uarts {
         let mut irq = 0;
         for (_, wire) in &entry.body {
@@ -2751,7 +2744,7 @@ fn load_platform(
             for (_, line) in &entry.body {
                 if let Some(target) = line
                     .split_once("->")
-                    .filter(|(pin, _)| pin.trim() == "IRQ")
+                    .filter(|(pin, _)| matches!(pin.trim(), "" | "IRQ"))
                     .and_then(|(_, target)| target.trim().split_once('@'))
                     .filter(|(name, _)| {
                         plic_config.is_some_and(|(plic, _)| name.trim() == plic.name)

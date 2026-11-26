@@ -549,7 +549,7 @@ pub struct Bus {
     gpio_wires: Vec<GpioWire>,
     f4_gpio_leds: Vec<(String, u32, u8)>,
     gpio_exti_outputs: [Option<u8>; 16],
-    plic: Option<Plic>,
+    plics: Vec<(String, Plic)>,
     sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
@@ -3239,9 +3239,9 @@ impl Bus {
                 let other = u64::from(uart.base);
                 start < other + uart.size() && other < end
             })
-            || self.plic.as_ref().is_some_and(|plic| {
+            || self.plics.iter().any(|(_, plic)| {
                 let other = u64::from(plic.base);
-                start < other + Plic::SIZE && other < end
+                start < other + plic.size && other < end
             })
             || self.clic.as_ref().is_some_and(|clic| {
                 let other = u64::from(clic.base);
@@ -3383,13 +3383,42 @@ impl Bus {
         if !(1..=63).contains(&sources) {
             return Err("PLIC requires 1–63 interrupt sources".into());
         }
+        self.register_plic("plic", Plic::new(base, sources, outputs).with_priorities(priorities))
+    }
+
+    pub(crate) fn map_andes_plic(
+        &mut self,
+        name: &str,
+        base: u32,
+        size: u32,
+        sources: u32,
+        outputs: &[u32],
+        priorities: bool,
+    ) -> Result<(), String> {
+        if !(1..=1023).contains(&sources) || size < 0x20_0000 + outputs.len() as u32 * 0x1000 {
+            return Err("invalid Andes PLIC source count or registration size".into());
+        }
+        self.register_plic(name, Plic::new(base, sources, outputs)
+            .with_priorities(priorities).with_andes_range(u64::from(size)))
+    }
+
+    fn register_plic(&mut self, name: &str, plic: Plic) -> Result<(), String> {
+        let base = plic.base;
         let start = u64::from(base);
-        let end = start + Plic::SIZE;
-        if base & 3 != 0 || end > 1 << 32 || self.plic.is_some() || self.overlaps(start, end) {
+        let end = start + plic.size;
+        if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end)
+            || self.plics.iter().any(|(existing, _)| existing == name)
+        {
             return Err(format!("invalid or overlapping PLIC range at {base:#010x}"));
         }
-        self.plic = Some(Plic::new(base, sources, outputs).with_priorities(priorities));
+        self.plics.push((name.to_owned(), plic));
         Ok(())
+    }
+
+    pub(crate) fn plic_register(&self, name: &str, offset: u32) -> Option<u32> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        let (_, plic) = self.plics.iter().find(|(registered, _)| registered == name)?;
+        (u64::from(offset) < plic.size).then(|| plic.base + offset)
     }
 
     pub fn map_ns16550(
@@ -5691,11 +5720,11 @@ impl Bus {
     pub fn tick_plic(&mut self) -> u32 {
         if let Some(uart) = self.ns16550.as_ref()
             && let Some(source) = uart.source
-            && let Some(plic) = self.plic.as_mut()
+            && let Some(plic) = self.plics.first_mut().map(|(_, plic)| plic)
         {
             plic.set_line(source, uart.interrupt_pending());
         }
-        if let Some(plic) = &mut self.plic {
+        if let Some(plic) = self.plics.first_mut().map(|(_, plic)| plic) {
             for gpio in &self.sifive_gpios {
                 for (pin, source) in gpio.routes.iter().enumerate() {
                     if let Some(source) = source {
@@ -5709,11 +5738,11 @@ impl Bus {
                 }
             }
         }
-        self.plic.as_ref().map_or(0, Plic::irq_outputs)
+        self.plics.iter().fold(0, |outputs, (_, plic)| outputs | plic.irq_outputs())
     }
 
     pub fn has_plic(&self) -> bool {
-        self.plic.is_some()
+        !self.plics.is_empty()
     }
 
     pub fn map_murax_gpio(&mut self, base: u32) -> Result<(), String> {
@@ -6690,8 +6719,7 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
-            && let Some(plic) = self.plic.as_mut()
-            && plic.contains(address)
+            && let Some((_, plic)) = self.plics.iter_mut().find(|(_, plic)| plic.contains(address))
         {
             return Ok(plic.read(address));
         }
@@ -7569,8 +7597,7 @@ impl Bus {
                 .map_err(BusError::Output);
         }
         if width == 4
-            && let Some(plic) = self.plic.as_mut()
-            && plic.contains(address)
+            && let Some((_, plic)) = self.plics.iter_mut().find(|(_, plic)| plic.contains(address))
         {
             plic.write(address, value);
             return Ok(());
