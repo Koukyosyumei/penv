@@ -134,6 +134,9 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
     if require_ram && !mapped {
         return Err("ARMv7 platform has no mapped RAM".into());
     }
+    if cpus.first().is_some_and(|entry| entry.model == "CPU.ARMv8R") {
+        machine.set_monitor_cpu_rate(100)?;
+    }
     Ok(machine)
 }
 

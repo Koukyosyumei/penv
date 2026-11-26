@@ -2280,7 +2280,7 @@ impl Machine {
     }
 
     pub(crate) fn monitor_cpu_rate_divisor(&self) -> u32 {
-        if self.primary.rv64.is_some() {
+        if self.primary.rv64.is_some() || self.primary.arm32.is_some() {
             self.hart_count() as u32
         } else {
             1
