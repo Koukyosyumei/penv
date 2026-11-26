@@ -84,10 +84,12 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
     if !ram {
         return Err("RV64 platform has no mapped RAM".into());
     }
-    cpus.sort_unstable_by_key(|&(hart, _)| hart);
+    cpus.sort_by_key(|&(hart, _)| hart);
+    let independent_cpus = clint.is_none() && plic.is_none()
+        && cpus.iter().all(|&(_, entry)| crate::platform::has_empty_time_provider(entry));
     if cpus.is_empty()
         || cpus.len() > MAX_HARTS
-        || cpus.windows(2).any(|pair| pair[0].0 == pair[1].0)
+        || !independent_cpus && cpus.windows(2).any(|pair| pair[0].0 == pair[1].0)
     {
         return Err(format!(
             "RISC-V platform requires unique hart IDs (up to {MAX_HARTS} CPUs)"

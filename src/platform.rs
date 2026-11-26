@@ -2486,8 +2486,14 @@ fn load_platform(
     let mut configs = cpus.into_iter().map(|entry| {
         parse_rv32_cpu(entry, [clint, litex_cpu_timer, riscv_machine_timer], clic, egis_syscon)
     }).collect::<Result<Vec<_>, _>>()?;
-    configs.sort_unstable_by_key(|config| config.0);
-    if configs.len() > MAX_HARTS || configs.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+    // Keep declaration order for CPUs sharing a guest-visible hart ID.
+    configs.sort_by_key(|config| config.0);
+    let independent_cpus = clint.is_none() && clic.is_none() && litex_cpu_timer.is_none()
+        && riscv_machine_timer.is_none()
+        && configs.iter().all(|config| has_empty_time_provider(config.1));
+    if configs.len() > MAX_HARTS
+        || !independent_cpus && configs.windows(2).any(|pair| pair[0].0 == pair[1].0)
+    {
         return Err(format!(
             "{}: hart IDs must be unique, up to {MAX_HARTS} harts",
             path.display()
@@ -3287,6 +3293,14 @@ fn load_platform(
         return Err(entry.error("expected a supported GPIO attachment"));
     }
     Ok(machine)
+}
+
+pub(crate) fn has_empty_time_provider(entry: &Entry) -> bool {
+    entry.body.iter().any(|(_, line)| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.trim() == "timeProvider" && value.trim() == "empty"
+        })
+    })
 }
 
 fn memory_registrations(entry: &Entry, length: u32) -> Result<Vec<(u32, u32, u32)>, String> {
