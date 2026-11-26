@@ -158,6 +158,25 @@ mod tests {
     }
 
     #[test]
+    fn arm_aarch32_translation_table_access_shares_full_register_state() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        let mut output = Vec::new();
+        bus.write(0, 4, 0xec43_2f02, &mut output).unwrap(); // MCRR p15, #0, r2, r3, c2
+        bus.write(4, 4, 0xec55_4f02, &mut output).unwrap(); // MRRC p15, #0, r4, r5, c2
+        let mut registers = [0; 32];
+        registers[2] = 0x5566_7788;
+        registers[3] = 0x1122_3344;
+        let mut pc = 0;
+        cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output).unwrap();
+        assert_eq!(cpu.monitor_system_register("TTBR0", None).unwrap(), Some(0x1122_3344_5566_7788));
+        assert_eq!(cpu.monitor_system_register("TTBR0_32", Some(0x1234)).unwrap(), None);
+        cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output).unwrap();
+        assert_eq!((pc, registers[4], registers[5]), (8, 0x1234, 0x1122_3344));
+    }
+
+    #[test]
     fn arm_mpu_type_registers_encode_their_region_counts_in_distinct_bytes() {
         let mut cpu = Cpu::new(Profile::RealTimeV8);
         cpu.configure_pmsa(12, 16).unwrap();
@@ -686,6 +705,20 @@ impl Cpu {
         value: Option<u64>,
     ) -> Result<Option<u64>, String> {
         let canonical = name.to_ascii_lowercase();
+        if self.is_v8r()
+            && let Some(register) = match canonical.as_str() {
+                "ttbr0" => Some(&mut self.translation_tables[0]),
+                "ttbr1" => Some(&mut self.translation_tables[1]),
+                "par" => Some(&mut self.physical_address_register),
+                _ => None,
+            }
+        {
+            if let Some(value) = value {
+                *register = value;
+                return Ok(None);
+            }
+            return Ok(Some(*register));
+        }
         let value = value
             .map(u32::try_from)
             .transpose()
@@ -717,6 +750,9 @@ impl Cpu {
             "hcptr" => 0x0081_0041,
             "hstr" => 0x0081_0061,
             "cpacr" => 0x0001_0040,
+            "ttbr0_32" => 0x0002_0000,
+            "ttbr1_32" => 0x0002_0020,
+            "par_32" => 0x0007_0004,
             "ttbcr" => 0x0002_0040,
             "amair0" => 0x000a_0003,
             "amair1" => 0x000a_0023,
@@ -782,6 +818,20 @@ impl Cpu {
             return pmsa[bank].access(register, value);
         }
         let v8r = self.is_v8r();
+        if v8r
+            && let Some(register) = match key {
+                0x0002_0000 => Some(&mut self.translation_tables[0]),
+                0x0002_0020 => Some(&mut self.translation_tables[1]),
+                0x0007_0004 => Some(&mut self.physical_address_register),
+                _ => None,
+            }
+        {
+            if let Some(value) = value {
+                *register = (*register & !u64::from(u32::MAX)) | u64::from(value);
+                return Some(None);
+            }
+            return Some(Some(*register as u32));
+        }
         if value.is_some()
             && matches!(
                 key,
