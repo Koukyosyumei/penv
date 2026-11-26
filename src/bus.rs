@@ -8424,10 +8424,11 @@ impl Bus {
             return Ok(());
         }
         if address & 3 == 0
-            && let Some(i2c) = self.stm32_i2cs.iter_mut().find(|i2c| i2c.contains(address))
+            && let Some(index) = self.stm32_i2cs.iter().position(|i2c| i2c.contains(address))
         {
             let mask = u32::MAX >> (32 - width * 8);
-            i2c.write(address, value & mask);
+            let now_ns = self.monitor_time_ns(self.h7_step).min(u128::from(u64::MAX)) as u64;
+            self.stm32_i2cs[index].write(address, value & mask, now_ns);
             return Ok(());
         }
         if let Some(spi) = self.stm32_spis.iter_mut().find(|spi| spi.contains(address)) {

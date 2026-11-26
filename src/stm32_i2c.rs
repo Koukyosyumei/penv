@@ -183,13 +183,13 @@ impl Target {
         }
     }
 
-    fn write(&mut self, value: u8) {
+    fn write(&mut self, value: u8, now_ns: u64) {
         match self {
             Self::Eeprom(memory) => memory.write(value),
             Self::Fram(memory, _) => memory.borrow_mut().0.write(value),
             Self::Sht45(_, sensor) => sensor.write(value),
             Self::Bme280(_, sensor) => sensor.write(value),
-            Self::Lis2dw12(_, sensor) => sensor.write(value),
+            Self::Lis2dw12(_, sensor) => sensor.write(value, now_ns),
         }
     }
 }
@@ -313,7 +313,7 @@ impl Stm32I2c {
         }
     }
 
-    pub fn write(&mut self, address: u32, value: u32) {
+    pub fn write(&mut self, address: u32, value: u32, now_ns: u64) {
         match address - self.base {
             0x00 => {
                 self.registers[0] = value & 0x00ff_dfff;
@@ -344,7 +344,7 @@ impl Stm32I2c {
                 self.registers[10] = value & 0xff;
                 if self.status & TX_READY != 0 {
                     if let Some(target) = self.addressed {
-                        self.targets[target].1.write(value as u8);
+                        self.targets[target].1.write(value as u8, now_ns);
                     }
                     self.advance_byte();
                 }
@@ -421,11 +421,11 @@ mod tests {
 
         low.start_write();
         for byte in [0xff, 0xff, 0xab, 0xcd] {
-            low.write(byte);
+            low.write(byte, 0);
         }
         low.start_write();
         for byte in [0xff, 0xff] {
-            low.write(byte);
+            low.write(byte, 0);
         }
         assert_eq!(low.read(0), 0xab);
         assert_eq!(high.read(0), 0xcd);
@@ -433,7 +433,7 @@ mod tests {
         memory.borrow_mut().set_write_protected(true);
         high.start_write();
         for byte in [0, 0, 0xef] {
-            high.write(byte);
+            high.write(byte, 0);
         }
         assert_eq!(high.read(0), 0xcd);
     }

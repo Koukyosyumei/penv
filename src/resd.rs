@@ -4,6 +4,12 @@ pub struct Samples<T> {
     end: Option<u64>,
 }
 
+pub(crate) struct SampleBlock<T> {
+    pub start: u64,
+    pub period: Option<u64>,
+    pub samples: Samples<T>,
+}
+
 impl<T: Copy> Samples<T> {
     pub fn decode<const N: usize>(
         input: &[u8],
@@ -19,10 +25,31 @@ impl<T: Copy> Samples<T> {
         selected_channel: u16,
         decode_sample: fn([u8; N]) -> T,
     ) -> Result<Self, &'static str> {
+        let mut samples: Option<Self> = None;
+        for block in Self::decode_blocks(input, expected_type, selected_channel, decode_sample)? {
+            if let Some(previous) = &mut samples {
+                if previous.end != Some(block.start) || block.period.is_none() {
+                    return Err("multiple RESD blocks must be contiguous and periodic");
+                }
+                previous.points.extend(block.samples.points);
+                previous.end = block.samples.end;
+            } else {
+                samples = Some(block.samples);
+            }
+        }
+        samples.filter(|samples| !samples.points.is_empty()).ok_or("missing matching RESD samples")
+    }
+
+    pub(crate) fn decode_blocks<const N: usize>(
+        input: &[u8],
+        expected_type: u16,
+        selected_channel: u16,
+        decode_sample: fn([u8; N]) -> T,
+    ) -> Result<Vec<SampleBlock<T>>, &'static str> {
         let mut input = input
             .strip_prefix(b"RESD\x01\0\0\0")
             .ok_or("expected a RESD v1 header")?;
-        let mut samples: Option<Self> = None;
+        let mut blocks = Vec::new();
         while !input.is_empty() {
             let [kind] = take(&mut input)?;
             let sample_type = u16::from_le_bytes(take(&mut input)?);
@@ -71,19 +98,9 @@ impl<T: Copy> Samples<T> {
                         .ok_or("RESD end timestamp overflow")
                 })
                 .transpose()?;
-            if let Some(previous) = &mut samples {
-                if previous.end != Some(start) || period.is_none() {
-                    return Err("multiple RESD blocks must be contiguous and periodic");
-                }
-                previous.points.extend(points);
-                previous.end = end;
-            } else {
-                samples = Some(Self { points, end });
-            }
+            blocks.push(SampleBlock { start, period, samples: Self { points, end } });
         }
-        samples
-            .filter(|samples| !samples.points.is_empty())
-            .ok_or("missing matching RESD samples")
+        Ok(blocks)
     }
 
     pub fn into_points(self) -> Vec<(u64, T)> {

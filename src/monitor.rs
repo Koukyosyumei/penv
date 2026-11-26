@@ -79,6 +79,7 @@ pub struct Session {
     machine: Option<String>,
     machine_cleared: bool,
     number_mode: NumberMode,
+    allow_privates: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -578,7 +579,10 @@ enum Action {
     SymbolAddress(String),
     I2cSensorProperty(String, String, String),
     I2cAcceleration(String, usize, i32, bool),
-    I2cAccelerationFeed(String, PathBuf),
+    I2cAccelerationFeed(String, PathBuf, bool),
+    I2cAccelerationRead(String, usize),
+    I2cSampleRate(String, u32),
+    AllowPrivates(bool),
     MachineReset(Vec<ResetHook>),
     ReadScalar(u64, ScalarWidth),
     WriteScalar(u64, ScalarWidth, u32),
@@ -1292,10 +1296,28 @@ fn run_commands<'a>(
                 sensor.set_axis(*axis, *value, *default);
                 None
             }),
-            Action::I2cAccelerationFeed(target, path) => {
+            Action::I2cAccelerationFeed(target, path, multi_frequency) => {
                 let now_ns = machine.monitor_elapsed_ns().min(u128::from(u64::MAX)) as u64;
-                machine.bus.lis2dw12(target).and_then(|sensor| sensor.feed(path, now_ns))
+                machine.bus.lis2dw12(target).and_then(|sensor| sensor.feed(path, now_ns, *multi_frequency))
                     .map(|()| None)
+            }
+            Action::I2cAccelerationRead(target, axis) => {
+                let now_ns = machine.monitor_elapsed_ns().min(u128::from(u64::MAX)) as u64;
+                let value = machine.bus.lis2dw12(target)?.axis(*axis, now_ns);
+                writeln!(output.reply(), "{value}").map_err(|error| error.to_string())?;
+                Ok(None)
+            }
+            Action::I2cSampleRate(target, rate) => {
+                if !session.allow_privates {
+                    return Err("setting the sensor sample rate requires allowPrivates".into());
+                }
+                let now_ns = machine.monitor_elapsed_ns().min(u128::from(u64::MAX)) as u64;
+                machine.bus.lis2dw12(target)?.set_rate(*rate, now_ns);
+                Ok(None)
+            }
+            Action::AllowPrivates(allow) => {
+                session.allow_privates = *allow;
+                Ok(None)
             }
             Action::I2cSensorProperty(target, property, value) =>
                 machine.bus.set_i2c_sensor_property(target, property, value).map(|()| None),
@@ -1835,6 +1857,9 @@ fn live_load_elf(
         let file = fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         crate::image::load(machine, file, false, Some(virtual_addresses), false)
             .map_err(|error| format!("{}: {error}", path.display()))?;
+        if machine.is_cortex_m() && machine.monitor_firmware.is_none() && machine.elapsed_steps() == 0 {
+            machine.validate_entry()?;
+        }
         machine.monitor_firmware = Some(path);
         Ok(())
     })())
@@ -3916,9 +3941,24 @@ fn execute(
             let index = match axis.as_bytes().last() { Some(b'X') => 0, Some(b'Y') => 1, _ => 2 };
             Some(Action::I2cAcceleration(resolve(target)?.into(), index, (value * 1_000_000.0).round() as i32, axis.starts_with("Default")))
         }
-        [target, "FeedAccelerationSamplesFromRESD", file] => {
+        ["allowPrivates", allowed] => Some(Action::AllowPrivates(parse_tester_bool(resolve(allowed)?)?)),
+        [target, "SampleRate", rate] if target.trim_start_matches("sysbus.").contains('.') => {
+            Some(Action::I2cSampleRate(resolve(target)?.into(), crate::parse_address(resolve(rate)?)?))
+        }
+        [target, axis @ ("AccelerationX" | "AccelerationY" | "AccelerationZ")]
+            if target.trim_start_matches("sysbus.").contains('.') =>
+        {
+            let axis = match *axis { "AccelerationX" => 0, "AccelerationY" => 1, _ => 2 };
+            Some(Action::I2cAccelerationRead(resolve(target)?.into(), axis))
+        }
+        [target, "FeedAccelerationSamplesFromRESD", file, options @ ..] => {
             let path = resolve(file)?.strip_prefix('@').ok_or("expected @RESD-path")?;
-            Some(Action::I2cAccelerationFeed(resolve(target)?.into(), PathBuf::from(path_value(path))))
+            let multi = match options {
+                [] | ["type=SingleFrequency"] => false,
+                ["type=MultiFrequency"] => true,
+                _ => return Err("invalid acceleration RESD options".into()),
+            };
+            Some(Action::I2cAccelerationFeed(resolve(target)?.into(), PathBuf::from(path_value(path)), multi))
         }
         [target, axis @ ("AccelerationX" | "AccelerationY" | "AccelerationZ"), value] if boot.started => {
             let value = resolve(value)?.parse::<f64>().map_err(|_| "invalid acceleration")?;
@@ -4876,7 +4916,7 @@ fn execute(
     if let Some(action) = action {
         let empty_machine_command = *machine && !boot.has_platform() && is_empty_machine_action(&action);
         if !empty_machine_command && !is_console_action(&action) && !is_monitor_snapshot_action(&action)
-            && !matches!(action, Action::MonitorLog(_) | Action::EmulationIsStarted)
+            && !matches!(action, Action::MonitorLog(_) | Action::EmulationIsStarted | Action::AllowPrivates(_))
             && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
@@ -4900,6 +4940,7 @@ fn execute(
                         | Action::UartIdle(..)
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)
+                        | Action::I2cAccelerationFeed(..) | Action::I2cAccelerationRead(..) | Action::I2cSampleRate(..) | Action::I2cAcceleration(..)
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint

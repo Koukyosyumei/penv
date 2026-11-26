@@ -1,6 +1,30 @@
 use std::{fs, path::Path};
 
-use crate::resd::Samples;
+use crate::resd::{SampleBlock, Samples};
+
+struct MultiFrequency {
+    blocks: Vec<SampleBlock<[i32; 3]>>,
+    current: Option<usize>,
+    started_at: u64,
+}
+
+impl MultiFrequency {
+    fn select(&mut self, rate: u32, now: u64) {
+        let start = self.current.map_or(0, |index| index + 1);
+        if let Some((index, _)) = self.blocks.iter().enumerate().skip(start)
+            .find(|(_, block)| block.period.is_some_and(|period| 1_000_000_000u64.div_ceil(period) == u64::from(rate)))
+        {
+            self.current = Some(index);
+            self.started_at = now;
+        }
+    }
+
+    fn sample_at(&self, now: u64) -> Option<[i32; 3]> {
+        let block = self.blocks.get(self.current?)?;
+        let timestamp = block.start.saturating_add(now.saturating_sub(self.started_at));
+        block.samples.sample_at(timestamp, true)
+    }
+}
 
 pub(crate) struct Lis2dw12 {
     registers: [u8; 64],
@@ -9,6 +33,8 @@ pub(crate) struct Lis2dw12 {
     acceleration: [i32; 3],
     defaults: [i32; 3],
     samples: Option<(u64, Samples<[i32; 3]>)>,
+    multi: Option<MultiFrequency>,
+    rate: u32,
 }
 
 impl Default for Lis2dw12 {
@@ -23,6 +49,8 @@ impl Default for Lis2dw12 {
             acceleration: [0; 3],
             defaults: [0; 3],
             samples: None,
+            multi: None,
+            rate: 0,
         }
     }
 }
@@ -32,7 +60,7 @@ impl Lis2dw12 {
         self.selected = None;
     }
 
-    pub(crate) fn write(&mut self, value: u8) {
+    pub(crate) fn write(&mut self, value: u8, now_ns: u64) {
         let Some(address) = self.selected else {
             self.address = value;
             self.selected = Some(value);
@@ -48,6 +76,10 @@ impl Lis2dw12 {
             && matches!(address, 0x20..=0x25 | 0x2e | 0x30..=0x36 | 0x3c..=0x3f)
         {
             *register = value;
+        }
+        if address == 0x20 {
+            const RATES: [u32; 10] = [0, 2, 13, 25, 50, 100, 200, 400, 800, 1600];
+            self.set_rate(RATES.get(usize::from(value >> 4)).copied().unwrap_or(0), now_ns);
         }
         if self.registers[0x21] & 4 != 0 {
             let next = address.wrapping_add(1);
@@ -89,7 +121,9 @@ impl Lis2dw12 {
     }
 
     pub(crate) fn update_sample(&mut self, now_ns: u64) {
-        if let Some((start, samples)) = &self.samples
+        if let Some(sample) = self.multi.as_ref().and_then(|stream| stream.sample_at(now_ns)) {
+            self.acceleration = sample;
+        } else if let Some((start, samples)) = &self.samples
             && let Some(sample) = samples.sample_at(now_ns.saturating_sub(*start), false)
         {
             self.acceleration = sample;
@@ -98,15 +132,42 @@ impl Lis2dw12 {
         }
     }
 
-    pub(crate) fn feed(&mut self, path: &Path, now_ns: u64) -> Result<(), String> {
+    pub(crate) fn feed(&mut self, path: &Path, now_ns: u64, multi_frequency: bool) -> Result<(), String> {
         let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let samples = Samples::decode(&bytes, 2, |bytes: [u8; 12]| {
+        let decode = |bytes: [u8; 12]| {
             let (axes, _) = bytes.as_chunks::<4>();
             std::array::from_fn(|axis| i32::from_le_bytes(axes[axis]))
-        }).map_err(|error| format!("{}: {error}", path.display()))?;
-        self.samples = Some((now_ns, samples));
+        };
+        let describe = |error| format!("{}: {error}", path.display());
+        if multi_frequency {
+            let blocks = Samples::decode_blocks(&bytes, 2, 0, decode).map_err(describe)?;
+            if blocks.is_empty() || blocks.iter().any(|block| block.period.is_none()) {
+                return Err(describe("expected periodic acceleration blocks"));
+            }
+            let mut stream = MultiFrequency { blocks, current: None, started_at: now_ns };
+            stream.select(self.rate, now_ns);
+            self.samples = None;
+            self.multi = Some(stream);
+        } else {
+            let samples = Samples::decode(&bytes, 2, decode).map_err(describe)?;
+            self.multi = None;
+            self.samples = Some((now_ns, samples));
+        }
         self.update_sample(now_ns);
         Ok(())
+    }
+
+    pub(crate) fn set_rate(&mut self, rate: u32, now_ns: u64) {
+        if rate != self.rate && let Some(stream) = &mut self.multi {
+            stream.select(rate, now_ns);
+        }
+        self.rate = rate;
+        self.update_sample(now_ns);
+    }
+
+    pub(crate) fn axis(&mut self, axis: usize, now_ns: u64) -> f64 {
+        self.update_sample(now_ns);
+        f64::from(self.acceleration[axis]) / 1_000_000.0
     }
 
     pub(crate) fn set_axis(&mut self, axis: usize, value: i32, default: bool) {

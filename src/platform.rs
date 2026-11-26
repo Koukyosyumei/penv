@@ -1254,6 +1254,24 @@ fn load_platform(
         machine.bus.set_step_hz(crate::bus::CORTEX_M_STEP_HZ as u32);
         return Ok(machine);
     }
+    if cpus.is_empty() && !stm32_i2cs.is_empty()
+        && entries.len() == stm32_i2cs.len() + i2c_sensors.len()
+    {
+        let mut sensors = group_stm32_i2c_sensors(i2c_sensors, &stm32_i2cs)?;
+        for i2c in stm32_i2cs {
+            keys(i2c, &[])?;
+            let mut device = Stm32I2c::new(i2c.address()?);
+            device.name = Some(i2c.name.clone());
+            for (sensor, address) in sensors.remove(i2c.name.as_str()).unwrap_or_default() {
+                device.attach_sensor(address, sensor.name.clone(), &sensor.model)
+                    .map_err(|error| sensor.error(&error))?;
+            }
+            machine.bus.map_stm32_i2c(device).map_err(|error| i2c.error(&error))?;
+        }
+        machine.cpu_less = true;
+        machine.bus.set_step_hz(crate::bus::CORTEX_M_STEP_HZ as u32);
+        return Ok(machine);
+    }
     if cpus.is_empty() || (require_ram && !ram) {
         return Err(format!(
             "{}: platform requires at least one CPU{}",
@@ -1907,16 +1925,7 @@ fn load_platform(
             let fram = i2c_frams.get(parent).ok_or_else(|| relay.error("unknown MB85RC1MT backing device"))?;
             fram_relays.entry(controller).or_default().push((relay, address, Rc::clone(fram)));
         }
-        let mut sensors = HashMap::<_, Vec<_>>::new();
-        for sensor in i2c_sensors {
-            keys(sensor, &[])?;
-            let (controller, address) = sensor.registration.as_deref()
-                .and_then(|registration| registration.split_once(char::is_whitespace))
-                .filter(|(name, _)| stm32_i2cs.iter().any(|i2c| i2c.name == *name))
-                .ok_or_else(|| sensor.error("expected STM32 I²C controller and address"))?;
-            let address = number(address.trim()).map_err(|error| sensor.error(&error))?;
-            sensors.entry(controller).or_default().push((sensor, address));
-        }
+        let mut sensors = group_stm32_i2c_sensors(i2c_sensors, &stm32_i2cs)?;
         for i2c in stm32_i2cs {
             let mut device = Stm32I2c::new(i2c.address()?);
             device.name = Some(i2c.name.clone());
@@ -3892,6 +3901,23 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
         }
     }
     Ok(port)
+}
+
+fn group_stm32_i2c_sensors<'a>(
+    entries: Vec<&'a Entry>,
+    controllers: &[&Entry],
+) -> Result<HashMap<&'a str, Vec<(&'a Entry, u32)>>, String> {
+    let mut sensors = HashMap::<_, Vec<_>>::new();
+    for sensor in entries {
+        keys(sensor, &[])?;
+        let (controller, address) = sensor.registration.as_deref()
+            .and_then(|registration| registration.split_once(char::is_whitespace))
+            .filter(|(name, _)| controllers.iter().any(|i2c| i2c.name == *name))
+            .ok_or_else(|| sensor.error("expected STM32 I²C controller and address"))?;
+        let address = number(address.trim()).map_err(|error| sensor.error(&error))?;
+        sensors.entry(controller).or_default().push((sensor, address));
+    }
+    Ok(sensors)
 }
 
 fn i2c_eeprom(entry: &Entry) -> Result<Eeprom, String> {
