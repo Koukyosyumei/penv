@@ -1045,6 +1045,8 @@ impl Machine {
                 ("thumbv8.1m.main-none-eabi", "+mve.fp,+fp-armv8d16")
             } else if thumb.cortex_m33 {
                 ("thumbv8m.main-none-eabi", "+fp-armv8d16sp")
+            } else if thumb.cortex_m3 {
+                ("thumbv7m-none-eabi", "")
             } else if thumb.thumb2 {
                 ("thumbv7em-none-eabi", "+vfp4d16sp")
             } else {
@@ -1105,7 +1107,7 @@ impl Machine {
             model
         } else if let Some(thumb) = &hart.thumb {
             if thumb.armv81m { "cortex-m55" } else if thumb.cortex_m33 { "cortex-m33" }
-            else if thumb.thumb2 { "cortex-m4" } else { "cortex-m0" }.to_owned()
+            else if thumb.cortex_m3 { "cortex-m3" } else if thumb.thumb2 { "cortex-m4" } else { "cortex-m0" }.to_owned()
         } else if let Some(arm) = &hart.arm32 {
             arm.model.clone()
         } else {
@@ -3312,6 +3314,11 @@ impl Hart {
         let thumb = self.thumb.as_mut().ok_or("Armv8.1-M requires a Cortex-M CPU")?;
         thumb.enable_armv81m();
         thumb.configure_trustzone(trustzone);
+        Ok(())
+    }
+
+    pub(crate) fn mark_cortex_m3(&mut self) -> Result<(), String> {
+        self.thumb.as_mut().ok_or("Cortex-M3 configuration requires Cortex-M")?.cortex_m3 = true;
         Ok(())
     }
 

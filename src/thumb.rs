@@ -57,6 +57,7 @@ struct SecurityBank {
 pub struct Thumb {
     vectors: Option<u32>,
     pub(crate) thumb2: bool,
+    pub(crate) cortex_m3: bool,
     pub(crate) cortex_m33: bool,
     pub(crate) armv81m: bool,
     pub(crate) trustzone: bool,
@@ -230,6 +231,7 @@ impl Thumb {
         *self = Self {
             vectors: self.vectors,
             thumb2: self.thumb2,
+            cortex_m3: self.cortex_m3,
             cortex_m33: self.cortex_m33,
             armv81m: self.armv81m,
             fpscr: if self.armv81m { 4 << 16 } else { 0 },
@@ -2348,7 +2350,9 @@ impl Thumb {
                     if !inactive_fp_ns && (vector.is_some() || arithmetic.is_some() || predicate.is_some() || fp_system.is_some()
                         || secure_fp_transfer || Self::is_fpu_instruction(inst, low))
                     {
-                        if self.cortex_m33 && let Some(nvic) = bus.nvic.as_mut().filter(|nvic| !nvic.fpu_access()) {
+                        if (self.cortex_m3 || self.cortex_m33)
+                            && let Some(nvic) = bus.nvic.as_mut().filter(|nvic| self.cortex_m3 || !nvic.fpu_access())
+                        {
                             const USAGEFAULT: u8 = 6;
                             nvic.record_fault(None);
                             let exception = if nvic.fault_enabled(USAGEFAULT) && self.can_take_sync_exception(USAGEFAULT, nvic) {

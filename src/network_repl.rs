@@ -728,11 +728,11 @@ fn build_machine_with_timing(
         }
         let (thumb2, default_mpu_regions, _has_cache) = match cpu_type {
             Some(r#""cortex-m0""# | r#""cortex-m0+""#) => (false, 0, false),
-            Some(r#""cortex-m4""#) => (true, 8, false),
+            Some(r#""cortex-m3""# | r#""cortex-m4""#) => (true, 8, false),
             Some(r#""cortex-m7""#) => (true, 16, true),
             _ => {
                 return Err(
-                    entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4 or Cortex-M7 cpuType")
+                    entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M3, Cortex-M4 or Cortex-M7 cpuType")
                 );
             }
         };
@@ -1004,6 +1004,10 @@ fn build_machine_with_timing(
             machine.bus.nvic.as_mut().unwrap().enable_fpu();
         }
         machine.primary.configure_cortex_m(vectors, thumb2);
+        if cpu_type == Some(r#""cortex-m3""#) {
+            machine.primary.mark_cortex_m3()?;
+            machine.bus.nvic.as_mut().unwrap().set_cpuid(0x410f_c231);
+        }
         if thumb2 {
             machine
                 .bus
