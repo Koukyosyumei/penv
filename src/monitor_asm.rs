@@ -150,6 +150,45 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
             | (funct3 << 12) | (andes_register(rd)? << 7) | 0x5b;
         return Ok(format!("{label} .4byte {encoding:#010x}"));
     }
+    let gp = match name {
+        "nds.lbgp" => Some((0x0b, 0, 1, false)),
+        "nds.addigp" => Some((0x0b, 1, 1, false)),
+        "nds.lbugp" => Some((0x0b, 2, 1, false)),
+        "nds.sbgp" if triple == "riscv32" => Some((0x0b, 3, 1, true)),
+        "nds.shgp" if triple == "riscv32" => Some((0x2b, 0, 2, true)),
+        "nds.lhgp" => Some((0x2b, 1, 2, false)),
+        "nds.lwgp" => Some((0x2b, 2, 4, false)),
+        "nds.swgp" if triple == "riscv32" => Some((0x2b, 4, 4, true)),
+        "nds.lhugp" => Some((0x2b, 5, 2, false)),
+        _ => None,
+    };
+    if let Some((opcode, funct3, width, store)) = gp {
+        let (register, offset) = args.split_once(',')
+            .ok_or_else(|| format!("{name} requires a register and a GP displacement"))?;
+        let register = andes_register(register.trim())?;
+        let offset = signed_assembly_immediate(offset.trim())?;
+        let bits = if width == 4 { 19 } else { 18 };
+        let limit = 1i64 << (bits - 1);
+        if !(-limit..limit).contains(&offset) || offset % width != 0 {
+            return Err(format!("{name} displacement must fit in {bits} signed bits and align to {width} bytes"));
+        }
+        let offset = offset as u32;
+        let shared = (offset & 0x7000) << 5 | (offset & 0x18000);
+        let payload = match (store, width) {
+            (false, 4) => (offset & 0x7fc) << 20 | (offset & 0x800) << 9
+                | (offset & 0x20000) << 4 | (offset & 0x40000) << 13,
+            (false, _) => (offset & 0x7fe) << 20 | (offset & 0x800) << 9
+                | (offset & 0x20000) << 14,
+            (true, 4) => (offset & 0x1c) << 7 | (offset & 0x7e0) << 20
+                | (offset & 0x800) >> 4 | (offset & 0x20000) >> 9 | (offset & 0x40000) << 13,
+            (true, _) => (offset & 0x1e) << 7 | (offset & 0x7e0) << 20
+                | (offset & 0x800) >> 4 | (offset & 0x20000) << 14,
+        };
+        let encoding = opcode | (funct3 << 12) | shared | payload
+            | (register << if store { 20 } else { 7 })
+            | (if width == 1 { (offset & 1) << 14 } else { 0 });
+        return Ok(format!("{label} .4byte {encoding:#010x}"));
+    }
     let (kind, test) = match name {
         "nds.bbc" => (7, false),
         "nds.bbs" => (7, true),
@@ -167,11 +206,7 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
     if immediate >= limit {
         return Err(format!("Andes branch immediate exceeds the range 0..{}", limit - 1));
     }
-    let offset = if let Some(magnitude) = offset.strip_prefix('-') {
-        -i64::from(crate::parse_address(magnitude)?)
-    } else {
-        i64::from(crate::parse_address(offset)?)
-    };
+    let offset = signed_assembly_immediate(offset)?;
     if !(-1024..=1022).contains(&offset) || offset % 2 != 0 {
         return Err("Andes branch displacement must be even and between -1024 and 1022".into());
     }
@@ -181,6 +216,14 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
         | ((immediate & 31) << 20) | (bit30 << 30)
         | ((offset & 0x400) << 21) | ((offset & 0x3e0) << 20) | ((offset & 0x1e) << 7);
     Ok(format!("{label} .4byte {encoding:#010x}"))
+}
+
+fn signed_assembly_immediate(value: &str) -> Result<i64, String> {
+    if let Some(magnitude) = value.strip_prefix('-') {
+        Ok(-i64::from(crate::parse_address(magnitude)?))
+    } else {
+        crate::parse_address(value).map(i64::from)
+    }
 }
 
 fn andes_register(register: &str) -> Result<u32, String> {
