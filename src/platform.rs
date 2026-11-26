@@ -4419,6 +4419,7 @@ mod tests {
         fs::write(&path, r#"
 nvic: IRQControllers.NVIC @ sysbus 0xe000e000 { -> cpu@0 }
 cpu: CPU.CortexM @ sysbus { cpuType: "cortex-m4"; nvic: nvic }
+ram: Memory.MappedMemory @ sysbus 0x20000000 { size: 0x1000 }
 icu: IRQControllers.RenesasRA_ICU @ sysbus 0x4000c000 { nvic: nvic }
 gpt: Timers.RenesasRA_GPT @ sysbus 0x40322000
     numberOf32BitChannels: 1
