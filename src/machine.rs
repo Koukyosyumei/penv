@@ -2991,7 +2991,11 @@ impl Hart {
             .fetch(bus)
             .map_err(|error| Fault::Bus(Access::Fetch, error))?;
         if let Some(name) = symbols.and_then(|symbols| symbols.get(&pc)) {
-            eprintln!("Entering function {name} at 0x{pc:X}");
+            let message = format!("Entering function {name} at 0x{pc:X}");
+            crate::monitor_log::record(1, &message);
+            if bus.monitor_log_enabled(1) {
+                eprintln!("{message}");
+            }
         }
         let illegal = || Fault::Illegal(encoded);
         let insn = if width == 2 {

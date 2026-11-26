@@ -2242,7 +2242,7 @@ fn wait_for_uart(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CpuRegisterCommand {
-    TrapVector(TrapVector, Option<u32>),
+    TrapVector(TrapVector, Option<u64>),
     Integer(u32, Option<u64>),
     ExternalPmp(String, bool, u32, Option<u64>),
 }
@@ -4854,7 +4854,7 @@ fn execute(
         }
         ["emulation", "SetSeed", value] => {
             // None of the supported devices consume Renode's random seed.
-            crate::parse_address(resolve(value)?)?;
+            crate::parse_address64(resolve(value)?)?;
         }
         ["emulation", "SetGlobalSerialExecution", "True"] => {
             // The interpreter already executes harts serially.

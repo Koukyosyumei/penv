@@ -1927,7 +1927,14 @@ fn run() -> Result<ExitCode, String> {
         for command in cpu_registers.iter().cloned() {
             match command {
                 monitor::CpuRegisterCommand::TrapVector(register, value) => {
-                    if let Some(readback) = machine.primary.monitor_trap_vector(register, value)? {
+                    let readback = if let Some(cpu) = &mut machine.primary.rv64 {
+                        cpu.privilege.monitor_trap_vector(register, value)?
+                    } else {
+                        let value = value.map(u32::try_from).transpose()
+                            .map_err(|_| "trap vector exceeds RV32 width")?;
+                        machine.primary.monitor_trap_vector(register, value)?.map(u64::from)
+                    };
+                    if let Some(readback) = readback {
                         eprintln!("{} {readback:#x}", register.name());
                     }
                 }
