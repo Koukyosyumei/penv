@@ -381,13 +381,13 @@ impl Thumb {
         registers: &mut [u32; 32],
     ) {
         use BinaryOperation::*;
-        let read_q = |q: usize| {
-            u128::from_le_bytes(std::array::from_fn(|index| {
-                self.fp[q * 4 + index / 4].to_le_bytes()[index % 4]
-            }))
+        let left = self.vector(inst.left);
+        let right = if inst.scalar {
+            0
+        } else {
+            self.vector(inst.right)
         };
-        let left = read_q(inst.left);
-        let right = if inst.scalar { 0 } else { read_q(inst.right) };
+        let predicate = self.vector_predicate(registers[14]);
         let limit = 1i64 << inst.bits;
         let mask = (limit - 1) as u128;
         let lane = |value: u128| {
@@ -405,27 +405,38 @@ impl Thumb {
         };
         if let AbsoluteDifferenceAccumulate { accumulator } = inst.operation {
             for shift in (0..128).step_by(inst.bits as usize) {
+                if predicate & (1 << (shift / 8)) == 0 {
+                    continue;
+                }
                 let difference = lane(left >> shift).abs_diff(lane(right >> shift)) as u32;
                 registers[accumulator] = registers[accumulator].wrapping_add(difference);
             }
+            self.advance_vector_predicate();
             self.fp_active = true;
             return;
         }
         if let ShiftLeftCarry { accumulator, shift } = inst.operation {
             let mask = (1u64 << shift) - 1;
             let mut carry = u64::from(registers[accumulator]);
-            for word in &mut self.fp[inst.destination * 4..inst.destination * 4 + 4] {
-                let previous = u64::from(*word);
-                *word = ((previous << shift) | (carry & mask)) as u32;
-                carry = previous >> (32 - shift);
+            let mut result = 0;
+            for word in 0..4 {
+                let previous = u64::from(self.fp[inst.destination * 4 + word]);
+                let value = ((previous << shift) | (carry & mask)) as u32;
+                result |= u128::from(value) << (word * 32);
+                if predicate & (1 << (word * 4)) != 0 {
+                    carry = previous >> (32 - shift);
+                }
             }
+            self.write_vector(inst.destination, result, predicate);
             registers[accumulator] = carry as u32;
+            self.advance_vector_predicate();
             self.fp_active = true;
             return;
         }
         let mut result = 0u128;
         let mut saturated = false;
         for shift in (0..128).step_by(inst.bits as usize) {
+            let lane_active = predicate & (1 << (shift / 8)) != 0;
             let a = lane(left >> shift);
             let b = lane(if inst.scalar {
                 registers[inst.right].into()
@@ -449,7 +460,7 @@ impl Thumb {
                     } else {
                         -a
                     };
-                    saturated |= value > maximum;
+                    saturated |= lane_active && value > maximum;
                     value.min(maximum)
                 }
                 ComplexAdd { rotate_270, halve } => {
@@ -473,21 +484,256 @@ impl Thumb {
                         a - b
                     };
                     let clamped = value.clamp(minimum, maximum);
-                    saturated |= clamped != value;
+                    saturated |= lane_active && clamped != value;
                     clamped
                 }
             };
             result |= (value as u128 & mask) << shift;
         }
-        for (word, value) in self.fp[inst.destination * 4..inst.destination * 4 + 4]
-            .iter_mut()
-            .enumerate()
-        {
-            *value = (result >> (32 * word)) as u32;
-        }
+        self.write_vector(inst.destination, result, predicate);
+        self.advance_vector_predicate();
         if saturated {
             self.fpscr |= 1 << 27;
         }
         self.fp_active = true;
+    }
+}
+
+pub(super) enum PredicateInstruction {
+    Compare {
+        left: usize,
+        right: usize,
+        scalar: bool,
+        floating: bool,
+        bits: u32,
+        comparison: u32,
+        block_mask: u32,
+    },
+    Start(u32),
+    Duplicate {
+        destination: usize,
+        source: usize,
+        bits: u32,
+    },
+}
+
+impl PredicateInstruction {
+    pub(super) fn decode(high: u32, low: u32) -> Option<Self> {
+        let instruction = high << 16 | low;
+        let block_mask = (low >> 13) | ((high & 0x40) >> 3);
+        if instruction & 0xffb1_0f5f == 0xfe31_0f4d && block_mask != 0 {
+            return Some(Self::Start(block_mask));
+        }
+        if instruction & 0xffb1_0f50 == 0xeea0_0b10 {
+            let size = ((high >> 5) & 2) | ((low >> 5) & 1);
+            let source = (low >> 12) as usize;
+            if size == 3 || low & 0x80 != 0 || matches!(source, 13 | 15) {
+                return None;
+            }
+            return Some(Self::Duplicate {
+                destination: ((high >> 1) & 7) as usize,
+                source,
+                bits: match size {
+                    0 => 32,
+                    1 => 16,
+                    _ => 8,
+                },
+            });
+        }
+        let (floating, scalar) = match instruction & 0xff81_0f50 {
+            0xfe01_0f00 if (high >> 4) & 3 != 3 => (false, false),
+            0xfe01_0f40 if (high >> 4) & 3 != 3 => (false, true),
+            _ => match instruction & 0xefb1_0f50 {
+                0xee31_0f00 if low & 0x1001 != 1 => (true, false),
+                0xee31_0f40 if low & 15 != 13 => (true, true),
+                _ => return None,
+            },
+        };
+        if !scalar && low & 0x20 != 0 {
+            return None;
+        }
+        let end = if scalar { (low >> 5) & 1 } else { low & 1 };
+        let b = (low >> 12) & 1;
+        let c = (low >> 7) & 1;
+        let comparison = if floating {
+            b | (end << 1) | (c << 2)
+        } else {
+            c | (b << 1) | (end << 2)
+        };
+        Some(Self::Compare {
+            left: ((high >> 1) & 7) as usize,
+            right: if scalar {
+                (low & 15) as usize
+            } else {
+                ((low >> 1) & 7) as usize
+            },
+            scalar,
+            floating,
+            bits: if floating {
+                16 << ((high >> 12) & 1)
+            } else {
+                8 << ((high >> 4) & 3)
+            },
+            comparison,
+            block_mask,
+        })
+    }
+}
+
+impl Thumb {
+    fn vector(&self, index: usize) -> u128 {
+        self.fp[index * 4..index * 4 + 4]
+            .iter()
+            .enumerate()
+            .fold(0, |vector, (word, value)| {
+                vector | (u128::from(*value) << (word * 32))
+            })
+    }
+
+    fn write_vector(&mut self, index: usize, value: u128, predicate: u16) {
+        let byte_mask = u128::from_le_bytes(std::array::from_fn(|byte| {
+            if predicate & (1 << byte) != 0 {
+                0xff
+            } else {
+                0
+            }
+        }));
+        let combined = (self.vector(index) & !byte_mask) | (value & byte_mask);
+        for (word, slot) in self.fp[index * 4..index * 4 + 4].iter_mut().enumerate() {
+            *slot = (combined >> (word * 32)) as u32;
+        }
+    }
+
+    fn vector_predicate(&self, link_register: u32) -> u16 {
+        let mut predicate = self.vpr as u16;
+        if self.vpr & 0x000f_0000 == 0 {
+            predicate |= 0x00ff;
+        }
+        if self.vpr & 0x00f0_0000 == 0 {
+            predicate |= 0xff00;
+        }
+        let tail_size = (self.fpscr >> 16) & 7;
+        if tail_size < 4 && link_register < (16 >> tail_size) {
+            predicate &= ((1u32 << (link_register << tail_size)) - 1) as u16;
+        }
+        predicate
+    }
+
+    fn advance_vector_predicate(&mut self) {
+        let low = (self.vpr >> 16) & 15;
+        let high = (self.vpr >> 20) & 15;
+        if low > 8 {
+            self.vpr ^= 0x00ff;
+        }
+        if high > 8 {
+            self.vpr ^= 0xff00;
+        }
+        self.vpr =
+            (self.vpr & !0x00ff_0000) | ((low << 17) & 0x000f_0000) | ((high << 21) & 0x00f0_0000);
+    }
+
+    pub(super) fn execute_vector_predicate(
+        &mut self,
+        inst: PredicateInstruction,
+        registers: &[u32; 32],
+    ) {
+        let predicate = self.vector_predicate(registers[14]);
+        match inst {
+            PredicateInstruction::Start(mask) => {
+                self.vpr = (self.vpr & !0x00ff_0000) | (mask << 16) | (mask << 20);
+            }
+            PredicateInstruction::Duplicate {
+                destination,
+                source,
+                bits,
+            } => {
+                let lane = u128::from(registers[source]) & ((1u128 << bits) - 1);
+                let mut value = 0;
+                for shift in (0..128).step_by(bits as usize) {
+                    value |= lane << shift;
+                }
+                self.write_vector(destination, value, predicate);
+                self.advance_vector_predicate();
+            }
+            PredicateInstruction::Compare {
+                left,
+                right,
+                scalar,
+                floating,
+                bits,
+                comparison,
+                block_mask,
+            } => {
+                let lhs = self.vector(left);
+                let rhs = if scalar {
+                    if right == 15 {
+                        0
+                    } else {
+                        u128::from(registers[right])
+                    }
+                } else {
+                    self.vector(right)
+                };
+                let mask = (1u128 << bits) - 1;
+                let mut active = 0;
+                for shift in (0..128).step_by(bits as usize) {
+                    let a = ((lhs >> shift) & mask) as u32;
+                    let b = ((rhs >> if scalar { 0 } else { shift }) & mask) as u32;
+                    let selected = if floating {
+                        fp_predicate(a, b, bits, comparison)
+                    } else {
+                        let signed_a = ((a << (32 - bits)) as i32) >> (32 - bits);
+                        let signed_b = ((b << (32 - bits)) as i32) >> (32 - bits);
+                        match comparison {
+                            0 => a == b,
+                            1 => a != b,
+                            2 => signed_a >= signed_b,
+                            3 => signed_a < signed_b,
+                            4 => a >= b,
+                            5 => a > b,
+                            6 => signed_a > signed_b,
+                            7 => signed_a <= signed_b,
+                            _ => unreachable!(),
+                        }
+                    };
+                    if selected {
+                        active |= ((1u16 << (bits / 8)) - 1) << (shift / 8);
+                    }
+                }
+                self.vpr = (self.vpr & !0xffff) | u32::from(active & predicate);
+                if block_mask == 0 {
+                    self.advance_vector_predicate();
+                } else {
+                    self.vpr = (self.vpr & !0x00ff_0000) | (block_mask << 16) | (block_mask << 20);
+                }
+            }
+        }
+        self.fp_active = true;
+    }
+}
+
+fn fp_predicate(a: u32, b: u32, bits: u32, comparison: u32) -> bool {
+    let decode = |value: u32| {
+        if bits == 32 {
+            return f32::from_bits(value);
+        }
+        let sign = (value & 0x8000) << 16;
+        let fraction = value & 0x3ff;
+        let exponent = (value >> 10) & 31;
+        match exponent {
+            0 => f32::from_bits(sign | (103 << 23)) * fraction as f32,
+            31 => f32::from_bits(sign | (255 << 23) | (fraction << 13)),
+            _ => f32::from_bits(sign | ((exponent + 112) << 23) | (fraction << 13)),
+        }
+    };
+    let (a, b) = (decode(a), decode(b));
+    match comparison {
+        0 => a == b,
+        4 => a != b,
+        1 => a >= b,
+        5 => a < b,
+        3 => a > b,
+        7 => a <= b,
+        _ => false,
     }
 }

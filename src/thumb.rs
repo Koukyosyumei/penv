@@ -2277,11 +2277,12 @@ impl Thumb {
                 } else {
                     let vector = self.armv81m.then(|| mve::VectorTransfer::decode(inst, low)).flatten();
                     let arithmetic = self.armv81m.then(|| mve::VectorArithmetic::decode(inst, low)).flatten();
+                    let predicate = self.armv81m.then(|| mve::PredicateInstruction::decode(inst, low)).flatten();
                     let fp_system = self.armv81m.then(|| fpu::SystemTransfer::decode(inst, low)).flatten();
                     let inactive_fp_ns = fp_system.is_some_and(|transfer| transfer.inactive_ns(self, bus));
                     let secure_fp_transfer = self.trustzone && self.secure
                         && inst & 0xffe0 == 0xec20 && low == 0x0a00;
-                    if !inactive_fp_ns && (vector.is_some() || arithmetic.is_some() || fp_system.is_some()
+                    if !inactive_fp_ns && (vector.is_some() || arithmetic.is_some() || predicate.is_some() || fp_system.is_some()
                         || secure_fp_transfer || Self::is_fpu_instruction(inst, low))
                     {
                         if self.cortex_m33 && let Some(nvic) = bus.nvic.as_mut().filter(|nvic| !nvic.fpu_access()) {
@@ -2311,6 +2312,8 @@ impl Thumb {
                         self.transfer_fp_system(transfer, r, bus, output)?;
                     } else if let Some(transfer) = vector {
                         self.execute_vector_transfer(transfer, inst, low, r, bus, output)?;
+                    } else if let Some(predicate) = predicate {
+                        self.execute_vector_predicate(predicate, r);
                     } else if let Some(arithmetic) = arithmetic {
                         self.execute_vector_arithmetic(arithmetic, r);
                     } else if secure_fp_transfer {
