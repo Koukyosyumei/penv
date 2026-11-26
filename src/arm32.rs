@@ -158,6 +158,19 @@ mod tests {
     }
 
     #[test]
+    fn arm_simd_immediates_update_the_shared_vfp_registers() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        assert!(cpu.simd_modified_immediate(0xf2c7_1e1a)); // VMOV.i8 d17, #0x7a
+        assert_eq!(cpu.vfp_high_words[2..4], [0x7a7a_7a7a; 2]);
+        assert!(cpu.simd_modified_immediate(0xf280_8251)); // VMOV.i32 q4, #0x100
+        assert!(cpu.simd_modified_immediate(0xf280_8511)); // VORR.i32 d8, #0x10000
+        assert!(cpu.simd_modified_immediate(0xf280_8531)); // VBIC.i32 d8, #0x10000
+        assert_eq!(cpu.thumb.vfp_words_mut()[16..20], [0x100; 4]);
+        assert!(cpu.simd_modified_immediate(0xf287_8f10)); // VMOV.f32 d8, #1.0
+        assert_eq!(cpu.thumb.vfp_words_mut()[16..18], [0x3f80_0000; 2]);
+    }
+
+    #[test]
     fn arm_stage_two_mmio_abort_identifies_the_faulting_transfer() {
         let mut cpu = Cpu::new(Profile::RealTimeV8);
         cpu.configure_pmsa(12, 16).unwrap();
@@ -1538,6 +1551,62 @@ impl Cpu {
             .map_err(|error| error.to_string())
     }
 
+    fn floating_point_enabled(&self) -> bool {
+        let mode = self.cpsr & 31;
+        let access = (self.cpacr >> 20) & 15;
+        self.fpexc & (1 << 30) != 0 && (mode == 0x1a || access == 15 || mode != 0x10 && access == 5)
+    }
+
+    fn simd_modified_immediate(&mut self, instruction: u32) -> bool {
+        let d = ((((instruction >> 22) & 1) << 4) | ((instruction >> 12) & 15)) as usize;
+        let quad = instruction & 0x40 != 0;
+        if quad && d & 1 != 0 {
+            return false;
+        }
+        let op = instruction & 0x20 != 0;
+        let cmode = (instruction >> 8) & 15;
+        let immediate = ((instruction >> 17) & 0x80) | ((instruction >> 12) & 0x70)
+            | (instruction & 15);
+        let words = match cmode {
+            0..=7 => [immediate << (8 * (cmode >> 1)); 2],
+            8..=11 => {
+                let lane = immediate << (8 * ((cmode - 8) >> 1));
+                [lane | (lane << 16); 2]
+            }
+            12 => [(immediate << 8) | 0xff; 2],
+            13 => [(immediate << 16) | 0xffff; 2],
+            14 if !op => [immediate * 0x0101_0101; 2],
+            14 => {
+                let bytes = std::array::from_fn(|index| {
+                    if immediate & (1 << index) != 0 { 0xff } else { 0 }
+                });
+                let value = u64::from_le_bytes(bytes);
+                [value as u32, (value >> 32) as u32]
+            }
+            15 if !op => {
+                let exponent = if immediate & 0x40 == 0 { 0x80 } else { 0x7c };
+                [((immediate & 0x80) << 24) | (exponent << 23) | ((immediate & 0x3f) << 19); 2]
+            }
+            _ => return false,
+        };
+        let logical = cmode < 12 && cmode & 1 != 0;
+        for index in (2 * d)..(2 * d + if quad { 4 } else { 2 }) {
+            let register = if index < 32 {
+                &mut self.thumb.vfp_words_mut()[index]
+            } else {
+                &mut self.vfp_high_words[index - 32]
+            };
+            let word = words[index & 1];
+            *register = match (logical, op, cmode < 14) {
+                (true, false, _) => *register | word,
+                (true, true, _) => *register & !word,
+                (false, true, true) => !word,
+                _ => word,
+            };
+        }
+        true
+    }
+
     fn vfp_memory_transfer(
         &mut self,
         instruction: u32,
@@ -1728,6 +1797,10 @@ impl Cpu {
             if instruction & 0xfe5f_ffe0 == 0xf84d_0500 || instruction & 0xfe50_ffff == 0xf810_0a00
             {
                 next = self.arm_exception_frame(instruction, next, registers, bus, slot, output)?;
+            } else if self.is_v8r() && instruction & 0xfeb8_0090 == 0xf280_0010 {
+                if !self.floating_point_enabled() || !self.simd_modified_immediate(instruction) {
+                    next = self.undefined(next, registers);
+                }
             } else if instruction == 0xf57f_f01f {
                 bus.take_reservation64(slot);
             } else if instruction & 0xfff1_fe20 == 0xf100_0000 {
@@ -2106,12 +2179,7 @@ impl Cpu {
                     ) =>
                 {
                     let high = (instruction >> 16) & 0x0fff | 0xe000;
-                    let user = self.cpsr & 31 == 0x10;
-                    let enabled = self.fpexc & (1 << 30) != 0
-                        && (self.cpsr & 31 == 0x1a
-                            || (self.cpacr >> 20) & 0xf == 15
-                            || !user && (self.cpacr >> 20) & 0xf == 5);
-                    if !enabled {
+                    if !self.floating_point_enabled() {
                         next = self.undefined(next, registers);
                     } else if high & 0xfe00 == 0xec00 && high & 0xffe0 != 0xec40 {
                         if let Some(vector) = self.vfp_memory_transfer(
