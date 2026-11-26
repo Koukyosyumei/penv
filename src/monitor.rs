@@ -3146,7 +3146,8 @@ pub fn serve(
                 )
             })();
             match result {
-                Ok(value) => frame(&mut output, "OK", value.as_bytes()),
+                Ok(Ok(value)) => frame(&mut output, "OK", value.as_bytes()),
+                Ok(Err(error)) => frame(&mut output, "REJECTED", error.as_bytes()),
                 Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
             }.map_err(|error| error.to_string())?;
             continue;

@@ -385,7 +385,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise Unsupported("Execute Python requires the Rust monitor")
         if machine:
             self.operation(f"mach set {self.literal(machine)}")
-        return json.loads(self.operation(f"ExecutePythonValue hex:{command.encode().hex()}"))
+        return json.loads(self.operation(f"ExecutePythonValue hex:{command.encode().hex()}", assertion=True))
 
     def execute(self, command, *args, machine=None):
         if isinstance(command, list):

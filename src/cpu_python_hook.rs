@@ -183,7 +183,7 @@ for line in sys.stdin:
             else:
                 exec(program, scope)
     except Exception as error:
-        marker = 'monitor-exception' if is_monitor else 'instruction-exception' if is_instruction else 'exception'
+        marker = 'monitor-value-exception' if is_value else 'monitor-exception' if is_monitor else 'instruction-exception' if is_instruction else 'exception'
         message = f'{type(error).__name__}Exception: {error}' if is_value else str(error)
         print(marker + ' ' + message.encode().hex(), flush=True)
     else:
@@ -325,10 +325,11 @@ impl Hook {
 
     pub(crate) fn execute_monitor_value(
         &mut self, bus: &mut Bus, source: &str, symbols: Option<PathBuf>,
-    ) -> Result<String, String> {
+    ) -> Result<Result<String, String>, String> {
         self.symbols = symbols;
-        self.invoke(bus, format_args!("monitor-value {}", encode(source)))?;
-        Ok(std::mem::take(&mut self.monitor_output))
+        let raised = self.invoke(bus, format_args!("monitor-value {}", encode(source)))?.is_some();
+        let output = std::mem::take(&mut self.monitor_output);
+        Ok(if raised { Err(output) } else { Ok(output) })
     }
 
     pub(crate) fn execute_thumb_block(&mut self, bus: &mut Bus, pc: u32, it: u8) -> Result<(), String> {
@@ -359,6 +360,10 @@ impl Hook {
                     return Ok(None);
                 }
                 "monitor-exception" => return Err(decode(argument)?),
+                "monitor-value-exception" => {
+                    self.monitor_output = decode(argument)?;
+                    return Ok(Some(1));
+                }
                 "size" => decode(argument).and_then(|name| bus.scoped_peripheral_size(&name))
                     .map(|size| size.to_string()),
                 "lookup" => (|| {
