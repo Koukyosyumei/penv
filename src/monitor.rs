@@ -1706,11 +1706,7 @@ fn run_commands<'a>(
                 })
             }
             Action::AddCpuHook(cpu, address, hook) => {
-                machine.cortex_m_monitor_cpu(cpu).map(|hart| {
-                    hart.monitor_hooks
-                        .push((address.unwrap_or(hart.pc), hook.clone()));
-                    None
-                })
+                machine.add_monitor_cpu_hook(cpu, *address, hook.clone()).map(|()| None)
             }
             Action::ClicGpio(name, id, asserted) if machine.is_cortex_m() => {
                 let line = u8::try_from(*id).ok().filter(|&line| line < 32).ok_or("expected NVIC IRQ line 0 through 31")?;
@@ -6295,7 +6291,7 @@ fn execute(
                         | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                         | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                        | Action::CpuRegister(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
+                        | Action::CpuRegister(..) | Action::AddCpuHook(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)
                         | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..)
@@ -6779,6 +6775,16 @@ fn parse_cpu_hook(body: &str) -> Result<CpuHook, String> {
             crate::parse_address(address.trim())?,
             crate::parse_address(value.trim())?,
         ));
+    }
+    if let Some((call, halt)) = body.split_once(';')
+        && halt.split_once('=').is_some_and(|(name, value)| {
+            name.trim() == "self.IsHalted" && value.trim() == "True"
+        })
+        && let Some(argument) = call.trim().strip_prefix("self.InfoLog(").and_then(|call| call.strip_suffix(')'))
+        && let Some(message) = argument.trim().strip_prefix('\'').and_then(|value| value.strip_suffix('\''))
+        && !message.contains('\'')
+    {
+        return Ok(CpuHook::HaltWithLog(message.to_owned()));
     }
     let log = body
         .strip_prefix("monitor.Parse('log ")

@@ -236,6 +236,7 @@ pub struct Hart {
 
 #[derive(Clone)]
 pub enum CpuHook {
+    HaltWithLog(String),
     Log(String),
     WriteDoubleWord(u32, u32),
     Pause,
@@ -634,6 +635,22 @@ impl Machine {
         Ok(())
     }
 
+    pub(crate) fn add_monitor_cpu_hook(
+        &mut self, name: &str, address: Option<u32>, hook: CpuHook,
+    ) -> Result<(), String> {
+        let hart = if matches!(hook, CpuHook::HaltWithLog(_)) {
+            self.named_hart(name)?
+        } else {
+            self.cortex_m_monitor_cpu(name)?
+        };
+        let address = match address {
+            Some(address) => address,
+            None => u32::try_from(hart.program_counter()).map_err(|_| "hook address exceeds 32 bits")?,
+        };
+        hart.monitor_hooks.push((address, hook));
+        Ok(())
+    }
+
     pub(crate) fn install_monitor_python_hook(&mut self, cpu: &str, pc: u64, source: &str) -> Result<(), String> {
         let index = std::iter::once(&self.primary).chain(&self.secondary)
             .position(|hart| hart.name.as_deref() == Some(cpu))
@@ -648,6 +665,7 @@ impl Machine {
             .position(|hart| hart.name.as_deref() == Some(cpu))
             .ok_or_else(|| format!("unknown hook CPU {cpu:?}"))?;
         self.python_hooks.retain(|(hart, address, _)| (*hart, *address) != (index, pc));
+        self.hart_mut(index).monitor_hooks.retain(|(address, _)| u64::from(*address) != pc);
         Ok(())
     }
 
@@ -2777,6 +2795,21 @@ impl Machine {
                 }
                 continue;
             }
+            if hart.thumb.is_none() && !hart.waiting_for_interrupt {
+                let pc = hart.program_counter();
+                for (address, hook) in &hart.monitor_hooks {
+                    if u64::from(*address) == pc && let CpuHook::HaltWithLog(message) = hook {
+                        crate::monitor_log::record(1, message);
+                        hart.monitor_halted = true;
+                    }
+                }
+                if hart.monitor_halted {
+                    if matched(&self.bus, output) {
+                        return Ok((Stop::OutputMatch, retired));
+                    }
+                    continue;
+                }
+            }
             for (cpu, address, hook) in &mut self.python_hooks {
                 if hart.waiting_for_interrupt {
                     break;
@@ -3515,6 +3548,11 @@ impl Hart {
                     .filter(|(address, _)| *address == self.pc)
                 {
                     match hook {
+                        CpuHook::HaltWithLog(message) => {
+                            crate::monitor_log::record(1, message);
+                            self.monitor_halted = true;
+                            return Ok(Step::Trap);
+                        }
                         CpuHook::Log(message) => {
                             crate::monitor_log::record(1, message);
                             if bus.monitor_log_enabled(1) {
