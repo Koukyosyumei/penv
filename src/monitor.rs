@@ -1047,6 +1047,7 @@ enum Action {
     InvalidPythonSource(String),
     RegisterPyDev(String, u32, u32, bool),
     SetCrashOnAbort(bool),
+    PythonAddressHook(String, Option<u32>, String),
     InstallInstructionHook(String, u32, u32, String),
     PythonAssignment(String, String),
     PythonHook(String, String, Option<String>),
@@ -1369,7 +1370,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
                     | Action::PythonAssignment(..) | Action::ExecutePython(..)
                     | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
-                    | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..) | Action::WaitForTesterLines(..)
+                    | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..) | Action::PythonAddressHook(..) | Action::WaitForTesterLines(..)
                     | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..)
                     | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::SetAdvanceImmediately(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
@@ -2035,6 +2036,13 @@ fn run_commands<'a>(
                             .map(|()| None)
                     }
                 })
+            }
+            Action::PythonAddressHook(cpu, address, source) => {
+                let address = match address {
+                    Some(address) => u64::from(*address),
+                    None => machine.monitor_named_pc(cpu)?,
+                };
+                machine.install_monitor_python_hook(cpu, address, source).map(|()| None)
             }
             Action::AddCpuHook(cpu, address, hook) => {
                 machine.add_monitor_cpu_hook(cpu, *address, hook.clone()).map(|()| None)
@@ -6641,11 +6649,15 @@ fn execute(
                     .ok_or("expected AddHook address and body")?;
                 (Some(crate::parse_address(resolve(address)?)?), body)
             };
-            Some(Action::AddCpuHook(
-                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
-                address,
-                parse_cpu_hook(body.trim())?,
-            ))
+            let cpu = cpu.trim_start_matches("sysbus.").to_owned();
+            let body = body.trim();
+            let action = match parse_cpu_hook(body) {
+                Ok(hook) if !body.starts_with("\"\"\"") => Action::AddCpuHook(cpu, address, hook),
+                _ => Action::PythonAddressHook(
+                    cpu, address, monitor_string(body).ok_or("expected quoted Python hook source")?,
+                ),
+            };
+            Some(action)
         }
         ["logLevel", level, target] => Some(Action::PeripheralLog(resolve(target)?.to_owned(), crate::monitor_log::parse_level(resolve(level)?)?)),
         [target, "ReadQuadWord", offset] => Some(Action::TimerQuadWord(
@@ -6872,7 +6884,7 @@ fn execute(
                         | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                         | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                        | Action::CpuRegister(..) | Action::AddCpuHook(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
+                        | Action::CpuRegister(..) | Action::AddCpuHook(..) | Action::PythonAddressHook(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)
                         | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..)

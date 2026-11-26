@@ -2971,7 +2971,7 @@ impl Machine {
                 }
             }
             for (cpu, address, hook) in &mut self.python_hooks {
-                if hart.waiting_for_interrupt {
+                if hart.waiting_for_interrupt || hart.reset_held || hart.monitor_halted {
                     break;
                 }
                 if *cpu == index && *address == hart.program_counter() {
