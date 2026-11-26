@@ -641,7 +641,7 @@ fn load_platform(
     let mut i2c_eeproms = Vec::new();
     let mut i2c_frams = HashMap::new();
     let mut i2c_fram_relays = Vec::new();
-    let mut i2c_sht45s = Vec::new();
+    let mut i2c_sensors = Vec::new();
     let mut stm32_adc = None;
     let mut stm32_regular_adcs = Vec::new();
     let mut stm32_rtc = None;
@@ -931,7 +931,7 @@ fn load_platform(
             }
             "I2C.MB85RC1MTLo" | "I2C.MB85RC1MTHi" => i2c_fram_relays.push(entry),
             "Memory.GenericI2cEeprom" => i2c_eeproms.push(entry),
-            "I2C.SHT45" => i2c_sht45s.push(entry),
+            "I2C.SHT45" | "I2C.BME280" => i2c_sensors.push(entry),
             "Timers.STM32F4_RTC" => {
                 if stm32_rtc.replace(entry).is_some() {
                     return Err(entry.error("only one STM32 RTC is supported"));
@@ -1867,15 +1867,15 @@ fn load_platform(
             let fram = i2c_frams.get(parent).ok_or_else(|| relay.error("unknown MB85RC1MT backing device"))?;
             fram_relays.entry(controller).or_default().push((relay, address, Rc::clone(fram)));
         }
-        let mut sht45s = HashMap::<_, Vec<_>>::new();
-        for sensor in i2c_sht45s {
+        let mut sensors = HashMap::<_, Vec<_>>::new();
+        for sensor in i2c_sensors {
             keys(sensor, &[])?;
             let (controller, address) = sensor.registration.as_deref()
                 .and_then(|registration| registration.split_once(char::is_whitespace))
                 .filter(|(name, _)| stm32_i2cs.iter().any(|i2c| i2c.name == *name))
                 .ok_or_else(|| sensor.error("expected STM32 I²C controller and address"))?;
             let address = number(address.trim()).map_err(|error| sensor.error(&error))?;
-            sht45s.entry(controller).or_default().push((sensor, address));
+            sensors.entry(controller).or_default().push((sensor, address));
         }
         for i2c in stm32_i2cs {
             let mut device = Stm32I2c::new(i2c.address()?);
@@ -1925,8 +1925,8 @@ fn load_platform(
                 device.attach_fram(address, fram, relay.model == "I2C.MB85RC1MTHi")
                     .map_err(|error| relay.error(&error))?;
             }
-            for (sensor, address) in sht45s.remove(i2c.name.as_str()).unwrap_or_default() {
-                device.attach_sht45(address, sensor.name.clone()).map_err(|error| sensor.error(&error))?;
+            for (sensor, address) in sensors.remove(i2c.name.as_str()).unwrap_or_default() {
+                device.attach_sensor(address, sensor.name.clone(), &sensor.model).map_err(|error| sensor.error(&error))?;
             }
             machine
                 .bus

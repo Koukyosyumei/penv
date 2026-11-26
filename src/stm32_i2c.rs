@@ -1,5 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
+use crate::nrf52840::bme280::Bme280;
+
 const ENABLE: u32 = 1;
 const TX_READY: u32 = 1 << 1;
 const RX_READY: u32 = 1 << 2;
@@ -86,6 +88,7 @@ enum Target {
     Eeprom(Eeprom),
     Fram(Rc<RefCell<Fram>>, bool),
     Sht45(String, Sht45),
+    Bme280(String, Box<Bme280>),
 }
 
 pub(crate) struct Fram(Eeprom);
@@ -164,6 +167,7 @@ impl Target {
                 memory.0.address_latch = usize::from(*high);
             }
             Self::Sht45(..) => {}
+            Self::Bme280(_, sensor) => sensor.start_write(),
         }
     }
 
@@ -172,6 +176,7 @@ impl Target {
             Self::Eeprom(memory) => memory.read(),
             Self::Fram(memory, _) => memory.borrow_mut().0.read(),
             Self::Sht45(_, sensor) => sensor.response.pop_front().unwrap_or(0),
+            Self::Bme280(_, sensor) => sensor.read(),
         }
     }
 
@@ -180,6 +185,7 @@ impl Target {
             Self::Eeprom(memory) => memory.write(value),
             Self::Fram(memory, _) => memory.borrow_mut().0.write(value),
             Self::Sht45(_, sensor) => sensor.write(value),
+            Self::Bme280(_, sensor) => sensor.write(value),
         }
     }
 }
@@ -211,15 +217,24 @@ impl Stm32I2c {
         self.attach_target(address, Target::Fram(fram, high))
     }
 
-    pub(crate) fn attach_sht45(&mut self, address: u32, name: String) -> Result<(), String> {
-        self.attach_target(address, Target::Sht45(name, Sht45::default()))
+    pub(crate) fn attach_sensor(&mut self, address: u32, name: String, model: &str) -> Result<(), String> {
+        let target = match model {
+            "I2C.SHT45" => Target::Sht45(name, Sht45::default()),
+            "I2C.BME280" => Target::Bme280(name, Box::default()),
+            _ => return Err(format!("unsupported STM32 I²C sensor {model:?}")),
+        };
+        self.attach_target(address, target)
     }
 
-    pub(crate) fn sht45(&mut self, name: &str) -> Option<&mut Sht45> {
-        self.targets.iter_mut().find_map(|(_, target)| match target {
-            Target::Sht45(sensor_name, sensor) if sensor_name == name => Some(sensor),
-            _ => None,
-        })
+    pub(crate) fn set_sensor_property(&mut self, name: &str, property: &str, value: &str) -> Result<(), String> {
+        for (_, target) in &mut self.targets {
+            match target {
+                Target::Sht45(sensor_name, sensor) if sensor_name == name => return sensor.set_property(property, value),
+                Target::Bme280(sensor_name, sensor) if sensor_name == name => return sensor.set_property(property, value),
+                _ => {}
+            }
+        }
+        Err(format!("unknown I²C sensor {name:?}"))
     }
 
     fn attach_target(&mut self, address: u32, target: Target) -> Result<(), String> {

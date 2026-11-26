@@ -575,7 +575,7 @@ enum Action {
     CpuPc(String, u32),
     CpuSymbolPc(String, String),
     SymbolAddress(String),
-    Sht45Property(String, String, String),
+    I2cSensorProperty(String, String, String),
     MachineReset(Vec<ResetHook>),
     ReadScalar(u64, ScalarWidth),
     WriteScalar(u64, ScalarWidth, u32),
@@ -1284,8 +1284,8 @@ fn run_commands<'a>(
             Action::CpuWait(cpu, asserted) => {
                 machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
             }
-            Action::Sht45Property(target, property, value) =>
-                machine.bus.set_sht45_property(target, property, value).map(|()| None),
+            Action::I2cSensorProperty(target, property, value) =>
+                machine.bus.set_i2c_sensor_property(target, property, value).map(|()| None),
             Action::SymbolAddress(symbol) => machine.monitor_symbol_address(symbol).and_then(|address| {
                 writeln!(output.reply(), "0x{address:x}").map_err(|error| error.to_string())?;
                 Ok(None)
@@ -4412,10 +4412,10 @@ fn execute(
                 hold,
             ))
         }
-        [target, property @ ("Temperature" | "Humidity" | "SerialNumber"), value]
+        [target, property @ ("Temperature" | "Humidity" | "Pressure" | "SerialNumber"), value]
             if target.trim_start_matches("sysbus.").contains('.') =>
         {
-            Some(Action::Sht45Property(resolve(target)?.into(), (*property).into(), resolve(value)?.into()))
+            Some(Action::I2cSensorProperty(resolve(target)?.into(), (*property).into(), resolve(value)?.into()))
         }
         ["sysbus", "GetSymbolAddress", symbol] => {
             Some(Action::SymbolAddress(unquote(resolve(symbol)?).to_owned()))
