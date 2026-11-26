@@ -44,6 +44,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         "Send Key To Uart": "send_key_to_uart",
         "Test If Uart Is Idle": "uart_idle",
         "Create LED Tester": "create_led",
+        "Set Default Led Timeout": "set_default_led_timeout",
         "Assert LED State": "assert_led",
         "Assert And Hold LED State": "hold_led",
         "Execute Script": "execute_script",
@@ -1101,31 +1102,51 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             self.prompt(content, f"testerId={tester_id}")
         return {"Line": ""}
 
-    def create_led(self, led, timeout=None):
+    def set_default_led_timeout(self, timeout):
+        timeout = self.duration(timeout)
+        if self.rust_monitor:
+            self.operation(f"SetDefaultLedTimeout {timeout}")
+        else:
+            self.led_timeout = timeout
+
+    def create_led(self, led, *args):
+        options = self.log_options(args, {"defaultTimeout", "machine"}, ("defaultTimeout", "machine"))
+        timeout = options.get("defaultTimeout")
+        if self.rust_monitor and re.fullmatch(r"(?:sysbus\.)?[\w.]+", led) and "machine" not in options:
+            deadline = f" timeout={self.duration(timeout)}" if timeout is not None else ""
+            return int(self.operation(f"CreateLedTester {led}{deadline}").strip())
         if self.led or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", led):
             raise Unsupported(f"Create LED Tester: {led}")
-        if timeout is not None and "=" in timeout:
-            timeout = self.option(timeout, "defaultTimeout")
-        self.led_timeout = self.duration(timeout if timeout is not None else 0)
+        if "machine" in options:
+            raise Unsupported(f"Create LED Tester: {led} on a named machine")
+        self.led_timeout = self.duration(timeout if timeout is not None else self.led_timeout or 0)
         self.led = led
         return 0
 
     def hold_led(self, state, *args):
-        fields = ("timeoutAssert", "timeoutHold", "pauseEmulation")
+        fields = ("timeoutAssert", "timeoutHold", "testerId", "pauseEmulation")
         options = self.log_options(args, set(fields), fields)
         if "timeoutAssert" not in options or "timeoutHold" not in options:
             raise Unsupported("Assert And Hold LED State requires both timeouts")
         self.wait_for_led(state, options["timeoutAssert"], options["timeoutHold"],
-                          options.get("pauseEmulation"))
+                          options.get("pauseEmulation"), options.get("testerId"))
 
     def assert_led(self, state, *args):
-        fields = ("timeout", "pauseEmulation")
+        fields = ("timeout", "testerId", "pauseEmulation")
         options = self.log_options(args, set(fields), fields)
         self.wait_for_led(state, options.get("timeout", self.led_timeout),
-                          pause=options.get("pauseEmulation"))
+                          pause=options.get("pauseEmulation"), tester=options.get("testerId"))
 
-    def wait_for_led(self, state, timeout, hold=None, pause=None):
+    def wait_for_led(self, state, timeout, hold=None, pause=None, tester=None):
         state = state.lower()
+        if self.rust_monitor and state in {"true", "false"}:
+            tester = self.parse_tester_id(tester)
+            deadline = "" if timeout is None else f" timeout={self.duration(timeout)}"
+            interval = "" if hold is None else f" hold={self.duration(hold)}"
+            selector = "" if tester is None else f" testerId={tester}"
+            pause_arg = "" if pause is None else f" pauseEmulation={str(self.log_bool(pause)).lower()}"
+            self.operation(f"AssertLedState {state}{deadline}{interval}{selector}{pause_arg}", assertion=True)
+            return
         if not self.led or state not in {"true", "false"} or not (self.started or self.rust_monitor):
             raise Unsupported("LED state needs an attached tester on a running machine")
         deadline = self.duration(timeout)
