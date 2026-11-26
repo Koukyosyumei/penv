@@ -321,6 +321,17 @@ impl Privilege {
         self.machine.value = value;
     }
 
+    pub(crate) fn monitor_privilege(&mut self, value: Option<u64>) -> Result<Option<u64>, String> {
+        let Some(value) = value else { return Ok(Some(self.mode as u64)); };
+        self.mode = match (value, self.levels) {
+            (0, Levels::MachineUser | Levels::MachineSupervisorUser) => Mode::User,
+            (1, Levels::MachineSupervisorUser) => Mode::Supervisor,
+            (3, _) => Mode::Machine,
+            _ => return Err(format!("unsupported RISC-V privilege mode {value}")),
+        };
+        Ok(None)
+    }
+
     pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
         Some(match name {
             "vstart" => return self.vector.as_ref()?.read(0x008),

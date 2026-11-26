@@ -611,6 +611,12 @@ impl Machine {
                 .map_err(|_| "register value exceeds Cortex-M width")?;
             return hart.monitor_integer_register(index, value).map(|value| value.map(u64::from));
         }
+        if register == "priv" {
+            return match &mut hart.rv64 {
+                Some(cpu) => cpu.privilege.monitor_privilege(value),
+                None => hart.csr.monitor_privilege(value),
+            };
+        }
         if register == "resetvector" {
             if let Some(cpu) = &mut hart.rv64 {
                 return Ok(match value {

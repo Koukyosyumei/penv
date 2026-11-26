@@ -340,6 +340,17 @@ impl Csr {
             }
     }
 
+    pub(crate) fn monitor_privilege(&mut self, value: Option<u64>) -> Result<Option<u64>, String> {
+        let Some(value) = value else { return Ok(Some(self.privilege as u64)); };
+        self.privilege = match value {
+            0 if self.user_supported => Privilege::User,
+            1 if self.supervisor.is_some() => Privilege::Supervisor,
+            3 => Privilege::Machine,
+            _ => return Err(format!("unsupported RISC-V privilege mode {value}")),
+        };
+        Ok(None)
+    }
+
     pub fn in_user_mode(&self) -> bool {
         self.privilege == Privilege::User
     }
