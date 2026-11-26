@@ -512,7 +512,13 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
     }
 
     map_ethernet(&mut machine, &entries, plic, sources)?;
-    if board_name == Some("beaglev_starlight.repl")
+    let starlight = board_name == Some("beaglev_starlight.repl")
+        || entries.iter().any(|entry| {
+            entry.model == "Network.SynopsysEthernetMAC"
+                && entry.address().is_ok_and(|address| address == 0x1002_0000)
+                && property(entry, "version") == Some("SynopsysEthernetVersion.BeagleV")
+        });
+    if starlight
         && let Some(gpio) = entries.iter().find(|entry| {
             entry.name == "gpio"
                 && entry.model == "GPIOPort.SiFive_GPIO"
