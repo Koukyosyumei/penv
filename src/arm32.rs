@@ -40,6 +40,26 @@ mod tests {
     use crate::arm_gic::{Gic, Version, Window, WindowKind};
 
     #[test]
+    fn arm_guest_irq_mask_cannot_block_an_irq_routed_to_hyp() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        let mut bus = Bus::default();
+        let mut registers = [0; 32];
+        let mut output = Vec::new();
+        cpu.hcr = 1 << 4;
+        cpu.hvbar = 0x2000;
+        cpu.set_cpsr(I | 0x13, &mut registers).unwrap();
+        cpu.drive_interrupt(0, true).unwrap();
+        let mut pc = 0x3000;
+        assert!(matches!(
+            cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output).unwrap(),
+            Step::AsynchronousException
+        ));
+        assert_eq!(pc, 0x2018);
+        assert_eq!(cpu.cpsr() & 31, 0x1a);
+        assert_eq!(cpu.elr_hyp, 0x3000);
+    }
+
+    #[test]
     fn arm_hcr_injects_irq_at_the_guest_vector() {
         let mut cpu = Cpu::new(Profile::RealTimeV8);
         let mut bus = Bus::default();
@@ -466,6 +486,20 @@ impl Cpu {
 
     pub(crate) fn sleeping(&self) -> bool {
         self.sleep != Sleep::Awake
+    }
+
+    fn physical_interrupt_routed_to_hyp(&self, offset: u32) -> bool {
+        let routing_bit = match offset {
+            0x18 => 1 << 4,
+            0x1c => 1 << 3,
+            _ => return false,
+        };
+        self.is_v8r() && self.hcr & routing_bit != 0
+    }
+
+    fn physical_interrupt_unmasked(&self, offset: u32, mask: u32) -> bool {
+        self.cpsr & mask == 0
+            || self.cpsr & 31 != 0x1a && self.physical_interrupt_routed_to_hyp(offset)
     }
 
     fn software_virtual_inputs(&self) -> (bool, bool) {
@@ -913,8 +947,7 @@ impl Cpu {
         let hypervisor = self.is_v8r() && !virtual_interrupt
             && (status & 31 == 0x1a
                 || mode == 0x1a
-                || offset == 0x18 && self.hcr & (1 << 4) != 0
-                || offset == 0x1c && self.hcr & (1 << 3) != 0);
+                || self.physical_interrupt_routed_to_hyp(offset));
         let control = if hypervisor { self.hsctlr } else { self.sctlr };
         let mode = if hypervisor { 0x1a } else { mode };
         let thumb_exceptions = (control >> 25) & T;
@@ -1429,11 +1462,11 @@ impl Cpu {
             }
             self.sleep = Sleep::Awake;
         }
-        if self.cpsr & F == 0 && fiq {
+        if fiq && self.physical_interrupt_unmasked(0x1c, F) {
             *pc = self.exception(0x11, 0x1c, pc.wrapping_add(4), registers);
             return Ok(Step::AsynchronousException);
         }
-        if self.cpsr & I == 0 && irq {
+        if irq && self.physical_interrupt_unmasked(0x18, I) {
             *pc = self.exception(0x12, 0x18, pc.wrapping_add(4), registers);
             return Ok(Step::AsynchronousException);
         }
