@@ -592,6 +592,8 @@ fn load_platform(
     let mut andes_pits = Vec::new();
     let mut andes_gpios = Vec::new();
     let mut andes_watchdogs = Vec::new();
+    let mut andes_spis = Vec::new();
+    let mut puya_flashes = Vec::new();
     let mut clic = None;
     let mut nvic = None;
     let mut exti = None;
@@ -675,6 +677,13 @@ fn load_platform(
                     .into_iter()
                     .next()
                     .ok_or_else(|| entry.error("missing memory size"))?;
+                if entry.registration.is_none() && entry.model == "Memory.MappedMemory"
+                    && entries.iter().any(|flash| flash.model == "SPI.Puya_P25Q"
+                        && flash.body.iter().any(|(_, line)| line.strip_prefix("underlyingMemory:")
+                            .is_some_and(|name| name.trim() == entry.name)))
+                {
+                    continue;
+                }
                 if entry.registration_list().is_none()
                     && let Some(address) = entry.sysbus_address()?
                     && let Ok(base) = crate::parse_bus_address(address)
@@ -734,6 +743,8 @@ fn load_platform(
                 }
             }
             "SPI.LiteX_SPI" => litex_spis.push(entry),
+            "SPI.AndesATCSPI200" => andes_spis.push(entry),
+            "SPI.Puya_P25Q" => puya_flashes.push(entry),
             "SPI.SPILoopback" => {
                 keys(entry, &[])?;
                 spi_loopbacks.push(entry);
@@ -2658,6 +2669,46 @@ fn load_platform(
             machine.bus.map_plic(entry.address()?, sources, &outputs[..count], priorities.unwrap_or(true))
         }.map_err(|e| entry.error(&e))?;
         plic_config.get_or_insert((entry, sources));
+    }
+    let mut flash_sizes = HashMap::new();
+    for flash in puya_flashes {
+        let parent = flash.registration.as_deref().ok_or_else(|| flash.error("expected SPI parent"))?;
+        if !andes_spis.iter().any(|spi| spi.name == parent) {
+            return Err(flash.error("Puya flash requires an Andes SPI controller"));
+        }
+        let properties = keys(flash, &["underlyingMemory"])?;
+        let [(_, memory_name)] = properties.as_slice() else {
+            return Err(flash.error("expected Puya flash backing memory"));
+        };
+        let memory = entries.iter().find(|entry| entry.name == *memory_name
+            && entry.model == "Memory.MappedMemory" && entry.registration.is_none())
+            .ok_or_else(|| flash.error("expected unregistered mapped memory for Puya flash"))?;
+        let properties = keys(memory, &["size"])?;
+        let [(_, size)] = properties.as_slice() else {
+            return Err(memory.error("missing Puya backing size"));
+        };
+        let size = number(size).map_err(|error| memory.error(&error))?;
+        if !(1..=0x100_0000).contains(&size) || flash_sizes.insert(parent, size).is_some() {
+            return Err(flash.error("invalid or duplicate Puya flash"));
+        }
+    }
+    for entry in andes_spis {
+        let mut irq = None;
+        for (_, wire) in &entry.body {
+            let (pin, destination) = wire.split_once("->").ok_or_else(|| entry.error("expected SPI wiring"))?;
+            let (target, source) = destination.split_once('@').ok_or_else(|| entry.error("expected SPI PLIC destination"))?;
+            let source = number(source.trim()).map_err(|error| entry.error(&error))?;
+            let (_, sources) = plic_config.filter(|(plic, _)| plic.name == target.trim())
+                .ok_or_else(|| entry.error("unknown SPI PLIC destination"))?;
+            if irq.is_some() || !matches!(pin.trim(), "" | "IRQ") || !(1..=sources).contains(&source) {
+                return Err(entry.error("invalid SPI PLIC source"));
+            }
+            irq = machine.bus.plic_index(target.trim()).map(|index| (index, source));
+        }
+        let size = flash_sizes.get(entry.name.as_str()).map(|&size| size as usize);
+        machine.bus.map_andes_spi(crate::andes_spi::AndesSpi::new(
+            entry.address()?, entry.name.clone(), irq, size,
+        )).map_err(|error| entry.error(&error))?;
     }
     for entry in andes_watchdogs {
         let mut frequency = None;

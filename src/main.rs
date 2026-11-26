@@ -42,6 +42,7 @@ mod clint;
 mod andes_pit;
 mod andes_gpio;
 mod andes_watchdog;
+mod andes_spi;
 mod riscv_machine_timer;
 mod collapsed_profile;
 mod compressed;
