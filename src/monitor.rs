@@ -1714,7 +1714,15 @@ fn run_commands<'a>(
                 }
                 Ok(None)
             }
-            Action::PeripheralLog(target, level) => machine.bus.set_peripheral_log_level(target, *level).map(|()| None),
+            Action::PeripheralLog(target, level) => {
+                let name = target.strip_prefix("sysbus.").unwrap_or(target);
+                if machine.monitor_named_pc(name).is_ok() {
+                    crate::monitor_log::set_target_level(name, *level);
+                    Ok(None)
+                } else {
+                    machine.bus.set_peripheral_log_level(target, *level).map(|()| None)
+                }
+            }
             Action::EgisSysconProperty(target, property) => {
                 let value = machine.bus.egis_syscon_property(target, property)
                     .ok_or_else(|| format!("unknown AOSMU property {target} {property}"))?;
