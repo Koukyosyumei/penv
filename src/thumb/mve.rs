@@ -216,6 +216,15 @@ enum BinaryOperation {
     Minimum,
     SaturatingAdd,
     SaturatingSubtract,
+    And,
+    BitClear,
+    Or,
+    OrNot,
+    ExclusiveOr,
+    Not,
+    SaturatingAbsolute,
+    SaturatingNegate,
+    ComplexAdd { rotate_270: bool, halve: bool },
 }
 
 pub(super) struct VectorArithmetic {
@@ -232,6 +241,55 @@ impl VectorArithmetic {
     pub(super) fn decode(high: u32, low: u32) -> Option<Self> {
         use BinaryOperation::*;
         let instruction = high << 16 | low;
+        let unary = match instruction & 0xffb3_1fd1 {
+            0xffb0_0740 => Some(SaturatingAbsolute),
+            0xffb0_07c0 => Some(SaturatingNegate),
+            _ => None,
+        };
+        if let Some(operation) = unary {
+            let size = (high >> 2) & 3;
+            if size == 3 || high & 0x40 != 0 || low & 0xa0 != 0 {
+                return None;
+            }
+            let source = ((low >> 1) & 7) as usize;
+            return Some(Self {
+                operation,
+                destination: (low >> 13) as usize,
+                left: source,
+                right: source,
+                scalar: false,
+                unsigned: false,
+                bits: 8 << size,
+            });
+        }
+        let logic = match instruction & 0xffb1_1f51 {
+            0xef00_0150 => Some(And),
+            0xef10_0150 => Some(BitClear),
+            0xef20_0150 => Some(Or),
+            0xef30_0150 => Some(OrNot),
+            0xff00_0150 => Some(ExclusiveOr),
+            _ if instruction & 0xffbf_1fd1 == 0xffb0_05c0 => Some(Not),
+            _ => None,
+        };
+        if let Some(operation) = logic {
+            if high & 0x40 != 0 || low & 0xa0 != 0 {
+                return None;
+            }
+            let source = ((low >> 1) & 7) as usize;
+            return Some(Self {
+                operation,
+                destination: (low >> 13) as usize,
+                left: if matches!(operation, Not) {
+                    source
+                } else {
+                    ((high >> 1) & 7) as usize
+                },
+                right: source,
+                scalar: false,
+                unsigned: true,
+                bits: 8,
+            });
+        }
         let (operation, scalar, unsigned) = match instruction & 0xef81_1f51 {
             0xef00_0040 => (HalfAdd, false, high & 0x1000 != 0),
             0xef00_0140 => (RoundHalfAdd, false, high & 0x1000 != 0),
@@ -240,6 +298,14 @@ impl VectorArithmetic {
             0xef00_0650 => (Minimum, false, high & 0x1000 != 0),
             0xef00_0050 => (SaturatingAdd, false, high & 0x1000 != 0),
             0xef00_0250 => (SaturatingSubtract, false, high & 0x1000 != 0),
+            0xee00_0f00 | 0xee00_1f00 => (
+                ComplexAdd {
+                    rotate_270: low & 0x1000 != 0,
+                    halve: high & 0x1000 == 0,
+                },
+                false,
+                false,
+            ),
             _ => {
                 let operation = match instruction & 0xef81_1f70 {
                     0xee00_0f40 => HalfAdd,
@@ -313,6 +379,33 @@ impl Thumb {
                 HalfAdd => (a + b) >> 1,
                 RoundHalfAdd => (a + b + 1) >> 1,
                 HalfSubtract => (a - b) >> 1,
+                And => a & b,
+                BitClear => a & !b,
+                Or => a | b,
+                OrNot => a | !b,
+                ExclusiveOr => a ^ b,
+                Not => !a,
+                SaturatingAbsolute | SaturatingNegate => {
+                    let value = if matches!(inst.operation, SaturatingAbsolute) {
+                        a.abs()
+                    } else {
+                        -a
+                    };
+                    saturated |= value > maximum;
+                    value.min(maximum)
+                }
+                ComplexAdd { rotate_270, halve } => {
+                    let lane_index = shift / inst.bits;
+                    let alternate_shift = (lane_index ^ 1) * inst.bits;
+                    let alternate = lane(right >> alternate_shift);
+                    let subtract = (lane_index & 1 == 0) != rotate_270;
+                    let value = if subtract {
+                        a - alternate
+                    } else {
+                        a + alternate
+                    };
+                    value >> u32::from(halve)
+                }
                 Maximum => a.max(b),
                 Minimum => a.min(b),
                 SaturatingAdd | SaturatingSubtract => {
