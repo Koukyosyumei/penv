@@ -385,6 +385,7 @@ pub struct Bus {
     pub(crate) guest_access: Option<(usize, u32)>,
     pub(crate) guest_cpu_names: Vec<String>,
     unimplemented_register_peripherals: Vec<(u32, String)>,
+    subobject_testers: Vec<(u32, String, u32)>,
     pub monitor_user_state: String,
     pub(crate) csr_hooks: BTreeMap<(usize, u32), crate::cpu_python_hook::Hook>,
     pub(crate) thumb_block_hooks: [Option<crate::cpu_python_hook::Hook>; 2],
@@ -3454,6 +3455,7 @@ impl Bus {
                 })
             || self.unimplemented_register_peripherals.iter()
                 .any(|(base, _)| overlaps_range(start, end, *base, 0x100))
+            || self.subobject_testers.iter().any(|(base, _, _)| overlaps_range(start, end, *base, 4))
             || self
                 .command_error_peripherals
                 .iter()
@@ -3917,6 +3919,10 @@ impl Bus {
 
     pub(crate) fn set_peripheral_log_level(&mut self, target: &str, level: i8) -> Result<(), String> {
         let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        if self.subobject_testers.iter().any(|(_, registered, _)| registered == name) {
+            crate::monitor_log::set_target_level(name, level);
+            return Ok(());
+        }
         if self.andes_watchdogs.iter().any(|watchdog| watchdog.name == name)
             || self.andes_pit.iter().any(|pit| pit.name == name)
             || self.plic_index(name).is_some()
@@ -6474,6 +6480,14 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn map_subobject_tester(&mut self, address: u32, name: &str) -> Result<(), String> {
+        if address & 3 != 0 || self.overlaps(u64::from(address), u64::from(address) + 4) {
+            return Err(format!("invalid or overlapping subobject tester register at {address:#x}"));
+        }
+        self.subobject_testers.push((address, name.to_owned(), 0));
+        Ok(())
+    }
+
     fn log_unimplemented_register(&self, address: u32, value: Option<u32>) -> bool {
         let Some((offset, name)) = self.unimplemented_register_peripherals.iter().find_map(|(base, name)| {
             address.checked_sub(*base).filter(|offset| *offset < 0x100).map(|offset| (offset, name))
@@ -7404,6 +7418,9 @@ impl Bus {
     }
 
     fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if N == 4 && let Some((_, _, value)) = self.subobject_testers.iter().find(|(base, _, _)| *base == address) {
+            return Ok(*value);
+        }
         if N == 4 && self.log_unimplemented_register(address, None) {
             return Ok(0);
         }
@@ -8287,6 +8304,12 @@ impl Bus {
         uart: &mut impl Write,
         writer: Option<usize>,
     ) -> Result<(), BusError> {
+        if width == 4 && let Some((_, name, register)) = self.subobject_testers.iter_mut().find(|(base, _, _)| *base == address) {
+            *register = value;
+            crate::monitor_log::record(-1, &format!("{name}: Hello from object"));
+            crate::monitor_log::record(-1, &format!("{name}: Hello from sub-object"));
+            return Ok(());
+        }
         if width == 4 && self.log_unimplemented_register(address, Some(value)) {
             return Ok(());
         }

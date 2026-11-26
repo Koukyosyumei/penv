@@ -103,7 +103,19 @@ pub(crate) fn assemble_source(
         let instruction = line.split_once(':').map_or(*line, |(_, text)| text.trim_start());
         matches!(instruction.split_ascii_whitespace().next(), Some(".word" | ".short" | ".byte" | ".align" | ".balign"))
     });
-    let instructions = instructions
+    // A mode directive at a label applies to the instructions at that
+    // address. Mark Thumb entry labels so ARM BLX relocations interwork.
+    let mut normalized = Vec::with_capacity(instructions.len());
+    let mut instructions = instructions.into_iter().peekable();
+    while let Some(line) = instructions.next() {
+        if arm && line.ends_with(':') && instructions.peek() == Some(&".thumb") {
+            instructions.next();
+            normalized.extend([".thumb", ".thumb_func", line]);
+        } else {
+            normalized.push(line);
+        }
+    }
+    let instructions = normalized
         .into_iter()
         .map(|line| {
             let line = normalize_vector_memory_operand(line);

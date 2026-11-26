@@ -548,6 +548,7 @@ enum Action {
     GpioOverlay(Vec<(String, u8, String, u8)>),
     ScopedRamOverlay(String, String, u64, u32),
     PeripheralList,
+    SubobjectTester(String, u32),
     IlluminanceFeed(String, PathBuf),
     RunRemaining,
     TimeSourceInfo,
@@ -1452,6 +1453,7 @@ fn run_commands<'a>(
                     .map_err(|error| format!("KeywordException: Error E39: Exception was thrown during registration: {error}"))?;
                 Ok(None)
             }
+            Action::SubobjectTester(name, address) => machine.bus.map_subobject_tester(*address, name).map(|()| None),
             Action::PeripheralList => {
                 for name in machine.bus.monitor_bus_device_names() {
                     writeln!(output.reply(), "{name}").map_err(|error| error.to_string())?;
@@ -3670,7 +3672,7 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                         state.machine = true;
                         state.boot.platform = Some(included);
                     }
-                    Some("cs") if ["BusFaultingPeripheral.cs", "UnimplementedRegistersPeripheral.cs"]
+                    Some("cs") if ["BusFaultingPeripheral.cs", "UnimplementedRegistersPeripheral.cs", "SubobjectTester.cs"]
                         .iter().any(|file| fs::canonicalize(root.join("tests/unit-tests").join(file))
                             .is_ok_and(|native| fs::canonicalize(&included).is_ok_and(|source| source == native))) => {}
                     Some("repl" | "cs" | "py") => {
@@ -4117,6 +4119,11 @@ fn parse_reset_hooks(mut commands: &str, hooks: &mut Vec<ResetHook>) -> Result<(
 fn parse_live_overlay(source: &str, root: &Path) -> Result<Action, String> {
     let entries = crate::repl_parser::parse_inline(source, root)?;
     if let [entry] = entries.as_slice()
+        && entry.model == "Dynamic.SubobjectTester" && entry.body.is_empty()
+    {
+        return Ok(Action::SubobjectTester(entry.name.clone(), entry.address()?));
+    }
+    if let [entry] = entries.as_slice()
         && matches!(entry.model.as_str(), "Memory.ArrayMemory" | "Memory.MappedMemory")
         && let Some(registration) = entry.registration.as_deref()
         && let Some(fields) = registration.strip_prefix("sysbus new Bus.BusPointRegistration")
@@ -4257,6 +4264,15 @@ fn execute(
         _ => {}
     }
     let resolve = |value| resolve(variables, value);
+    if let ["EnsureTypeIsLoaded", identifier] = words {
+        let identifier = unquote(resolve(identifier)?);
+        return match identifier {
+            "Antmicro.Renode.Peripherals.Dynamic.SubobjectTester"
+            | "Antmicro.Renode.Peripherals.UnimplementedRegistersPeripheral"
+            | "Antmicro.Renode.Peripherals.Mocks.BusFaultingPeripheral" => Ok(()),
+            _ => Err(format!("unsupported peripheral type {identifier:?}")),
+        };
+    }
     if let ["emulation", "SetGlobalSerialExecution", value] = words {
         if parse_tester_bool(resolve(value)?)? {
             // This scheduler executes harts serially.
@@ -5524,7 +5540,7 @@ fn execute(
                     action,
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
                         | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
-                        | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
+                        | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)

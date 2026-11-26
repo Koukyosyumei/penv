@@ -899,6 +899,11 @@ fn load_platform(
             "IRQControllers.PlatformLevelInterruptController" | "IRQControllers.AndesNCEPLIC100" => plic.push(entry),
             "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
             "Miscellaneous.LED" => gpio_leds.push(entry),
+            "Dynamic.SubobjectTester" => {
+                keys(entry, &[])?;
+                machine.bus.map_subobject_tester(entry.address()?, &entry.name)
+                    .map_err(|error| entry.error(&error))?;
+            }
             "UnimplementedRegistersPeripheral" => {
                 keys(entry, &[])?;
                 machine.bus.map_unimplemented_register_peripheral(entry.address()?, &entry.name)
