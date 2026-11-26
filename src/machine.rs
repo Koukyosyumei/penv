@@ -2973,13 +2973,23 @@ impl Machine {
                     continue;
                 }
             }
+            let mut removed_hooks = Vec::new();
             for (cpu, address, hook) in &mut self.python_hooks {
                 if hart.waiting_for_interrupt || hart.reset_held || hart.monitor_halted {
                     break;
                 }
-                if *cpu == index && *address == hart.program_counter() {
+                if *cpu == index && *address == hart.program_counter()
+                    && !removed_hooks.contains(address)
+                {
                     hook.execute(&mut self.bus, *address)?;
+                    removed_hooks.extend(hook.take_removed_hooks());
                 }
+            }
+            if !removed_hooks.is_empty() {
+                self.python_hooks.retain(|(cpu, address, _)| {
+                    *cpu != index || !removed_hooks.contains(address)
+                });
+                hart.monitor_hooks.retain(|(address, _)| !removed_hooks.contains(&u64::from(*address)));
             }
             let trace = self.pc_trace.as_ref().filter(|(id, _)| *id == index);
             let trace_pc = trace.map(|_| {

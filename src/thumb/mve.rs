@@ -206,3 +206,137 @@ impl Thumb {
         Ok(())
     }
 }
+
+#[derive(Clone, Copy)]
+enum BinaryOperation {
+    HalfAdd,
+    RoundHalfAdd,
+    HalfSubtract,
+    Maximum,
+    Minimum,
+    SaturatingAdd,
+    SaturatingSubtract,
+}
+
+pub(super) struct VectorArithmetic {
+    operation: BinaryOperation,
+    destination: usize,
+    left: usize,
+    right: usize,
+    scalar: bool,
+    unsigned: bool,
+    bits: u32,
+}
+
+impl VectorArithmetic {
+    pub(super) fn decode(high: u32, low: u32) -> Option<Self> {
+        use BinaryOperation::*;
+        let instruction = high << 16 | low;
+        let (operation, scalar, unsigned) = match instruction & 0xef81_1f51 {
+            0xef00_0040 => (HalfAdd, false, high & 0x1000 != 0),
+            0xef00_0140 => (RoundHalfAdd, false, high & 0x1000 != 0),
+            0xef00_0240 => (HalfSubtract, false, high & 0x1000 != 0),
+            0xef00_0640 => (Maximum, false, high & 0x1000 != 0),
+            0xef00_0650 => (Minimum, false, high & 0x1000 != 0),
+            0xef00_0050 => (SaturatingAdd, false, high & 0x1000 != 0),
+            0xef00_0250 => (SaturatingSubtract, false, high & 0x1000 != 0),
+            _ => {
+                let operation = match instruction & 0xef81_1f70 {
+                    0xee00_0f40 => HalfAdd,
+                    0xee00_1f40 => HalfSubtract,
+                    0xee00_0f60 => SaturatingAdd,
+                    0xee00_1f60 => SaturatingSubtract,
+                    _ => return None,
+                };
+                (operation, true, high & 0x1000 != 0)
+            }
+        };
+        let size = (high >> 4) & 3;
+        if size == 3 || high & 0x40 != 0 || low & 0x80 != 0 || !scalar && low & 0x20 != 0 {
+            return None;
+        }
+        Some(Self {
+            operation,
+            destination: (low >> 13) as usize,
+            left: ((high >> 1) & 7) as usize,
+            right: if scalar {
+                (low & 15) as usize
+            } else {
+                ((low >> 1) & 7) as usize
+            },
+            scalar,
+            unsigned,
+            bits: 8 << size,
+        })
+    }
+}
+
+impl Thumb {
+    pub(super) fn execute_vector_arithmetic(
+        &mut self,
+        inst: VectorArithmetic,
+        registers: &[u32; 32],
+    ) {
+        use BinaryOperation::*;
+        let read_q = |q: usize| {
+            u128::from_le_bytes(std::array::from_fn(|index| {
+                self.fp[q * 4 + index / 4].to_le_bytes()[index % 4]
+            }))
+        };
+        let left = read_q(inst.left);
+        let right = if inst.scalar { 0 } else { read_q(inst.right) };
+        let limit = 1i64 << inst.bits;
+        let mask = (limit - 1) as u128;
+        let lane = |value: u128| {
+            let value = (value & mask) as i64;
+            if !inst.unsigned && value >= limit / 2 {
+                value - limit
+            } else {
+                value
+            }
+        };
+        let (minimum, maximum) = if inst.unsigned {
+            (0, limit - 1)
+        } else {
+            (-limit / 2, limit / 2 - 1)
+        };
+        let mut result = 0u128;
+        let mut saturated = false;
+        for shift in (0..128).step_by(inst.bits as usize) {
+            let a = lane(left >> shift);
+            let b = lane(if inst.scalar {
+                registers[inst.right].into()
+            } else {
+                right >> shift
+            });
+            let value = match inst.operation {
+                HalfAdd => (a + b) >> 1,
+                RoundHalfAdd => (a + b + 1) >> 1,
+                HalfSubtract => (a - b) >> 1,
+                Maximum => a.max(b),
+                Minimum => a.min(b),
+                SaturatingAdd | SaturatingSubtract => {
+                    let value = if matches!(inst.operation, SaturatingAdd) {
+                        a + b
+                    } else {
+                        a - b
+                    };
+                    let clamped = value.clamp(minimum, maximum);
+                    saturated |= clamped != value;
+                    clamped
+                }
+            };
+            result |= (value as u128 & mask) << shift;
+        }
+        for (word, value) in self.fp[inst.destination * 4..inst.destination * 4 + 4]
+            .iter_mut()
+            .enumerate()
+        {
+            *value = (result >> (32 * word)) as u32;
+        }
+        if saturated {
+            self.fpscr |= 1 << 27;
+        }
+        self.fp_active = true;
+    }
+}

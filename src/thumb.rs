@@ -2268,9 +2268,10 @@ impl Thumb {
                     self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
                 } else {
                     let vector = self.armv81m.then(|| mve::VectorTransfer::decode(inst, low)).flatten();
+                    let arithmetic = self.armv81m.then(|| mve::VectorArithmetic::decode(inst, low)).flatten();
                     let secure_fp_transfer = self.trustzone && self.secure
                         && inst & 0xffe0 == 0xec20 && low == 0x0a00;
-                    if vector.is_some() || secure_fp_transfer || Self::is_fpu_instruction(inst, low) {
+                    if vector.is_some() || arithmetic.is_some() || secure_fp_transfer || Self::is_fpu_instruction(inst, low) {
                         if self.cortex_m33 && let Some(nvic) = bus.nvic.as_mut().filter(|nvic| !nvic.fpu_access()) {
                             const USAGEFAULT: u8 = 6;
                             nvic.record_fault(None);
@@ -2296,6 +2297,8 @@ impl Thumb {
                     }
                     if let Some(transfer) = vector {
                         self.execute_vector_transfer(transfer, inst, low, r, bus, output)?;
+                    } else if let Some(arithmetic) = arithmetic {
+                        self.execute_vector_arithmetic(arithmetic, r);
                     } else if secure_fp_transfer {
                         self.transfer_secure_fp(inst, r, bus, output)?;
                     } else if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {

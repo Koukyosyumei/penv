@@ -125,6 +125,8 @@ class CPU(Credential):
         return HexValue(scope['pc'])
     def DisassembleBlock(self, address, length):
         return bytes.fromhex(rpc(f'disassemble {address} {length}')).decode()
+    def RemoveHooksAt(self, address):
+        rpc(f'remove-hooks {address}')
     def GetItState(self):
         state = scope.get('itstate', 0)
         if state == 0:
@@ -207,6 +209,7 @@ pub(crate) struct Hook {
     logger: Option<String>,
     disassembler: Option<(Option<usize>, &'static str, String)>,
     monitor_output: String,
+    removed_hooks: Vec<u64>,
 }
 
 pub(crate) fn symbol(file: &Path, name: &str) -> Result<u64, String> {
@@ -278,12 +281,17 @@ impl Hook {
             symbols,
             logger,
             disassembler: None,
+            removed_hooks: Vec::new(),
             monitor_output: String::new(),
         };
         if hook.reply()? != "ready" {
             return Err("CPU Python hook failed to initialize".into());
         }
         Ok(hook)
+    }
+
+    pub(crate) fn take_removed_hooks(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.removed_hooks)
     }
 
     pub(crate) fn set_disassembler(&mut self, target: (Option<usize>, &'static str, String)) {
@@ -440,6 +448,11 @@ impl Hook {
                     let offset = offset.parse().map_err(|_| "invalid peripheral register offset")?;
                     let address = bus.named_word_register(&path, offset).ok_or("unknown peripheral register")?;
                     bus.read_scalar::<4>(address, true).map(|word| word.to_string()).map_err(|error| error.to_string())
+                })(),
+                "remove-hooks" => (|| {
+                    let address = argument.parse::<u64>().map_err(|error| error.to_string())?;
+                    self.removed_hooks.push(address);
+                    Ok(String::new())
                 })(),
                 "disassemble" => (|| {
                     let (address, length) = argument.split_once(' ').ok_or("invalid disassembly range")?;
