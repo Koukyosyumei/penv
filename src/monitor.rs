@@ -702,7 +702,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
             matches!(
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
-                    | Action::AssembleBlock(..) | Action::BusScalar(_)
+                    | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::BusScalar(_)
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
@@ -4556,6 +4556,7 @@ fn execute(
                     action,
                     Action::BusScalar(_)
                         | Action::AssembleBlock(..)
+                        | Action::AddStackAccessHook(..)
                         | Action::AssertCpuValue(..)
                         | Action::ReadCpuPc(_)
                         | Action::ExecutionMode(..)
