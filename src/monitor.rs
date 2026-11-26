@@ -2501,7 +2501,7 @@ fn run_commands<'a>(
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(id, pattern, regex.clone(), *mode, *first_only).and_then(|watch| {
                     let pause = !*absent && pause.unwrap_or(machine.bus.default_uart_pause);
-                    run_uart_watch(machine, watch, limit, Some(pause), &mut output)
+                    run_uart_watch(machine, watch, limit, Some(pause), &mut [], &mut output)
                 }).and_then(|(stop, count, line)| {
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -2676,8 +2676,7 @@ fn run_commands<'a>(
                 retired += count;
                 Ok(None)
             }
-            Action::WriteTesterUart(id, text, ending, echo, pause) => {
-                let (machine, id) = session.uart_machine(machine, *id)?;
+            Action::WriteTesterUart(id, text, ending, echo, pause) => session.with_uart_peers(machine, *id, |machine, id, peers| {
                 let target = machine.bus.uart_tester_target(id)?.to_owned();
                 let cycles = if echo.unwrap_or_else(|| machine.bus.default_uart_echo()) && !text.is_empty() {
                     Some(uart_wait_cycles(machine, id, None)?)
@@ -2695,7 +2694,7 @@ fn run_commands<'a>(
                     let start = machine.elapsed_steps();
                     let limit = cycles.min(budget);
                     let pause = pause.unwrap_or(machine.bus.default_uart_pause);
-                    let (stop, count, _) = run_uart_watch(machine, watch, limit, Some(pause), &mut output)
+                    let (stop, count, _) = run_uart_watch(machine, watch, limit, Some(pause), peers, &mut output)
                         .map_err(|error| format!("{}:{}: {error}", command.source.display(), command.line))?;
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -2707,7 +2706,7 @@ fn run_commands<'a>(
                 } else {
                     Ok(None)
                 }
-            }
+            }),
             Action::WriteUartLine(target, text, ending) => machine
                 .external_event(ExternalEvent::UartLine(
                     target.clone(),
@@ -3749,10 +3748,11 @@ fn run_uart_watch(
     watch: UartWatch,
     budget: u64,
     pause: Option<bool>,
+    peers: &mut [&mut Machine],
     output: &mut impl Write,
 ) -> Result<(Stop, u64, Option<String>), String> {
     let result = if let Some(pause) = pause {
-        drive_tester_watch(machine, watch, budget, pause, output)
+        drive_networked_tester_watch(machine, watch, budget, pause, peers, output)
     } else {
         drive_uart_watch(machine, watch, budget, output)
     };
@@ -3778,7 +3778,7 @@ fn wait_for_uart(
 ) -> Result<(Stop, u64), String> {
     if let Some(target) = target {
         let watch = machine.bus.watch_stm32_uart(target, pattern, end)?;
-        run_uart_watch(machine, watch, budget, None, output).map(|(stop, count, _)| (stop, count))
+        run_uart_watch(machine, watch, budget, None, &mut [], output).map(|(stop, count, _)| (stop, count))
     } else {
         let history = output
             .history
@@ -7814,12 +7814,12 @@ greet "hello world"
             machine.bus.write(0x1000, 4, u32::from(*byte), &mut output).unwrap();
         }
         let watch = machine.bus.watch_uart_tester_text(Some(id), "A", None, UartWaitMode::Lf, None).unwrap();
-        assert_eq!(run_uart_watch(&mut machine, watch, 0, Some(true), &mut output).unwrap().0, Stop::OutputMatch);
+        assert_eq!(run_uart_watch(&mut machine, watch, 0, Some(true), &mut [], &mut output).unwrap().0, Stop::OutputMatch);
         assert!(machine.primary.monitor_paused);
         assert_eq!(machine.elapsed_steps(), 0);
 
         let watch = machine.bus.watch_uart_tester_text(Some(id), "B", None, UartWaitMode::Lf, None).unwrap();
-        assert_eq!(run_uart_watch(&mut machine, watch, 10, Some(false), &mut output).unwrap().0, Stop::Limit);
+        assert_eq!(run_uart_watch(&mut machine, watch, 10, Some(false), &mut [], &mut output).unwrap().0, Stop::Limit);
         assert!(!machine.primary.monitor_paused);
         assert_eq!(machine.elapsed_steps(), 10);
 
