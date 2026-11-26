@@ -431,6 +431,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     if reply == "OK":
                         self.commands.append(command)
                         return value
+                if re.match(r"emulation\s+(?:RunFor|RunUntil|RunToNearestSyncPoint)(?:\s|$)", command):
+                    return self.operation(command)
                 # Preserve immediate command results and register write rejections.
                 if (re.match(r"[\w.]+\s+(?:AssembleBlock|SetRegister)(?:\s|$)", command)
                         or re.fullmatch(r"(?:sysbus\.)?cpu[\w]* Reset", command)):
