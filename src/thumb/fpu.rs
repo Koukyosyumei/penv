@@ -49,6 +49,7 @@ impl Thumb {
     pub(crate) fn create_fp_context(&mut self, bus: &Bus) {
         if !self.fp_active && bus.nvic.as_ref().is_some_and(Nvic::fpu_auto_preserve) {
             self.fp_active = true;
+            self.secure_fp_active = self.armv81m && self.secure;
             self.fpscr = if self.armv81m { 4 << 16 } else { 0 };
             self.vpr = 0;
         }
@@ -124,6 +125,17 @@ impl Thumb {
         register: &str,
         value: Option<u64>,
     ) -> Option<Result<Option<u64>, String>> {
+        if register == "fpdscr_ns" && self.armv81m {
+            return Some(match value {
+                Some(value) => u32::try_from(value)
+                    .map(|value| {
+                        self.fpdscr_ns = value;
+                        None
+                    })
+                    .map_err(|_| "FPDSCR_NS value exceeds 32 bits".into()),
+                None => Ok(Some(u64::from(self.fpdscr_ns))),
+            });
+        }
         if register == "vpr" && self.armv81m {
             return Some(match value {
                 Some(value) => u32::try_from(value)
@@ -734,5 +746,151 @@ mod tests {
         assert_eq!(thumb.fp[0], 6.0f32.to_bits());
         assert_eq!(thumb.fpscr, 0x6000_0000);
         assert!(thumb.fp_active);
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SystemTransfer {
+    system_register: u32,
+    read_system: bool,
+    operand: SystemOperand,
+}
+
+#[derive(Clone, Copy)]
+enum SystemOperand {
+    Core(usize),
+    Memory {
+        base: usize,
+        offset: u32,
+        pre_index: bool,
+        writeback: bool,
+    },
+}
+
+impl SystemTransfer {
+    pub(super) fn decode(high: u32, low: u32) -> Option<Self> {
+        let instruction = high << 16 | low;
+        let system_register;
+        let read_system;
+        let operand;
+        if instruction & 0xffe0_0fff == 0xeee0_0a10 {
+            system_register = high & 15;
+            read_system = high & 16 != 0;
+            let core = (low >> 12) as usize;
+            if core == 15 && !(read_system && system_register == 1) {
+                return None;
+            }
+            operand = SystemOperand::Core(core);
+        } else if instruction & 0xfe00_1f80 == 0xec00_0f80 && high & 0x120 != 0 {
+            system_register = (low >> 13) | ((high >> 3) & 8);
+            read_system = high & 16 == 0;
+            let base = (high & 15) as usize;
+            if base == 15 {
+                return None;
+            }
+            let offset = (low & 0x7f) * 4;
+            operand = SystemOperand::Memory {
+                base,
+                offset: if high & 0x80 == 0 { offset.wrapping_neg() } else { offset },
+                pre_index: high & 0x100 != 0,
+                writeback: high & 0x20 != 0,
+            };
+        } else {
+            return None;
+        }
+        matches!(system_register, 1 | 2 | 12..=15).then_some(Self {
+            system_register,
+            read_system,
+            operand,
+        })
+    }
+
+    pub(super) fn inactive_ns(self, cpu: &Thumb, bus: &Bus) -> bool {
+        self.system_register == 14 && cpu.secure && !cpu.fp_active
+            && bus.nvic.as_ref().is_some_and(Nvic::fpu_auto_preserve)
+    }
+}
+
+impl Thumb {
+    pub(super) fn transfer_fp_system(
+        &mut self,
+        transfer: SystemTransfer,
+        registers: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<(), String> {
+        const NZCVQC: u32 = 0xf800_0000;
+        let id = transfer.system_register;
+        if id >= 14 && !self.secure {
+            return Err("secure floating-point register accessed from Non-secure state".into());
+        }
+        let inactive = transfer.inactive_ns(self, bus);
+        if id != 14 {
+            self.create_fp_context(bus);
+        }
+        let privileged_access = id != 12 || !self.unprivileged();
+        let do_access = privileged_access && (transfer.read_system || !inactive);
+        let result = if transfer.read_system {
+            match id {
+                1 => self.fpscr,
+                2 => self.fpscr & NZCVQC,
+                12 => self.vpr,
+                13 => self.vpr & 0xffff,
+                14 if inactive => self.fpdscr_ns,
+                14 | 15 => (self.fpscr & 0x0fff_ffff) | (u32::from(self.secure_fp_active) << 31),
+                _ => unreachable!(),
+            }
+        } else {
+            0
+        };
+        let mut incoming = 0;
+        match transfer.operand {
+            SystemOperand::Core(index) if do_access => {
+                if transfer.read_system {
+                    if index == 15 {
+                        self.set_apsr((self.apsr() & 0x0fff_ffff) | (result & 0xf000_0000));
+                    } else {
+                        registers[index] = result;
+                    }
+                } else {
+                    incoming = registers[index];
+                }
+            }
+            SystemOperand::Core(_) => {}
+            SystemOperand::Memory { base, offset, pre_index, writeback } => {
+                let start = registers[base];
+                let updated = start.wrapping_add(offset);
+                let address = if pre_index { updated } else { start };
+                if do_access {
+                    if transfer.read_system {
+                        bus.thumb_write(address, 4, result, output)?;
+                    } else {
+                        incoming = bus.thumb_read::<4>(address)?;
+                    }
+                }
+                if writeback {
+                    registers[base] = updated;
+                }
+            }
+        }
+        if transfer.read_system {
+            if id == 15 || id == 14 && !inactive && !self.secure_fp_active {
+                self.fpscr = self.fpdscr_ns;
+                self.secure_fp_active = false;
+            }
+        } else if do_access {
+            match id {
+                1 => self.fpscr = incoming,
+                2 => self.fpscr = (self.fpscr & !NZCVQC) | (incoming & NZCVQC),
+                12 => self.vpr = incoming,
+                13 => self.vpr = (self.vpr & !0xffff) | (incoming & 0xffff),
+                14 | 15 => {
+                    self.fpscr = incoming & 0x0fff_ffff;
+                    self.secure_fp_active = incoming >> 31 != 0;
+                }
+                _ => unreachable!(),
+            }
+        }
+        Ok(())
     }
 }

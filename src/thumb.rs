@@ -76,6 +76,8 @@ pub struct Thumb {
     fp: [u32; 32],
     fpscr: u32,
     vpr: u32,
+    fpdscr_ns: u32,
+    secure_fp_active: bool,
     secure_fp_lazy_transfer: bool,
     pub(crate) arm_interworking: bool,
     pub(crate) arm_unaligned_context: Option<(usize, bool)>,
@@ -148,11 +150,11 @@ impl Thumb {
         write_words(output, &[
             self.vectors.map_or(1 << 32, u64::from), u64::from(self.thumb2), u64::from(self.basepri),
             u64::from(self.faultmask), u64::from(self.itstate), u64::from(self.clock_gated),
-            self.retired_instructions, u64::from(self.apsr()), u64::from(self.fpscr), u64::from(self.fp_active),
+            self.retired_instructions, u64::from(self.apsr()), u64::from(self.fpscr) | (u64::from(self.fpdscr_ns) << 32), u64::from(self.fp_active),
             u64::from(self.active_exception), u64::from(self.interrupts_masked), sleep,
             u64::from(self.event), self.system_pending, u64::from(self.invalid_thumb_state),
             u64::from(self.locked_up), u64::from(self.instruction_lockup), u64::from(self.branch_exception),
-            u64::from(self.thread_uses_psp) | (u64::from(self.thread_unprivileged) << 1),
+            u64::from(self.thread_uses_psp) | (u64::from(self.thread_unprivileged) << 1) | (u64::from(self.secure_fp_active) << 2),
             u64::from(self.msp), u64::from(self.psp),
         ])?;
         write_words(output, &self.fp.map(u64::from))?;
@@ -177,7 +179,8 @@ impl Thumb {
         self.clock_gated = read_bool(clock_gated)?;
         self.retired_instructions = retired;
         self.set_apsr(word(apsr)?);
-        self.fpscr = word(fpscr)?;
+        self.fpscr = fpscr as u32;
+        self.fpdscr_ns = (fpscr >> 32) as u32;
         self.fp_active = read_bool(fp_active)?;
         self.active_exception = byte(active)?;
         self.interrupts_masked = read_bool(primask)?;
@@ -193,11 +196,12 @@ impl Thumb {
         self.locked_up = read_bool(lockup)?;
         self.instruction_lockup = read_bool(instruction_lockup)?;
         self.branch_exception = read_bool(branch_exception)?;
-        if use_psp > 3 {
+        if use_psp > 7 {
             return Err(invalid("invalid Cortex-M CONTROL snapshot"));
         }
         self.thread_uses_psp = use_psp & 1 != 0;
         self.thread_unprivileged = use_psp & 2 != 0;
+        self.secure_fp_active = use_psp & 4 != 0;
         self.msp = word(msp)?;
         self.psp = word(psp)?;
         for state in &mut self.fp {
@@ -528,7 +532,8 @@ impl Thumb {
             16 => u32::from(self.interrupts_masked),
             17 if self.thumb2 => u32::from(self.basepri),
             19 if self.thumb2 => self.faultmask.into(),
-            20 => (u32::from(self.fp_active) << 2) | (u32::from(self.uses_psp()) << 1)
+            20 => (u32::from(self.armv81m && self.secure && self.secure_fp_active) << 3)
+                | (u32::from(self.fp_active) << 2) | (u32::from(self.uses_psp()) << 1)
                 | u32::from(self.thread_unprivileged),
             _ => return None,
         })
@@ -558,6 +563,9 @@ impl Thumb {
                 }
                 if self.thumb2 {
                     self.fp_active = value & 4 != 0;
+                    if self.armv81m && self.secure {
+                        self.secure_fp_active = value & 8 != 0;
+                    }
                 }
             }
             _ => return false,
@@ -2269,9 +2277,13 @@ impl Thumb {
                 } else {
                     let vector = self.armv81m.then(|| mve::VectorTransfer::decode(inst, low)).flatten();
                     let arithmetic = self.armv81m.then(|| mve::VectorArithmetic::decode(inst, low)).flatten();
+                    let fp_system = self.armv81m.then(|| fpu::SystemTransfer::decode(inst, low)).flatten();
+                    let inactive_fp_ns = fp_system.is_some_and(|transfer| transfer.inactive_ns(self, bus));
                     let secure_fp_transfer = self.trustzone && self.secure
                         && inst & 0xffe0 == 0xec20 && low == 0x0a00;
-                    if vector.is_some() || arithmetic.is_some() || secure_fp_transfer || Self::is_fpu_instruction(inst, low) {
+                    if !inactive_fp_ns && (vector.is_some() || arithmetic.is_some() || fp_system.is_some()
+                        || secure_fp_transfer || Self::is_fpu_instruction(inst, low))
+                    {
                         if self.cortex_m33 && let Some(nvic) = bus.nvic.as_mut().filter(|nvic| !nvic.fpu_access()) {
                             const USAGEFAULT: u8 = 6;
                             nvic.record_fault(None);
@@ -2295,7 +2307,9 @@ impl Thumb {
                             return Ok(false);
                         }
                     }
-                    if let Some(transfer) = vector {
+                    if let Some(transfer) = fp_system {
+                        self.transfer_fp_system(transfer, r, bus, output)?;
+                    } else if let Some(transfer) = vector {
                         self.execute_vector_transfer(transfer, inst, low, r, bus, output)?;
                     } else if let Some(arithmetic) = arithmetic {
                         self.execute_vector_arithmetic(arithmetic, r);
