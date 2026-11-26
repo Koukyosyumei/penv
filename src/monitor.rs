@@ -979,6 +979,7 @@ enum Action {
     RunUntil(u64),
     RunToSyncPoint,
     SetQuantum(u64),
+    SetAdvanceImmediately(bool),
     LogLevel(i8),
     ScriptLog(i8, String),
     LastLog(i32),
@@ -1370,7 +1371,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
                     | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..) | Action::WaitForTesterLines(..)
                     | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..)
-                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::SetAdvanceImmediately(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -1881,6 +1882,10 @@ fn run_commands<'a>(
                     _ => Err(format!("UART idle interval ended before completion ({stop:?})")),
                 }
             }),
+            Action::SetAdvanceImmediately(immediately) => {
+                machine.set_monitor_advance_immediately(*immediately);
+                Ok(None)
+            }
             Action::SetQuantum(duration) => {
                 machine.monitor_quantum = *duration;
                 Ok(None)
@@ -4273,7 +4278,7 @@ fn is_monitor_snapshot_action(action: &Action) -> bool {
 fn is_empty_machine_action(action: &Action) -> bool {
     is_console_action(action) || is_monitor_snapshot_action(action) || matches!(action,
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
-        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_) | Action::RunFor(_) | Action::RunUntil(_)
+        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::SetAdvanceImmediately(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_) | Action::RunFor(_) | Action::RunUntil(_)
         | Action::RunToSyncPoint | Action::SetEmulationPaused(_)
         | Action::ClearMemory | Action::DescribeSnapshotPlatform | Action::InvalidPythonSource(..)
         | Action::RegisterPyDev(..) | Action::SetCrashOnAbort(..))
@@ -6706,6 +6711,9 @@ fn execute(
         ["machine" | "mach", "InfoLog", message] => Some(Action::ScriptLog(
             1, unquote(resolve(message)?).to_owned(),
         )),
+        ["emulation", "SetAdvanceImmediately", value] => Some(Action::SetAdvanceImmediately(
+            parse_tester_bool(resolve(value)?)?,
+        )),
         ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunToSyncPoint),
         ["machine" | "mach", "Reset"] => Some(Action::MachineReset(Vec::new())),
         [target, property @ ("Reset" | "LowPercentage" | "HighPercentage")]
@@ -6873,7 +6881,7 @@ fn execute(
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint
-                        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_)
+                        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::SetAdvanceImmediately(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_)
                         | Action::DescribeSnapshotPlatform
                         | Action::SaveMemory(..)
                         | Action::ClearMemory

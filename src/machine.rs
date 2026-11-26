@@ -150,6 +150,7 @@ pub struct Machine {
     pub(crate) monitor_platform: Option<std::path::PathBuf>,
     pub(crate) monitor_asset_dir: Option<std::path::PathBuf>,
     pub(crate) monitor_quantum: u64,
+    monitor_wall_clock: Option<(std::time::Instant, u128)>,
     cpu_paused: bool,
     cpu_halted: bool,
     cpu_clock_stopped: bool,
@@ -447,6 +448,7 @@ impl Machine {
             monitor_platform: None,
             monitor_asset_dir: None,
             monitor_quantum: DEFAULT_MONITOR_QUANTUM,
+            monitor_wall_clock: None,
             cpu_paused: false,
             cpu_halted: false,
             cpu_clock_stopped: false,
@@ -2500,6 +2502,10 @@ impl Machine {
         self.time_source.elapsed()
     }
 
+    pub(crate) fn set_monitor_advance_immediately(&mut self, immediately: bool) {
+        self.monitor_wall_clock = (!immediately).then(|| (std::time::Instant::now(), self.monitor_elapsed_ns()));
+    }
+
     pub(crate) fn monitor_elapsed_ns(&self) -> u128 {
         self.bus.monitor_time_ns(self.elapsed_steps())
     }
@@ -2540,7 +2546,16 @@ impl Machine {
         if self.primary.monitor_paused {
             return Ok((Stop::Limit, 0));
         }
-        self.run_selected(limit, None, output, matched)
+        let result = self.run_selected(limit, None, output, matched);
+        if let Some((start, origin)) = self.monitor_wall_clock {
+            let elapsed = self.monitor_elapsed_ns().saturating_sub(origin);
+            let elapsed = std::time::Duration::from_nanos(elapsed.min(u128::from(u64::MAX)) as u64);
+            let delay = elapsed.saturating_sub(start.elapsed());
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
+            }
+        }
+        result
     }
 
     pub(crate) fn step_rv64_cpu(
