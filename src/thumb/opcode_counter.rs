@@ -42,6 +42,12 @@ impl OpcodeCounters {
         }
     }
 
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&str, u64)> {
+        self.counters
+            .iter()
+            .map(|counter| (counter.name.as_str(), counter.count))
+    }
+
     pub fn get(&self, name: &str) -> Result<u64, String> {
         self.counters
             .iter()

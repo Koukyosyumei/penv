@@ -1107,6 +1107,9 @@ enum Action {
     EnableCustomOpcodeCounters(String),
     EnableOpcodeCounters(String, bool),
     ReadOpcodeCounter(String, String),
+    ListOpcodeCounters(String),
+    OpcodeCatalogNames,
+    EnableOpcodeCatalog(String, PathBuf, crate::rv64::opcode_catalog::Selection),
     ArmSystemRegister(String, String, Option<u64>),
     ArmExceptionState(String, bool, Option<String>),
     ExecutionMode(String, Option<bool>),
@@ -1391,6 +1394,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(..) | Action::ExecutionMode(..)
+                    | Action::EnableOpcodeCatalog(..) | Action::OpcodeCatalogNames | Action::ListOpcodeCounters(..)
                     | Action::EnableCustomOpcodeCounters(..) | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
@@ -2304,6 +2308,22 @@ fn run_commands<'a>(
             }
             Action::EnableOpcodeCounters(cpu, enabled) => {
                 machine.opcode_counters(cpu)?.enabled = *enabled;
+                Ok(None)
+            }
+            Action::EnableOpcodeCatalog(cpu, root, selection) => {
+                machine.install_rv64_opcode_catalog(cpu, root, selection)?;
+                Ok(None)
+            }
+            Action::OpcodeCatalogNames => {
+                let names = crate::rv64::opcode_catalog::RESOURCE_NAMES.join(", ");
+                writeln!(output.reply(), "[{names}]").map_err(|error| error.to_string())?;
+                Ok(None)
+            }
+            Action::ListOpcodeCounters(cpu) => {
+                writeln!(output.reply(), "Opcode;Count").map_err(|error| error.to_string())?;
+                for (name, count) in machine.opcode_counters(cpu)?.entries() {
+                    writeln!(output.reply(), "{name};{count}").map_err(|error| error.to_string())?;
+                }
                 Ok(None)
             }
             Action::ReadOpcodeCounter(cpu, name) => {
@@ -6696,6 +6716,27 @@ fn execute(
                 condition,
             ))
         }
+        [_, "GetRiscvOpcodesEmbeddedResourceNames"] => Some(Action::OpcodeCatalogNames),
+        [target, "GetAllOpcodesCounters"] => Some(Action::ListOpcodeCounters(
+            resolve(target)?.trim_start_matches("sysbus.").into(),
+        )),
+        [target, "EnableRiscvOpcodesCounting" | "EnableVectorOpcodesCounting"] => Some(Action::EnableOpcodeCatalog(
+            resolve(target)?.trim_start_matches("sysbus.").into(), root.to_owned(),
+            if words[1] == "EnableVectorOpcodesCounting" {
+                crate::rv64::opcode_catalog::Selection::Extension("V".into())
+            } else {
+                crate::rv64::opcode_catalog::Selection::Architecture
+            },
+        )),
+        [target, command @ ("EnableRiscvOpcodesCountingByExtension" | "EnableRiscvOpcodesCountingFromEmbeddedResource"), value] => {
+            let value = unquote(resolve(value)?).to_owned();
+            let selection = if *command == "EnableRiscvOpcodesCountingByExtension" {
+                crate::rv64::opcode_catalog::Selection::Extension(value)
+            } else {
+                crate::rv64::opcode_catalog::Selection::Resource(value)
+            };
+            Some(Action::EnableOpcodeCatalog(resolve(target)?.trim_start_matches("sysbus.").into(), root.to_owned(), selection))
+        }
         [target, "InstallOpcodeCounterPattern", name, pattern] => Some(Action::InstallOpcodeCounter(
             resolve(target)?.trim_start_matches("sysbus.").into(),
             unquote(resolve(name)?).into(),
@@ -7048,7 +7089,8 @@ fn execute(
                         | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                         | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                        | Action::EnableCustomOpcodeCounters(..) | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
+                        | Action::EnableOpcodeCatalog(..) | Action::OpcodeCatalogNames | Action::ListOpcodeCounters(..)
+                    | Action::EnableCustomOpcodeCounters(..) | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                         | Action::CpuRegister(..) | Action::AddCpuHook(..) | Action::PythonAddressHook(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)

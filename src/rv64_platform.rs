@@ -22,7 +22,6 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
     let mut clint = None;
     let mut plic = None;
     let mut uarts = Vec::new();
-    let mut ram = false;
 
     for entry in &entries {
         if entry.registration.as_deref() == Some("none") {
@@ -64,7 +63,6 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
                     .is_some_and(|value| value.starts_with("sysbus") || value.starts_with('{')) =>
             {
                 map_memory(&mut machine, entry, &entries)?;
-                ram = true;
             }
             "IRQControllers.CoreLevelInterruptor" => {
                 if clint.replace(entry).is_some() {
@@ -81,9 +79,6 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         }
     }
 
-    if !ram {
-        return Err("RV64 platform has no mapped RAM".into());
-    }
     cpus.sort_by_key(|&(hart, _)| hart);
     let independent_cpus = clint.is_none() && plic.is_none()
         && cpus.iter().all(|&(_, entry)| crate::platform::has_empty_time_provider(entry));

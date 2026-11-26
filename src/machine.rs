@@ -1093,6 +1093,16 @@ impl Machine {
         Ok(self.bus.rv64_opcode_counters.entry(id).or_default())
     }
 
+    pub(crate) fn install_rv64_opcode_catalog(
+        &mut self,
+        cpu: &str,
+        root: &std::path::Path,
+        selection: &crate::rv64::opcode_catalog::Selection,
+    ) -> Result<(), String> {
+        let isa = self.named_hart(cpu)?.rv64.as_ref().ok_or("RISC-V opcode catalogs require RV64")?.isa();
+        crate::rv64::opcode_catalog::install(self.opcode_counters(cpu)?, isa, root, selection)
+    }
+
     pub(crate) fn enable_custom_opcode_counters(&mut self, cpu: &str) -> Result<(), String> {
         let id = self.named_hart(cpu)?.rv64.as_ref().ok_or("custom opcode counters require RV64")?.hart_id;
         let counters = self.bus.rv64_opcode_counters.entry(id).or_default();

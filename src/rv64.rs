@@ -1,5 +1,6 @@
 mod bitmanip;
 mod floating;
+pub(crate) mod opcode_catalog;
 #[cfg(test)]
 mod upstream_tests;
 pub(crate) mod vector;
