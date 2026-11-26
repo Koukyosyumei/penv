@@ -1681,31 +1681,89 @@ fn dump_monitor_rows(machine: &mut Machine, address: u32, count: usize, width: u
     Ok(output)
 }
 
+fn read_monitor_command(input: &mut impl BufRead) -> Result<Option<String>, String> {
+    let mut line = String::new();
+    if input.read_line(&mut line).map_err(|error| error.to_string())? == 0 {
+        return Ok(None);
+    }
+    if let Some(length) = line.strip_prefix("PENV-COMMAND ") {
+        read_monitor_text(input, length).map(Some)
+    } else {
+        Ok(Some(line))
+    }
+}
+
 pub fn serve(
     machine: &mut Machine,
-    mut input: impl BufRead,
     mut output: impl Write,
     startup_output: &[u8],
     mut session: Session,
     root: &Path,
 ) -> Result<(), String> {
+    use std::sync::mpsc::{RecvTimeoutError, sync_channel};
+
     let initial: Vec<_> = (0..machine.hart_count()).map(|id| machine.hart_mut(id).clone()).collect();
     let path = Path::new("<monitor>");
-    let mut line = String::new();
     let mut builtins = MonitorBuiltins::default();
     frame(&mut output, "READY", startup_output).map_err(|error| error.to_string())?;
-    loop {
-        line.clear();
-        if input.read_line(&mut line).map_err(|error| error.to_string())? == 0 {
-            return Ok(());
+
+    // Keep the machine on the monitor thread. The reader only delivers complete
+    // commands so a partial frame does not stop an active emulation.
+    let (send, commands) = sync_channel(1);
+    std::thread::Builder::new().name("monitor-input".into()).spawn(move || {
+        let mut input = io::stdin().lock();
+        loop {
+            match read_monitor_command(&mut input) {
+                Ok(Some(command)) => {
+                    if send.send(Ok(command)).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = send.send(Err(error));
+                    break;
+                }
+            }
         }
-        let framed;
-        let text = if let Some(length) = line.strip_prefix("PENV-COMMAND ") {
-            framed = read_monitor_text(&mut input, length)?;
-            framed.trim()
+    }).map_err(|error| error.to_string())?;
+
+    let mut background_stop = None;
+    loop {
+        let command = if machine.monitor_is_active() {
+            match commands.recv_timeout(Duration::from_millis(5)) {
+                Ok(command) => command,
+                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+                Err(RecvTimeoutError::Timeout) => {
+                    let steps = (machine.bus.monitor_step_hz() / 1_000).max(1);
+                    let start = machine.elapsed_steps();
+                    let result = run_until_deadline(machine, steps, &mut io::sink(), |_, _| false);
+                    match result {
+                        Ok((Stop::Limit, _)) if machine.elapsed_steps() != start => {}
+                        Ok((Stop::Limit, _)) => machine.set_monitor_active(false),
+                        Ok((stop, _)) => {
+                            machine.set_monitor_active(false);
+                            background_stop = Some(format!("emulation stopped: {stop:?}"));
+                        }
+                        Err(error) => {
+                            machine.set_monitor_active(false);
+                            background_stop = Some(error);
+                        }
+                    }
+                    continue;
+                }
+            }
         } else {
-            line.trim()
-        };
+            match commands.recv() {
+                Ok(command) => command,
+                Err(_) => return Ok(()),
+            }
+        }?;
+        if let Some(error) = background_stop.take() {
+            frame(&mut output, "ERROR", error.as_bytes()).map_err(|error| error.to_string())?;
+            continue;
+        }
+        let text = command.trim();
         if let Some(result) = builtins.execute(machine, text) {
             let reply = match result {
                 Ok(body) => frame(&mut output, "OK", body.as_bytes()),
