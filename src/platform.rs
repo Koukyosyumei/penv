@@ -4452,7 +4452,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renesas_ra_gpt_pulses_the_wired_icu_event() {
+    fn renesas_ra_timers_pulse_their_wired_icu_events() {
         let path = std::env::temp_dir().join(format!("penv-ra-gpt-{}.repl", std::process::id()));
         fs::write(&path, r#"
 nvic: IRQControllers.NVIC @ sysbus 0xe000e000 { -> cpu@0 }
@@ -4465,6 +4465,12 @@ gpt: Timers.RenesasRA_GPT @ sysbus 0x40322000
     commonRegistersOffset: 0x100
     peripheralClockDFrequency: 48000000
     [6-7] -> icu@[0x10D-0x10E]
+agt: Timers.RenesasRA_AGT @ sysbus 0x40221000
+    lowSpeedOnChipOscillatorFrequency: 32768
+    subClockOscillatorFrequency: 32768
+    peripheralClockBFrequency: 60000000
+    IRQ -> icu@0x46
+    CompareMatchA -> icu@0x47
 "#).unwrap();
         let machine = load(&path, None, false);
         fs::remove_file(path).unwrap();
@@ -4472,6 +4478,8 @@ gpt: Timers.RenesasRA_GPT @ sysbus 0x40322000
         let mut output = std::io::sink();
         for (address, value) in [
             (0x4000_c300, 0x10d),
+            (0x4000_c304, 0x46),
+            (0x4000_c308, 0x47),
             (0x4032_2030, 1),
             (0x4032_2064, 1),
             (0x4032_2048, 0),
@@ -4479,11 +4487,17 @@ gpt: Timers.RenesasRA_GPT @ sysbus 0x40322000
         ] {
             bus.write(address, 4, value, &mut output).unwrap();
         }
+        bus.write(0x4022_1000, 2, 3, &mut output).unwrap();
+        bus.write(0x4022_1002, 2, 2, &mut output).unwrap();
+        bus.write(0x4022_100e, 1, 1, &mut output).unwrap();
+        bus.write(0x4022_1008, 1, 1, &mut output).unwrap();
         for _ in 0..100 {
             bus.sample_nvic(&crate::nvic::ActiveExceptions::default(), false);
         }
         assert_eq!(bus.read::<4>(0x4000_c300).unwrap(), 0x1010d);
-        assert_eq!(bus.read::<4>(0xe000_e200).unwrap() & 1, 1);
+        assert_eq!(bus.read::<4>(0x4000_c304).unwrap(), 0x10046);
+        assert_eq!(bus.read::<4>(0x4000_c308).unwrap(), 0x10047);
+        assert_eq!(bus.read::<4>(0xe000_e200).unwrap() & 7, 7);
     }
 
     #[test]
