@@ -412,6 +412,8 @@ pub struct Bus {
     pub(crate) csr_hooks: BTreeMap<(usize, u32), crate::cpu_python_hook::Hook>,
     pub(crate) suppress_cpu_abort: bool,
     pub(crate) instruction_hooks: Vec<(usize, u32, u32, crate::cpu_python_hook::Hook)>,
+    pub(crate) rv64_instruction_hooks: Vec<(usize, String, u64, u64, crate::cpu_python_hook::Hook)>,
+    pub(crate) rv64_opcode_counters: std::collections::HashMap<usize, crate::thumb::opcode_counter::OpcodeCounters>,
     pub(crate) thumb_block_hooks: [Option<crate::cpu_python_hook::Hook>; 2],
     pub(crate) stack_access_hooks: BTreeMap<usize, crate::cpu_python_hook::Hook>,
     traceable_memory: Vec<(String, Vec<u32>, u32)>,
@@ -8153,6 +8155,18 @@ impl Bus {
         result
     }
 
+    pub(crate) fn execute_rv64_instruction_hook(
+        &mut self, hart: usize, pc: u64, instruction: u64, length: u64,
+    ) -> Option<Result<(), String>> {
+        let index = self.rv64_instruction_hooks.iter().position(|(cpu, pattern, mask, opcode, _)| {
+            *cpu == hart && pattern.len() as u64 == length * 8 && instruction & mask == *opcode
+        })?;
+        let mut entry = self.rv64_instruction_hooks.remove(index);
+        let result = entry.4.execute_instruction(self, pc, instruction);
+        self.rv64_instruction_hooks.insert(index, entry);
+        Some(result)
+    }
+
     pub(crate) fn execute_instruction_hook(
         &mut self, hart: usize, pc: u32, instruction: u32,
     ) -> Option<Result<(), String>> {
@@ -8160,7 +8174,7 @@ impl Bus {
             *cpu == hart && instruction & mask == *opcode
         })?;
         let mut entry = self.instruction_hooks.remove(index);
-        let result = entry.3.execute_instruction(self, pc, instruction);
+        let result = entry.3.execute_instruction(self, u64::from(pc), u64::from(instruction));
         self.instruction_hooks.insert(index, entry);
         Some(result)
     }

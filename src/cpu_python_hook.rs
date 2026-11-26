@@ -336,7 +336,7 @@ impl Hook {
         self.invoke(bus, format_args!("{pc}")).map(|_| ())
     }
 
-    pub(crate) fn execute_instruction(&mut self, bus: &mut Bus, pc: u32, instruction: u32) -> Result<(), String> {
+    pub(crate) fn execute_instruction(&mut self, bus: &mut Bus, pc: u64, instruction: u64) -> Result<(), String> {
         self.invoke(bus, format_args!("instruction {pc} {instruction}")).map(|_| ())
     }
 

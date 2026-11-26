@@ -1082,6 +1082,47 @@ impl Machine {
         Ok(hart.monitor_single_step)
     }
 
+    pub(crate) fn opcode_counters(
+        &mut self, cpu: &str,
+    ) -> Result<&mut crate::thumb::opcode_counter::OpcodeCounters, String> {
+        let hart = self.named_hart(cpu)?;
+        if hart.thumb.is_some() {
+            return Ok(&mut self.bus.thumb_opcodes);
+        }
+        let id = hart.rv64.as_ref().ok_or("opcode counters require Cortex-M or RV64")?.hart_id;
+        Ok(self.bus.rv64_opcode_counters.entry(id).or_default())
+    }
+
+    pub(crate) fn enable_custom_opcode_counters(&mut self, cpu: &str) -> Result<(), String> {
+        let id = self.named_hart(cpu)?.rv64.as_ref().ok_or("custom opcode counters require RV64")?.hart_id;
+        let counters = self.bus.rv64_opcode_counters.entry(id).or_default();
+        for (_, name, mask, value, _) in self.bus.rv64_instruction_hooks.iter().filter(|entry| entry.0 == id) {
+            counters.install_mask(name, *mask, *value)?;
+        }
+        counters.enabled = true;
+        Ok(())
+    }
+
+    pub(crate) fn install_custom_instruction(
+        &mut self, cpu: &str, pattern: &str, source: &str,
+    ) -> Result<(), String> {
+        let (mask, opcode) = crate::thumb::opcode_counter::parse_pattern(pattern)?;
+        if let Some(id) = self.named_hart(cpu)?.rv64.as_ref().map(|hart| hart.hart_id) {
+            if self.bus.rv64_instruction_hooks.iter().any(|(cpu, other, other_mask, other_opcode, _)| {
+                *cpu == id && other.len() == pattern.len() && (opcode ^ other_opcode) & (mask & other_mask) == 0
+            }) {
+                return Err("overlapping custom instruction patterns".into());
+            }
+            let hook = crate::cpu_python_hook::Hook::with_cpu(source, self.monitor_firmware.clone(), None, cpu)?;
+            self.bus.rv64_instruction_hooks.push((id, pattern.into(), mask, opcode, hook));
+            return Ok(());
+        }
+        if pattern.len() != 32 {
+            return Err("RV32 custom instruction hooks require a 32-bit pattern".into());
+        }
+        self.install_instruction_hook(cpu, mask as u32, opcode as u32, source)
+    }
+
     pub(crate) fn install_instruction_hook(&mut self, cpu: &str, mask: u32, opcode: u32, source: &str) -> Result<(), String> {
         let hart = self.named_hart(cpu)?;
         if hart.thumb.is_some() || hart.arm32.is_some() || hart.rv64.is_some() {

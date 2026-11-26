@@ -489,7 +489,43 @@ impl Rv64 {
             self.waiting = false;
         }
 
-        let result = self.fetch(bus).and_then(|(instruction, length)| {
+        let fetched = self.fetch(bus).and_then(|(instruction, length)| {
+            if !bus.rv64_instruction_hooks.is_empty() && instruction & 0x7f == 0x3f {
+                let mut opcode = u64::from(instruction);
+                for offset in [4, 6] {
+                    let address = self.pc.wrapping_add(offset);
+                    let physical = self.translations.translate(bus, &self.privilege, address, 2, EXECUTE)?;
+                    let word = ram_read(bus, Some(self.hart_id), physical, 2).ok_or(Fault::new(1, address))?;
+                    opcode |= word << (offset * 8);
+                }
+                Ok((opcode, 8))
+            } else {
+                Ok((u64::from(instruction), length))
+            }
+        });
+        if let Ok((opcode, length)) = fetched.as_ref().copied() {
+            if !bus.rv64_opcode_counters.is_empty()
+                && let Some(counters) = bus.rv64_opcode_counters.get_mut(&self.hart_id)
+                && counters.enabled
+            {
+                counters.record(opcode);
+            }
+            if !bus.rv64_instruction_hooks.is_empty()
+                && let Some(outcome) = bus.execute_rv64_instruction_hook(self.hart_id, self.pc, opcode, length)
+            {
+                outcome?;
+                self.pc = self.pc.wrapping_add(length);
+                if count_retired {
+                    self.privilege.retire();
+                }
+                return Ok(Step::Retired);
+            }
+        }
+        let result = fetched.and_then(|(instruction, length)| {
+            if length > 4 {
+                return Err(Fault::new(2, instruction));
+            }
+            let instruction = instruction as u32;
             let decoded = if length == 2 {
                 crate::compressed::expand_rv64(instruction, self.isa.zcb)
                     .ok_or_else(|| Fault::new(2, u64::from(instruction)))?

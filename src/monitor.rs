@@ -1072,7 +1072,7 @@ enum Action {
     RegisterPyDev(String, u32, u32, bool),
     SetCrashOnAbort(bool),
     PythonAddressHook(String, Option<u32>, String),
-    InstallInstructionHook(String, u32, u32, String),
+    InstallCustomInstruction(String, String, String),
     PythonAssignment(String, String),
     PythonHook(String, String, Option<String>),
     RecordTo(PathBuf),
@@ -1104,6 +1104,7 @@ enum Action {
     AssertCpuValue(String, Option<String>, u64),
     CpuRegister(String, String, Option<u64>),
     InstallOpcodeCounter(String, String, String),
+    EnableCustomOpcodeCounters(String),
     EnableOpcodeCounters(String, bool),
     ReadOpcodeCounter(String, String),
     ArmSystemRegister(String, String, Option<u64>),
@@ -1390,7 +1391,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(..) | Action::ExecutionMode(..)
-                    | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
+                    | Action::EnableCustomOpcodeCounters(..) | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                     | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
@@ -1399,7 +1400,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
                     | Action::PythonAssignment(..) | Action::ExecutePython(..)
                     | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
-                    | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..) | Action::PythonAddressHook(..) | Action::WaitForTesterLines(..)
+                    | Action::SetCrashOnAbort(..) | Action::InstallCustomInstruction(..) | Action::PythonAddressHook(..) | Action::WaitForTesterLines(..)
                     | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..) | Action::AssertLedTiming(..)
                     | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::SetAdvanceImmediately(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
@@ -1638,8 +1639,8 @@ fn run_commands<'a>(
                 machine.bus.suppress_cpu_abort = !enabled;
                 Ok(None)
             }
-            Action::InstallInstructionHook(cpu, mask, opcode, source) => machine
-                .install_instruction_hook(cpu, *mask, *opcode, source)
+            Action::InstallCustomInstruction(cpu, pattern, source) => machine
+                .install_custom_instruction(cpu, pattern, source)
                 .map(|()| None),
             Action::PythonAssignment(name, source) => {
                 let result = session.execute_python(machine, source)?;
@@ -2296,19 +2297,17 @@ fn run_commands<'a>(
                 writeln!(output.reply(), "0x{pc:08x}")
                     .map_err(|error| error.to_string()).map(|()| None)
             }),
+            Action::EnableCustomOpcodeCounters(cpu) => machine.enable_custom_opcode_counters(cpu).map(|()| None),
             Action::InstallOpcodeCounter(cpu, name, pattern) => {
-                machine.cortex_m_cpu(cpu)?;
-                machine.bus.thumb_opcodes.install(name, pattern)?;
+                machine.opcode_counters(cpu)?.install(name, pattern)?;
                 Ok(None)
             }
             Action::EnableOpcodeCounters(cpu, enabled) => {
-                machine.cortex_m_cpu(cpu)?;
-                machine.bus.thumb_opcodes.enabled = *enabled;
+                machine.opcode_counters(cpu)?.enabled = *enabled;
                 Ok(None)
             }
             Action::ReadOpcodeCounter(cpu, name) => {
-                machine.cortex_m_cpu(cpu)?;
-                let count = machine.bus.thumb_opcodes.get(name)?;
+                let count = machine.opcode_counters(cpu)?.get(name)?;
                 writeln!(output.reply(), "{count}").map_err(|error| error.to_string())?;
                 Ok(None)
             }
@@ -5860,29 +5859,14 @@ fn execute(
             parse_tester_bool(resolve(initable)?)?,
         )),
         ["SetCrashOnAbort", value] => Some(Action::SetCrashOnAbort(parse_tester_bool(resolve(value)?)?)),
-        [cpu, "InstallCustomInstructionHandlerFromString", pattern, source] => {
-            let pattern = monitor_string(resolve(pattern)?).ok_or("expected quoted opcode pattern")?;
-            if pattern.len() != 32 {
-                return Err("expected a 32-bit custom instruction pattern".into());
-            }
-            let mut mask = 0;
-            let mut opcode = 0;
-            for bit in pattern.bytes() {
-                mask <<= 1;
-                opcode <<= 1;
-                match bit {
-                    b'0' => mask |= 1,
-                    b'1' => {
-                        mask |= 1;
-                        opcode |= 1;
-                    }
-                    b'x' | b'X' | b'?' => {}
-                    _ => return Err("invalid custom instruction pattern character".into()),
-                }
-            }
-            let source = monitor_string(resolve(source)?).ok_or("expected quoted Python source")?;
-            Some(Action::InstallInstructionHook(resolve(cpu)?.trim_start_matches("sysbus.").into(), mask, opcode, source))
-        }
+        [cpu, "InstallCustomInstructionHandlerFromString", pattern, source] => Some(Action::InstallCustomInstruction(
+            resolve(cpu)?.trim_start_matches("sysbus.").into(),
+            monitor_string(resolve(pattern)?).ok_or("expected quoted opcode pattern")?,
+            monitor_string(resolve(source)?).ok_or("expected quoted Python source")?,
+        )),
+        [cpu, "EnableCustomOpcodesCounting"] => Some(Action::EnableCustomOpcodeCounters(
+            resolve(cpu)?.trim_start_matches("sysbus.").into(),
+        )),
         [target, method @ ("AddHook" | "RemoveHooksAt"), ..]
             if text.contains("`sysbus GetSymbolAddress ")
                 && (*method == "RemoveHooksAt" || text.rsplit_once('`').is_some_and(|(_, body)| body.trim_start().starts_with('"'))) =>
@@ -7049,7 +7033,7 @@ fn execute(
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
                         | Action::DisassembleBlock(..) | Action::BusEndianness | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
                         | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
-                        | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..)
+                        | Action::SetCrashOnAbort(..) | Action::InstallCustomInstruction(..)
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
                         | Action::RamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..) | Action::LoadMonitorBinary(..) | Action::LoadMonitorSymbols(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuFpuEnabled(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
@@ -7064,7 +7048,7 @@ fn execute(
                         | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                         | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                        | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
+                        | Action::EnableCustomOpcodeCounters(..) | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                         | Action::CpuRegister(..) | Action::AddCpuHook(..) | Action::PythonAddressHook(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)

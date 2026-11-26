@@ -6,32 +6,23 @@ pub struct OpcodeCounters {
 
 struct Counter {
     name: String,
-    mask: u32,
-    value: u32,
+    mask: u64,
+    value: u64,
     count: u64,
 }
 
 impl OpcodeCounters {
     pub fn install(&mut self, name: &str, pattern: &str) -> Result<(), String> {
-        if pattern.len() != 32 {
-            return Err("Thumb opcode pattern must contain 32 bits".into());
+        if !matches!(pattern.len(), 16 | 32) {
+            return Err("opcode pattern must contain 16 or 32 bits".into());
         }
+        let (mask, value) = parse_pattern(pattern)?;
+        self.install_mask(name, mask, value)
+    }
+
+    pub(crate) fn install_mask(&mut self, name: &str, mask: u64, value: u64) -> Result<(), String> {
         if self.counters.iter().any(|counter| counter.name == name) {
             return Err(format!("duplicate opcode counter {name:?}"));
-        }
-        let (mut mask, mut value) = (0, 0);
-        for bit in pattern.bytes() {
-            mask <<= 1;
-            value <<= 1;
-            match bit {
-                b'0' => mask |= 1,
-                b'1' => {
-                    mask |= 1;
-                    value |= 1;
-                }
-                b'x' => {}
-                _ => return Err("expected 0, 1 or x in opcode pattern".into()),
-            }
         }
         self.counters.push(Counter {
             name: name.into(),
@@ -42,7 +33,8 @@ impl OpcodeCounters {
         Ok(())
     }
 
-    pub fn record(&mut self, opcode: u32) {
+    pub fn record(&mut self, opcode: impl Into<u64>) {
+        let opcode = opcode.into();
         for counter in &mut self.counters {
             if opcode & counter.mask == counter.value {
                 counter.count = counter.count.wrapping_add(1);
@@ -57,6 +49,27 @@ impl OpcodeCounters {
             .map(|counter| counter.count)
             .ok_or_else(|| format!("unknown opcode counter {name:?}"))
     }
+}
+
+pub(crate) fn parse_pattern(pattern: &str) -> Result<(u64, u64), String> {
+    if !matches!(pattern.len(), 16 | 32 | 64) {
+        return Err("opcode pattern must contain 16, 32 or 64 bits".into());
+    }
+    let (mut mask, mut value) = (0, 0);
+    for bit in pattern.bytes() {
+        mask <<= 1;
+        value <<= 1;
+        match bit {
+            b'0' => mask |= 1,
+            b'1' => {
+                mask |= 1;
+                value |= 1;
+            }
+            b'x' | b'X' | b'_' | b'?' => {}
+            _ => return Err("invalid opcode pattern character".into()),
+        }
+    }
+    Ok((mask, value))
 }
 
 #[cfg(test)]
