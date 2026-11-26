@@ -60,7 +60,6 @@ impl Devices {
             && self.mpfs_gpio.is_empty() && self.mpfs_usb.is_empty() && self.fire_ihc.is_none()
             && self.mpfs_sd.is_empty() && self.mpfs_watchdogs.is_empty() && self.mpfs_spi.is_empty()
             && self.mpfs_ddr.is_empty() && self.mpfs_sysreg.is_none() && self.mpfs_cache_way_enable.is_none()
-            && self.starlight_reset_pin.is_none()
     }
 
     pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> io::Result<()> {

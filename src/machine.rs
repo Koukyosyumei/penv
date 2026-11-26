@@ -1642,6 +1642,11 @@ impl Machine {
             if let Some(plic) = &self.bus.rv64_devices.plic {
                 plic.save_snapshot(output)?;
             }
+            let reset_pin = &self.bus.rv64_devices.starlight_reset_pin;
+            write_words(output, &[u64::from(reset_pin.is_some())])?;
+            if let Some(reset_pin) = reset_pin {
+                reset_pin.save_snapshot(output)?;
+            }
             self.bus.save_rv64_memory_snapshot(output)
         };
         write().map_err(|error| error.to_string())
@@ -1696,7 +1701,14 @@ impl Machine {
             if let Some(plic) = &mut plic {
                 plic.load_snapshot(input)?;
             }
+            let has_reset_pin = version >= 5 && read_bool(read_words::<1>(input)?[0])?;
+            if has_reset_pin != self.bus.rv64_devices.starlight_reset_pin.is_some() {
+                return Err(invalid("StarLight reset pin layout differs from the platform"));
+            }
+            let reset_pin = has_reset_pin.then(|| crate::rv64_starfive::StarLightResetPin::read_snapshot(input))
+                .transpose()?;
             self.bus.load_rv64_memory_snapshot(input)?;
+            self.bus.rv64_devices.starlight_reset_pin = reset_pin;
             self.bus.clint = clint;
             self.bus.rv64_devices.plic = plic;
             for (hart, (cpu, halt, pause, single)) in std::iter::once(&mut self.primary)

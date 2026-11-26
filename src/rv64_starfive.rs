@@ -67,6 +67,18 @@ impl StarLightResetPin {
     pub const DOUT: u32 = 0x1191_00a0;
     pub const DOEN: u32 = 0x1191_00a4;
 
+    pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        crate::snapshot::write_words(output, &[u64::from(self.output), u64::from(self.output_enable)])
+    }
+
+    pub(crate) fn read_snapshot(input: &mut impl std::io::Read) -> std::io::Result<Self> {
+        let [output, output_enable] = crate::snapshot::read_words(input)?;
+        Ok(Self {
+            output: u32::try_from(output).map_err(std::io::Error::other)?,
+            output_enable: u32::try_from(output_enable).map_err(std::io::Error::other)?,
+        })
+    }
+
     pub fn read(&self, address: u32) -> Option<u32> {
         match address {
             Self::DOUT => Some(self.output),
