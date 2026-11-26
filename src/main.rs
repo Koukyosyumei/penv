@@ -1738,6 +1738,9 @@ fn run() -> Result<ExitCode, String> {
                 Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
             }
         };
+        if monitor_stdio && !has_firmware && !machine.is_cortex_m() {
+            machine.initialize_monitor_reset_pcs();
+        }
         if let Some(level) = monitor_log_level {
             machine.bus.set_monitor_log_level(level);
         }
@@ -2306,9 +2309,6 @@ fn run() -> Result<ExitCode, String> {
         }
     }
     if monitor_stdio {
-        if script.is_none() && !has_firmware && !machine.is_cortex_m() {
-            machine.initialize_monitor_reset_pcs();
-        }
         if !post_run.is_empty() {
             return Err("unsupported command: post-run actions in a monitor session".into());
         }
