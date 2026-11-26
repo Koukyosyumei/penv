@@ -820,7 +820,7 @@ impl Machine {
         let available = [
             ("+m", hart.csr.m_extension), ("+a", hart.csr.a_extension),
             ("+c", hart.csr.c_extension), ("+f", hart.csr.f_extension),
-            ("+d", hart.csr.d_extension), ("+v", hart.bitmanip.xandesvsintload), ("+zba", hart.bitmanip.zba),
+            ("+d", hart.csr.d_extension), ("+v", hart.bitmanip.xandesvsintload || hart.bitmanip.xandesvbfhcvt), ("+zba", hart.bitmanip.zba),
             ("+zbb", hart.bitmanip.zbb), ("+zbc", hart.bitmanip.zbc),
             ("+zbs", hart.bitmanip.zbs), ("+zicond", hart.zicond),
             ("+zacas", hart.zacas),
@@ -2966,7 +2966,7 @@ impl Hart {
             ..self.bitmanip
         };
         let result = match insn & 0x7f {
-            0x07 | 0x27 if bitmanip.xandesvsintload && matches!(funct3, 0 | 5 | 6) => {
+            0x07 | 0x27 if (bitmanip.xandesvsintload || bitmanip.xandesvbfhcvt) && matches!(funct3, 0 | 5 | 6) => {
                 if !self.csr.vectors_active() {
                     return Err(illegal());
                 }
@@ -2989,6 +2989,19 @@ impl Hart {
                     crate::rv32_vector::TransferError::Illegal => illegal(),
                     crate::rv32_vector::TransferError::Memory(error) => error,
                 })?;
+                None
+            }
+            0x5b if bitmanip.xandesvbfhcvt && insn & 0xfe0f_707f == 0x0000_405b => {
+                if !self.csr.vectors_active() || !self.csr.floating_enabled() {
+                    return Err(illegal());
+                }
+                let fcsr = self.csr.fcsr;
+                let flags = self.csr.vector_bootstrap.as_mut().and_then(|vector| {
+                    vector.convert_bfloat16(insn, fcsr)
+                }).ok_or_else(illegal)?;
+                self.csr.fcsr |= flags;
+                self.csr.floating_dirty();
+                self.csr.vectors_dirty();
                 None
             }
             0x5b if bitmanip.xandesvsintload && matches!(insn & 0xfdf0_707f, 0x0820_405b | 0x0830_405b) => {

@@ -16,6 +16,7 @@ pub struct BitManip {
     pub xandesperf: bool,
     pub xandesbfhcvt: bool,
     pub xandesvsintload: bool,
+    pub xandesvbfhcvt: bool,
 }
 
 impl BitManip {

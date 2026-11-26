@@ -96,6 +96,59 @@ impl Rv32Vector {
         Ok(())
     }
 
+    pub(crate) fn convert_bfloat16(&mut self, insn: u32, fcsr: u8) -> Option<u8> {
+        use crate::rv64_float::{Format, Rounding};
+
+        let kind = self.csrs.read(0xc21)?;
+        if kind & !0xff != 0 || (kind >> 3) & 7 != 1 {
+            return None;
+        }
+        let lmul = match kind & 7 {
+            scale @ 0..=3 => scale as i32,
+            scale @ 5..=7 => scale as i32 - 8,
+            _ => return None,
+        };
+        let narrow = insn & (1 << 15) != 0;
+        let (source, destination, rounding) = if narrow {
+            (Format::Single, Format::BFloat16, Rounding::decode(7, fcsr)?)
+        } else {
+            (Format::BFloat16, Format::Single, Rounding::NearestEven)
+        };
+        let register_bytes = self.csrs.read(0xc22)? as usize;
+        let group = |register, multiplier: i32| {
+            if !(-3..=3).contains(&multiplier) {
+                return None;
+            }
+            let count = 1 << multiplier.max(0);
+            if register % count != 0 || register + count > 32 {
+                return None;
+            }
+            let offset = register * register_bytes;
+            let size = (register_bytes << multiplier.max(0)) >> (-multiplier).max(0);
+            Some(offset..offset + size)
+        };
+        let src = group(((insn >> 20) & 31) as usize, lmul + i32::from(narrow))?;
+        let dst = group(((insn >> 7) & 31) as usize, lmul + i32::from(!narrow))?;
+        if src.start < dst.end && dst.start < src.end
+            && !(if narrow { src.start == dst.start } else { lmul >= 0 && src.end == dst.end })
+        {
+            return None;
+        }
+        let mut flags = 0;
+        for lane in self.csrs.read(0x008)? as usize..self.csrs.read(0xc20)? as usize {
+            let offset = src.start + lane * source.width();
+            let mut bytes = [0; 8];
+            bytes[..source.width()].copy_from_slice(&self.registers[offset..offset + source.width()]);
+            let converted = destination.convert(source.decode(source.boxed(u64::from_le_bytes(bytes))), rounding);
+            let offset = dst.start + lane * destination.width();
+            self.registers[offset..offset + destination.width()]
+                .copy_from_slice(&converted.bits.to_le_bytes()[..destination.width()]);
+            flags |= converted.flags;
+        }
+        self.csrs.write(0x008, 0);
+        Some(flags)
+    }
+
     /// Execute XandesVsIntLoad VLN8.V or VLNU8.V with an RV32 byte reader.
     /// The caller checks VS and the extension and applies the address policy.
     pub fn andes_int4_load<E>(
