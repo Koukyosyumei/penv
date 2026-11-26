@@ -1082,6 +1082,35 @@ fn load_platform(
                     entry.address()?, entry.name.clone(), routes,
                 )).map_err(|error| entry.error(&error))?;
             }
+            "Miscellaneous.DWT" => {
+                let frequency = match keys(entry, &["frequency"])?.as_slice() {
+                    [("frequency", frequency)] => number(frequency).map_err(|error| entry.error(&error))?,
+                    _ => return Err(entry.error("DWT frequency is required")),
+                };
+                if frequency == 0 {
+                    return Err(entry.error("DWT frequency must be positive"));
+                }
+                machine.bus.map_named_dwt(entry.address()?, frequency, &entry.name)
+                    .map_err(|error| entry.error(&error))?;
+            }
+            "UART.SAMD5_UART" => {
+                let irq = match entry.body.as_slice() {
+                    [] => None,
+                    [(_, wire)] => {
+                        let (pin, target) = wire.split_once("->").ok_or_else(|| entry.error("expected SAMD5 UART IRQ wiring"))?;
+                        let (controller, line) = target.trim().split_once('@').ok_or_else(|| entry.error("expected UART NVIC input"))?;
+                        if !matches!(pin.trim(), "" | "IRQ") || !entries.iter().any(|entry| {
+                            entry.name == controller.trim() && entry.model == "IRQControllers.NVIC"
+                        }) {
+                            return Err(entry.error("invalid SAMD5 UART IRQ wiring"));
+                        }
+                        Some(irq_index(line, crate::nvic::IRQ_LINES as u32).map_err(|error| entry.error(&error))?)
+                    }
+                    _ => return Err(entry.error("expected no more than one SAMD5 UART IRQ output")),
+                };
+                machine.bus.map_samd5_uart(crate::samd5_uart::Uart::new(entry.address()?, entry.name.clone(), irq))
+                    .map_err(|error| entry.error(&error))?;
+            }
             "UART.RenesasRA8M1_SCI" => {
                 let (routes, properties) = renesas_icu_routes(
                     entry, &entries, ["ReceiveIRQ", "TransmitIRQ", "TransmitEndIRQ"],
@@ -2530,7 +2559,8 @@ fn load_platform(
             nvic.enable_fpu();
             nvic.configure_mpu(if cortex_m7 { 16 } else { 8 });
         }
-        let nvic_lines = (irq_lines as usize).max(machine.bus.renesas_icu_output_count());
+        let nvic_lines = (irq_lines as usize).max(machine.bus.renesas_icu_output_count())
+            .max(machine.bus.samd5_uart_nvic_lines());
         machine.bus.nvic.as_mut().unwrap().set_external_lines(nvic_lines);
         if let Some(controller) = nvic.filter(|controller| controller.registration.is_some()) {
             machine.bus.set_nvic_name(controller.name.clone());

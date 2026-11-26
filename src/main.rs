@@ -117,6 +117,7 @@ mod repl_parser;
 mod repl_syntax;
 mod resd;
 mod rtc_clock;
+mod samd5_uart;
 mod rv64;
 mod rv64_devices;
 mod sifive_gpio;

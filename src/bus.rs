@@ -213,6 +213,7 @@ enum TesterPort {
     MiV,
     Pl011(usize),
     RenesasSci(usize),
+    Samd5(usize),
 }
 
 enum TesterHistory {
@@ -527,6 +528,8 @@ pub struct Bus {
     renesas_ra_sci: Vec<crate::renesas_ra_sci::Sci>,
     renesas_ra_iic: Vec<crate::renesas_ra_iic::Iic>,
     renesas_sci_input: usize,
+    samd5_uarts: Vec<crate::samd5_uart::Uart>,
+    samd5_uart_input: usize,
     renesas_gpio: Vec<crate::renesas_ra_gpio::Port>,
     renesas_gpio_protection: Vec<crate::renesas_ra_gpio::Protection>,
     stm32_gpios: Vec<Stm32Gpio>,
@@ -620,6 +623,7 @@ pub struct Bus {
     sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
+    dwt_name: Option<String>,
     pub nvic: Option<Nvic>,
     nvic_mapped: bool,
     scoped_nvics: BTreeMap<(usize, u32), Nvic>,
@@ -1160,6 +1164,7 @@ impl Bus {
             .chain(self.traceable_memory.iter().map(|(name, ..)| name.as_str()))
             .chain(self.rv64_devices.uarts.iter().map(|uart| uart.name()))
             .chain(self.renesas_ra_sci.iter().map(|uart| uart.name.as_str()))
+            .chain(self.samd5_uarts.iter().map(|uart| uart.name.as_str()))
             .chain(self.renesas_ra_icu.iter().map(|icu| icu.name.as_str()))
     }
 
@@ -1802,6 +1807,26 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn map_named_dwt(&mut self, base: u32, frequency: u32, name: &str) -> Result<(), String> {
+        self.map_dwt(base, frequency)?;
+        self.dwt_name = Some(name.into());
+        Ok(())
+    }
+
+    pub(crate) fn reset_named_cortex_peripheral(&mut self, name: &str) -> bool {
+        if self.dwt_name.as_deref() == Some(name) && let Some(dwt) = &mut self.dwt {
+            dwt.reset();
+        } else if self.nvic_name.as_deref() == Some(name) && let Some(nvic) = &mut self.nvic {
+            nvic.reset();
+            if let Some(systick) = &mut self.systick {
+                systick.reset();
+            }
+        } else {
+            return false;
+        }
+        true
+    }
+
     pub fn map_iwdg(&mut self, device: Iwdg) -> Result<(), String> {
         self.check_peripheral_range(device.base, Iwdg::SIZE)?;
         self.iwdgs.push(device);
@@ -1883,6 +1908,9 @@ impl Bus {
         }
         for iic in &mut self.renesas_ra_iic {
             iic.reset();
+        }
+        for uart in &mut self.samd5_uarts {
+            uart.reset();
         }
         for uart in &mut self.renesas_ra_sci {
             uart.reset();
@@ -2798,7 +2826,7 @@ impl Bus {
             || !self.gpio_pwm_leds.is_empty()
             || !self.stm32_regular_adcs.is_empty()
             || self.stm32_adc.is_some() || self.stm32_dma.as_ref().is_some_and(Stm32Dma::has_enabled_channels)
-            || !self.renesas_ra_sci.is_empty() || !self.renesas_ra_iic.is_empty()
+            || !self.renesas_ra_sci.is_empty() || !self.renesas_ra_iic.is_empty() || !self.samd5_uarts.is_empty()
             || self.renesas_ra_agt.iter().any(crate::renesas_ra_agt::Agt::running)
             || self.renesas_ra_gpt.iter().any(crate::renesas_ra_gpt::Gpt::running)
             || self.renesas_ra_icu.as_ref().is_some_and(crate::renesas_ra_icu::Icu::has_pending)
@@ -3721,6 +3749,9 @@ impl Bus {
             || self.renesas_ra_iic.iter().any(|device| {
                 overlaps_range(start, end, device.base, crate::renesas_ra_iic::Iic::SIZE)
             })
+            || self.samd5_uarts.iter().any(|uart| {
+                overlaps_range(start, end, uart.base, crate::samd5_uart::Uart::SIZE)
+            })
             || self.renesas_ra_sci.iter().any(|uart| {
                 start < u64::from(uart.base) + u64::from(crate::renesas_ra_sci::Sci::SIZE)
                     && end > u64::from(uart.base)
@@ -4153,6 +4184,10 @@ impl Bus {
     }
 
     pub(crate) fn named_word_register(&self, name: &str, offset: u32) -> Option<u32> {
+        let bare = name.strip_prefix("sysbus.").unwrap_or(name);
+        if self.dwt_name.as_deref() == Some(bare) && let Some(dwt) = &self.dwt {
+            return (offset < Dwt::SIZE).then(|| dwt.base + offset);
+        }
         if let Ok(address) = self.nvic_register_address(name, offset) {
             return Some(address);
         }
@@ -4467,6 +4502,12 @@ impl Bus {
     }
 
     pub fn set_nvic_clocked(&mut self, target: &str, clocked: bool) -> Result<(), String> {
+        if self.dwt_name.as_deref() == Some(target.trim_start_matches("sysbus."))
+            && let Some(dwt) = &mut self.dwt
+        {
+            dwt.set_clocked(clocked);
+            return Ok(());
+        }
         self.validate_nvic_name(target)?;
         self.systick
             .as_mut()
@@ -4664,6 +4705,17 @@ impl Bus {
         device.attach(address, eeprom)
     }
 
+    pub(crate) fn map_samd5_uart(&mut self, uart: crate::samd5_uart::Uart) -> Result<(), String> {
+        self.check_peripheral_range(uart.base, crate::samd5_uart::Uart::SIZE)?;
+        self.samd5_uarts.push(uart);
+        Ok(())
+    }
+
+    pub(crate) fn samd5_uart_nvic_lines(&self) -> usize {
+        self.samd5_uarts.iter().filter_map(|uart| uart.irq).max()
+            .map_or(0, |line| usize::from(line) + 1)
+    }
+
     pub(crate) fn map_renesas_ra_sci(&mut self, uart: crate::renesas_ra_sci::Sci) -> Result<(), String> {
         let start = u64::from(uart.base);
         let end = start + u64::from(crate::renesas_ra_sci::Sci::SIZE);
@@ -4758,6 +4810,11 @@ impl Bus {
             }
         }
         if let Some(nvic) = self.nvic.as_mut() {
+            for uart in &self.samd5_uarts {
+                if let Some(line) = uart.irq {
+                    nvic.set_line(line, uart.interrupt(), active);
+                }
+            }
             if let Some(icu) = &self.renesas_ra_icu {
                 icu.sample(nvic, active);
             }
@@ -6522,6 +6579,10 @@ impl Bus {
             self.miv_uart.as_mut().unwrap().queue_input(bytes.collect());
             return Ok(());
         }
+        if let TesterPort::Samd5(index) = port {
+            self.samd5_uarts[index].queue_input(bytes);
+            return Ok(());
+        }
         if let TesterPort::RenesasSci(index) = port {
             self.renesas_ra_sci[index].queue_input(bytes);
             return Ok(());
@@ -6584,6 +6645,8 @@ impl Bus {
             self.stm32_uart_input = index;
         } else if let Ok(TesterPort::RenesasSci(index)) = self.tester_port(name) {
             self.renesas_sci_input = index;
+        } else if let Ok(TesterPort::Samd5(index)) = self.tester_port(name) {
+            self.samd5_uart_input = index;
         }
     }
 
@@ -6592,6 +6655,7 @@ impl Bus {
             || self.miv_uart.is_some()
             || !self.pl011_uarts.is_empty()
             || !self.renesas_ra_sci.is_empty()
+            || !self.samd5_uarts.is_empty()
             || self.ns16550.is_some()
             || self.litex_uart.is_some()
             || !self.stm32_uarts.is_empty()
@@ -6608,6 +6672,8 @@ impl Bus {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.miv_uart.as_mut() {
             uart.queue_input(bytes);
+        } else if let Some(uart) = self.samd5_uarts.get_mut(self.samd5_uart_input) {
+            uart.queue_input(bytes.into_iter());
         } else if let Some(uart) = self.renesas_ra_sci.get_mut(self.renesas_sci_input) {
             uart.queue_input(bytes.into_iter());
         } else if let Some(uart) = self.pl011_uarts.first_mut() {
@@ -6675,6 +6741,8 @@ impl Bus {
             Ok(TesterPort::Ns16550)
         } else if self.miv_uart.as_ref().is_some_and(|uart| uart.name == name) {
             Ok(TesterPort::MiV)
+        } else if let Some(index) = self.samd5_uarts.iter().position(|uart| uart.name == name) {
+            Ok(TesterPort::Samd5(index))
         } else if let Some(index) = self.renesas_ra_sci.iter().position(|uart| uart.name == name) {
             Ok(TesterPort::RenesasSci(index))
         } else if let Some(index) = self.pl011_uarts.iter().position(|uart| uart.name == name) {
@@ -8530,6 +8598,9 @@ impl Bus {
         if N == 1 && let Some(protection) = self.renesas_gpio_protection.iter().find(|device| device.contains(address)) {
             return Ok(protection.read(address));
         }
+        if N == 1 && let Some(uart) = self.samd5_uarts.iter_mut().find(|uart| uart.contains(address)) {
+            return Ok(u32::from(uart.read(address)));
+        }
         if N == 1 && let Some(device) = self.renesas_ra_iic.iter_mut().find(|device| device.contains(address)) {
             return Ok(u32::from(device.read(address)));
         }
@@ -9639,6 +9710,16 @@ impl Bus {
         }
         if width == 1 && let Some(protection) = self.renesas_gpio_protection.iter_mut().find(|device| device.contains(address)) {
             protection.write(address, value);
+            return Ok(());
+        }
+        if width == 1 && let Some((index, device)) = self.samd5_uarts.iter_mut().enumerate()
+            .find(|(_, uart)| uart.contains(address))
+        {
+            if let Some(byte) = device.write(address, value as u8) {
+                uart.write_all(&[byte]).map_err(BusError::Output)?;
+                let console = self.monitor_log_enabled(1);
+                self.observe_uart_output(TesterPort::Samd5(index), &[byte], console);
+            }
             return Ok(());
         }
         if width == 1 && let Some(index) = self.renesas_ra_iic.iter().position(|device| device.contains(address)) {

@@ -1634,7 +1634,7 @@ fn run_commands<'a>(
                 let thumb = machine.cortex_m_cpu(cpu)?;
                 match property.as_str() {
                     "IsLockedUp" => writeln!(output.reply(), "{}", if thumb.locked_up() { "True" } else { "False" }),
-                    "ExecutedInstructions" => writeln!(output.reply(), "{}", thumb.executed_instructions()),
+                    "ExecutedInstructions" => writeln!(output.reply(), "0x{:016X}", thumb.executed_instructions()),
                     "SecureState" => writeln!(output.reply(), "{}", if thumb.secure_state() { "True" } else { "False" }),
                     "GetItState" => writeln!(output.reply(), "{}", thumb.it_state()),
                     "FPCAR" | "FPCCR" => {
@@ -2346,7 +2346,12 @@ fn run_commands<'a>(
                 machine.prepare_monitor_cortex_step(cpu)?;
                 Ok(None)
             }
-            Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
+            Action::CpuReset(cpu) => {
+                if !machine.bus.reset_named_cortex_peripheral(cpu) {
+                    machine.reset_named_cortex_m(cpu)?;
+                }
+                Ok(None)
+            }
             Action::MachineReset(hooks) => machine.reset_cortex_m_machine().and_then(|()| {
                 for hook in hooks {
                     match hook {
@@ -2431,10 +2436,15 @@ fn run_commands<'a>(
             Action::Frequency(target, frequency) => {
                 machine.bus.set_frequency(target, *frequency).map(|()| None)
             }
-            Action::NvicClocked(target, clocked) => machine
-                .bus
-                .set_nvic_clocked(target, *clocked)
-                .map(|()| None),
+            Action::NvicClocked(target, clocked) => {
+                let name = target.trim_start_matches("sysbus.");
+                if let Ok(cpu) = machine.cortex_m_monitor_cpu(name) {
+                    cpu.set_cortex_m_clocked(*clocked)?;
+                } else {
+                    machine.bus.set_nvic_clocked(target, *clocked)?;
+                }
+                Ok(None)
+            }
             Action::Adc(name, channel, volts) => machine
                 .external_event(ExternalEvent::Adc(name.clone(), *channel, *volts))
                 .map(|()| None),
