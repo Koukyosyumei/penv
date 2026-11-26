@@ -2479,7 +2479,7 @@ fn run_commands<'a>(
                 let (machine, id) = session.uart_machine(machine, *id)?;
                 let cycles = uart_wait_cycles(machine, id, *timeout)?.min(budget);
                 let start = machine.elapsed_steps();
-                wait_for_uart_bytes(machine, id, pattern, *match_start, cycles, *pause, &mut output)
+                wait_for_uart_bytes(machine, id, pattern, *match_start, cycles, *pause, &mut [], &mut output)
                     .and_then(|(stop, count, matched)| {
                         retired += count;
                         budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -2525,7 +2525,7 @@ fn run_commands<'a>(
                 let mut sequence = sequence.clone();
                 sequence.tester = id;
                 let elapsed = machine.elapsed_steps();
-                let (stop, count, matched) = sequence.wait(machine, budget, &mut output)?;
+                let (stop, count, matched) = sequence.wait(machine, budget, &mut [], &mut output)?;
                 retired += count;
                 budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(elapsed));
                 if stop == Stop::OutputMatch && matched.is_some() {
@@ -3226,9 +3226,9 @@ pub fn serve(
             }
 
             (Ok(()), [RuntimeCommand { action: Action::WaitForBytes(id, pattern, match_start, timeout, pause), .. }]) => {
-                let result = session.uart_machine(machine, *id).and_then(|(machine, id)| {
+                let result = session.with_uart_peers(machine, *id, |machine, id, peers| {
                     let cycles = uart_wait_cycles(machine, id, *timeout)?;
-                    wait_for_uart_bytes(machine, id, pattern, *match_start, cycles, *pause, &mut io::sink())
+                    wait_for_uart_bytes(machine, id, pattern, *match_start, cycles, *pause, peers, &mut io::sink())
                 });
                 match result {
                     Ok((_, _, Some(matched))) => frame(&mut output, "MATCHBYTES", uart_byte_payload(matched).as_bytes()),
@@ -3238,10 +3238,10 @@ pub fn serve(
                 }
             }
             (Ok(()), [RuntimeCommand { action: Action::WaitForTesterLines(sequence), .. }]) => {
-                let result = session.uart_machine(machine, sequence.tester).and_then(|(machine, id)| {
+                let result = session.with_uart_peers(machine, sequence.tester, |machine, id, peers| {
                     let mut sequence = sequence.clone();
                     sequence.tester = id;
-                    sequence.wait(machine, u64::MAX, &mut bytes)
+                    sequence.wait(machine, u64::MAX, peers, &mut bytes)
                 });
                 match result {
                     Ok((Stop::OutputMatch, _, Some((line, Some(timestamp))))) =>
@@ -3612,14 +3612,14 @@ struct UartLineSequence {
 
 impl UartLineSequence {
     fn wait(
-        &self, machine: &mut Machine, budget: u64, output: &mut impl Write,
+        &self, machine: &mut Machine, budget: u64, peers: &mut [&mut Machine], output: &mut impl Write,
     ) -> Result<(Stop, u64, Option<(String, Option<u128>)>), String> {
         let cycles = uart_wait_cycles(machine, self.tester, self.timeout)?.min(budget);
         let watch = machine.bus.watch_uart_tester_lines(
             self.tester, self.patterns.clone(), self.unfinished, self.first_only,
         )?;
         let pause = self.pause.unwrap_or(machine.bus.default_uart_pause);
-        let result = drive_tester_watch(machine, watch, cycles, pause, output);
+        let result = drive_networked_tester_watch(machine, watch, cycles, pause, peers, output);
         let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
         let timestamp = if machine.bus.uart_tester_matched_unfinished_line(watch) {
             Some(machine.monitor_elapsed_ns())
@@ -3642,11 +3642,12 @@ fn wait_for_uart_bytes(
     match_start: bool,
     cycles: u64,
     pause: Option<bool>,
+    peers: &mut [&mut Machine],
     output: &mut impl Write,
 ) -> Result<(Stop, u64, Option<crate::uart::BinaryUartMatch>), String> {
     let watch = machine.bus.watch_uart_bytes(id, pattern, match_start)?;
     let pause = pause.unwrap_or(machine.bus.default_uart_pause);
-    let result = drive_tester_watch(machine, watch, cycles, pause, output);
+    let result = drive_networked_tester_watch(machine, watch, cycles, pause, peers, output);
     let matched = machine.bus.take_uart_byte_match(watch);
     machine.bus.finish_stm32_uart_watch(watch);
     result.map(|(stop, count)| (stop, count, matched))
