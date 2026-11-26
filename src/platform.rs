@@ -1029,6 +1029,20 @@ fn load_platform(
                     return Err(entry.error("only one UART is currently supported"));
                 }
             }
+            "UART.RenesasRA8M1_SCI" => {
+                let (routes, properties) = renesas_icu_routes(
+                    entry, &entries, ["ReceiveIRQ", "TransmitIRQ", "TransmitEndIRQ"],
+                )?;
+                if let [("frequency", frequency)] = keys_in(entry, &properties, &["frequency"])?.as_slice()
+                    && number(frequency).map_err(|error| entry.error(&error))? > 0
+                {
+                    machine.bus.map_renesas_ra_sci(crate::renesas_ra_sci::Sci::new(
+                        entry.address()?, entry.name.clone(), routes,
+                    )).map_err(|error| entry.error(&error))?;
+                } else {
+                    return Err(entry.error("SCI requires a positive frequency"));
+                }
+            }
             "Timers.RenesasRA_AGT" => map_renesas_ra_agt(entry, &entries, &mut machine.bus)?,
             "Timers.RenesasRA_GPT" => map_renesas_ra_gpt(entry, &entries, &mut machine.bus)?,
             "IRQControllers.RenesasRA_ICU" => {
@@ -4305,30 +4319,33 @@ fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
     Ok(indices)
 }
 
-fn map_renesas_ra_agt(entry: &Entry, entries: &[Entry], bus: &mut crate::bus::Bus) -> Result<(), String> {
+fn renesas_icu_routes(
+    entry: &Entry, entries: &[Entry], pins: [&str; 3],
+) -> Result<([Option<usize>; 3], Properties), String> {
     let mut routes = [None; 3];
     let mut properties = Vec::new();
     for item in &entry.body {
         if let Some((pin, target)) = item.1.split_once("->") {
-            let output = match pin.trim() {
-                "IRQ" => 0,
-                "CompareMatchA" => 1,
-                "CompareMatchB" => 2,
-                _ => return Err(entry.error("unrecognized AGT output")),
-            };
+            let output = pins.iter().position(|name| *name == pin.trim())
+                .ok_or_else(|| entry.error("unrecognized Renesas peripheral output"))?;
             let (target, event) = target.trim().split_once('@')
-                .ok_or_else(|| entry.error("AGT output requires an ICU event"))?;
+                .ok_or_else(|| entry.error("output requires an ICU event"))?;
             if !entries.iter().any(|device| device.name == target.trim() && device.model == "IRQControllers.RenesasRA_ICU") {
-                return Err(entry.error("AGT output must target a Renesas ICU"));
+                return Err(entry.error("output must target a Renesas ICU"));
             }
             let event = number(event.trim()).map_err(|error| entry.error(&error))?;
             if event >= 512 || routes[output].replace(event as usize).is_some() {
-                return Err(entry.error("invalid or duplicate AGT IRQ route"));
+                return Err(entry.error("invalid or duplicate ICU event route"));
             }
         } else {
             properties.push(item.clone());
         }
     }
+    Ok((routes, properties))
+}
+
+fn map_renesas_ra_agt(entry: &Entry, entries: &[Entry], bus: &mut crate::bus::Bus) -> Result<(), String> {
+    let (routes, properties) = renesas_icu_routes(entry, entries, ["IRQ", "CompareMatchA", "CompareMatchB"])?;
     let clock_names = ["peripheralClockBFrequency", "lowSpeedOnChipOscillatorFrequency", "subClockOscillatorFrequency"];
     let mut clocks = [0; 3];
     for (name, value) in keys_in(entry, &properties, &clock_names)? {

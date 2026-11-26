@@ -212,6 +212,7 @@ enum TesterPort {
     Ns16550,
     MiV,
     Pl011(usize),
+    RenesasSci(usize),
 }
 
 enum TesterHistory {
@@ -523,6 +524,8 @@ pub struct Bus {
     renesas_ra_icu: Option<crate::renesas_ra_icu::Icu>,
     renesas_ra_gpt: Vec<crate::renesas_ra_gpt::Gpt>,
     renesas_ra_agt: Vec<crate::renesas_ra_agt::Agt>,
+    renesas_ra_sci: Vec<crate::renesas_ra_sci::Sci>,
+    renesas_sci_input: usize,
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
@@ -1867,6 +1870,9 @@ impl Bus {
         if let Some(device) = &mut self.dwt {
             device.reset();
         }
+        for uart in &mut self.renesas_ra_sci {
+            uart.reset();
+        }
         for timer in &mut self.renesas_ra_agt {
             timer.reset();
         }
@@ -2778,6 +2784,7 @@ impl Bus {
             || !self.gpio_pwm_leds.is_empty()
             || !self.stm32_regular_adcs.is_empty()
             || self.stm32_adc.is_some() || self.stm32_dma.as_ref().is_some_and(Stm32Dma::has_enabled_channels)
+            || !self.renesas_ra_sci.is_empty()
             || self.renesas_ra_agt.iter().any(crate::renesas_ra_agt::Agt::running)
             || self.renesas_ra_gpt.iter().any(crate::renesas_ra_gpt::Gpt::running)
             || self.renesas_ra_icu.as_ref().is_some_and(crate::renesas_ra_icu::Icu::has_pending)
@@ -3690,6 +3697,10 @@ impl Bus {
                 let other = u64::from(rcc.base);
                 start < other + u64::from(Stm32F4Rcc::SIZE) && other < end
             })
+            || self.renesas_ra_sci.iter().any(|uart| {
+                start < u64::from(uart.base) + u64::from(crate::renesas_ra_sci::Sci::SIZE)
+                    && end > u64::from(uart.base)
+            })
             || self.renesas_ra_agt.iter().any(|timer| {
                 start < u64::from(timer.base) + u64::from(crate::renesas_ra_agt::Agt::SIZE)
                     && end > u64::from(timer.base)
@@ -4582,6 +4593,18 @@ impl Bus {
         }
     }
 
+    pub(crate) fn map_renesas_ra_sci(&mut self, uart: crate::renesas_ra_sci::Sci) -> Result<(), String> {
+        let start = u64::from(uart.base);
+        let end = start + u64::from(crate::renesas_ra_sci::Sci::SIZE);
+        if end > 1 << 32 || uart.base & 3 != 0 || self.overlaps(start, end)
+            || self.renesas_ra_sci.iter().any(|mapped| mapped.name == uart.name)
+        {
+            return Err("invalid or overlapping Renesas RA SCI registration".into());
+        }
+        self.renesas_ra_sci.push(uart);
+        Ok(())
+    }
+
     pub(crate) fn map_renesas_ra_agt(&mut self, timer: crate::renesas_ra_agt::Agt) -> Result<(), String> {
         let start = u64::from(timer.base);
         let end = start + u64::from(crate::renesas_ra_agt::Agt::SIZE);
@@ -4646,6 +4669,9 @@ impl Bus {
         }
         for timer in &mut self.renesas_ra_agt {
             timer.tick(adc_step_rate, &mut pulse);
+        }
+        for uart in &mut self.renesas_ra_sci {
+            uart.tick(&mut pulse);
         }
         if let Some(nvic) = self.nvic.as_mut() {
             if let Some(icu) = &self.renesas_ra_icu {
@@ -6412,6 +6438,10 @@ impl Bus {
             self.miv_uart.as_mut().unwrap().queue_input(bytes.collect());
             return Ok(());
         }
+        if let TesterPort::RenesasSci(index) = port {
+            self.renesas_ra_sci[index].queue_input(bytes);
+            return Ok(());
+        }
         if let TesterPort::Pl011(index) = port {
             self.pl011_uarts[index].queue_input(bytes);
             return Ok(());
@@ -6468,6 +6498,8 @@ impl Bus {
     pub fn select_uart_input(&mut self, name: &str) {
         if let Ok(index) = self.stm32_usart_index(name) {
             self.stm32_uart_input = index;
+        } else if let Ok(TesterPort::RenesasSci(index)) = self.tester_port(name) {
+            self.renesas_sci_input = index;
         }
     }
 
@@ -6475,6 +6507,7 @@ impl Bus {
         self.uart.is_some()
             || self.miv_uart.is_some()
             || !self.pl011_uarts.is_empty()
+            || !self.renesas_ra_sci.is_empty()
             || self.ns16550.is_some()
             || self.litex_uart.is_some()
             || !self.stm32_uarts.is_empty()
@@ -6491,6 +6524,8 @@ impl Bus {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.miv_uart.as_mut() {
             uart.queue_input(bytes);
+        } else if let Some(uart) = self.renesas_ra_sci.get_mut(self.renesas_sci_input) {
+            uart.queue_input(bytes.into_iter());
         } else if let Some(uart) = self.pl011_uarts.first_mut() {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.ns16550.as_mut() {
@@ -6556,6 +6591,8 @@ impl Bus {
             Ok(TesterPort::Ns16550)
         } else if self.miv_uart.as_ref().is_some_and(|uart| uart.name == name) {
             Ok(TesterPort::MiV)
+        } else if let Some(index) = self.renesas_ra_sci.iter().position(|uart| uart.name == name) {
+            Ok(TesterPort::RenesasSci(index))
         } else if let Some(index) = self.pl011_uarts.iter().position(|uart| uart.name == name) {
             Ok(TesterPort::Pl011(index))
         } else if let Some(index) = self.rv64_devices.uart_index(name) {
@@ -8403,6 +8440,11 @@ impl Bus {
         {
             return Ok(exti.read(address));
         }
+        if N == 4 && address & 3 == 0
+            && let Some(device) = self.renesas_ra_sci.iter_mut().find(|uart| uart.contains(address))
+        {
+            return Ok(device.read(address));
+        }
         if matches!(N, 1 | 2) && address as usize & (N - 1) == 0
             && let Some(timer) = self.renesas_ra_agt.iter().find(|timer| timer.contains(address))
         {
@@ -9491,6 +9533,17 @@ impl Bus {
             && exti.contains(address)
         {
             exti.write(address, value);
+            return Ok(());
+        }
+        if width == 4 && address & 3 == 0
+            && let Some(index) = self.renesas_ra_sci.iter().position(|uart| uart.contains(address))
+        {
+            let step_hz = self.step_hz();
+            if let Some(byte) = self.renesas_ra_sci[index].write(address, value, step_hz) {
+                uart.write_all(&[byte]).map_err(BusError::Output)?;
+                let console = self.monitor_log_enabled(1);
+                self.observe_uart_output(TesterPort::RenesasSci(index), &[byte], console);
+            }
             return Ok(());
         }
         if matches!(width, 1 | 2) && address as usize & (width - 1) == 0
