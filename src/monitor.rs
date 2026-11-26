@@ -564,6 +564,21 @@ impl Session {
             .map_err(|error| format!("KeywordException: {error}"))
     }
 
+    fn led_tester(&self, id: Option<usize>) -> Result<(&str, u64), String> {
+        let id = match (id, self.led_testers.len()) {
+            (Some(id), _) => id,
+            (None, 1) => 0,
+            (None, 0) => return Err("There are no testers available.".into()),
+            (None, _) => return Err("There is more than one tester available - please specify ID of the desired tester.".into()),
+        };
+        let (owner, target, timeout) = self.led_testers.get(id)
+            .ok_or_else(|| format!("Tester for given ID={id} was not found."))?;
+        if owner.as_deref() != self.selected_machine() {
+            return Err("LED tester belongs to a different machine".into());
+        }
+        Ok((target, *timeout))
+    }
+
     fn selected_machine(&self) -> Option<&str> {
         self.machine.as_deref().filter(|_| !self.machine_cleared)
     }
@@ -1148,6 +1163,7 @@ enum Action {
     DefaultLedTimeout(u64),
     CreateLedTester(String, Option<u64>),
     AssertLedState(Option<usize>, bool, Option<u64>, u64, bool),
+    AssertLedTiming(Option<usize>, u64, LedTiming, f64, bool),
     WaitForLed(String, bool, u64, u64, bool),
     WaitForMemory(crate::memory_watch::MemoryWatch, u64, bool),
     CheckMemory(crate::memory_watch::MemoryWatch),
@@ -1384,7 +1400,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PythonAssignment(..) | Action::ExecutePython(..)
                     | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
                     | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..) | Action::PythonAddressHook(..) | Action::WaitForTesterLines(..)
-                    | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..)
+                    | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..) | Action::AssertLedTiming(..)
                     | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::SetAdvanceImmediately(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::EmulationSeed(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
@@ -2692,23 +2708,25 @@ fn run_commands<'a>(
                 writeln!(output.reply(), "{id}").map_err(|error| error.to_string())?;
                 Ok(None)
             }
+            Action::AssertLedTiming(id, duration, timing, tolerance, pause) => {
+                let (target, _) = session.led_tester(*id)?;
+                let rate = machine.bus.monitor_step_hz();
+                let limit = duration_cycles(*duration, CORTEX_M_STEP_HZ, rate)?;
+                machine.set_monitor_active(true);
+                let count = assert_led_timing(machine, target, limit, *timing, *tolerance, &mut budget, &mut output)?;
+                if *pause {
+                    machine.set_monitor_active(false);
+                }
+                retired += count;
+                Ok(None)
+            }
             Action::AssertLedState(..) | Action::WaitForLed(..) => {
                 let (target, state, timeout, hold, pause) = match &command.action {
                     Action::WaitForLed(target, state, timeout, hold, pause) =>
                         (target.as_str(), *state, *timeout, *hold, *pause),
                     Action::AssertLedState(id, state, timeout, hold, pause) => {
-                        let id = match (id, session.led_testers.len()) {
-                            (Some(id), _) => *id,
-                            (None, 1) => 0,
-                            (None, 0) => return Err("There are no testers available.".into()),
-                            (None, _) => return Err("There is more than one tester available - please specify ID of the desired tester.".into()),
-                        };
-                        let (owner, target, default) = session.led_testers.get(id)
-                            .ok_or_else(|| format!("Tester for given ID={id} was not found."))?;
-                        if owner.as_deref() != session.selected_machine() {
-                            return Err("LED tester belongs to a different machine".into());
-                        }
-                        (target.as_str(), *state, timeout.unwrap_or(*default), *hold, *pause)
+                        let (target, default) = session.led_tester(*id)?;
+                        (target, *state, timeout.unwrap_or(default), *hold, *pause)
                     }
                     _ => unreachable!(),
                 };
@@ -3613,6 +3631,79 @@ fn write_hex_list<T: std::fmt::LowerHex>(
         write!(output, "{separator}0x{value:0digits$x}")?;
     }
     writeln!(output, "]")
+}
+
+#[derive(Clone, Copy)]
+enum LedTiming {
+    Blink { on: u64, off: u64 },
+    DutyCycle(f64),
+}
+
+fn assert_led_timing(
+    machine: &mut Machine,
+    target: &str,
+    duration: u64,
+    timing: LedTiming,
+    tolerance: f64,
+    budget: &mut u64,
+    output: &mut impl Write,
+) -> Result<u64, String> {
+    let index = machine.bus.gpio_led_index(target)?;
+    let before = machine.elapsed_steps();
+    let mut previous = None;
+    let mut on_time = 0;
+    let mut off_time = 0;
+    let mut retired = 0;
+    let rate = machine.bus.monitor_step_hz();
+    let deadline = before.saturating_add(duration);
+    while machine.elapsed_steps() < deadline {
+        let transitions = machine.bus.gpio_led(index).transitions;
+        let start = machine.elapsed_steps();
+        let remaining = deadline - start;
+        let limit = remaining.min(*budget);
+        let (stop, count) = run_until_deadline(machine, limit, output, |bus, _| {
+            bus.gpio_led(index).transitions != transitions
+        })?;
+        retired += count;
+        let now = machine.elapsed_steps();
+        *budget = budget.saturating_sub(now.wrapping_sub(start));
+        if stop != Stop::OutputMatch {
+            if stop == Stop::Limit && limit == remaining {
+                break;
+            }
+            return Err(format!("LED timing assertion ended before completion ({stop:?})"));
+        }
+        if let Some(previous) = previous.replace(now) {
+            let interval = now - previous;
+            let was_on = !machine.bus.gpio_led(index).state;
+            if was_on {
+                on_time += interval;
+            } else {
+                off_time += interval;
+            }
+            if let LedTiming::Blink { on, off } = timing {
+                let expected = (if was_on { on } else { off }) as f64 / CORTEX_M_STEP_HZ as f64;
+                let measured = interval as f64 / rate as f64;
+                if measured < expected * (1.0 - tolerance) || measured > expected * (1.0 + tolerance) {
+                    return Err(format!("Expected blinking pattern not detected (LED {target} held state {was_on} for {measured:.9}s, expected {expected:.9}s)"));
+                }
+            }
+        }
+    }
+    match timing {
+        LedTiming::Blink { .. } if on_time + off_time == 0 => {
+            Err("Expected blinking pattern not detected (LED state never changed)".into())
+        }
+        LedTiming::DutyCycle(expected) => {
+            let measured = on_time as f64 / (on_time + off_time) as f64;
+            if measured < expected - tolerance || measured > expected + tolerance {
+                Err(format!("LED duty cycle assertion failed: expected {expected}, measured {measured}"))
+            } else {
+                Ok(retired)
+            }
+        }
+        _ => Ok(retired),
+    }
 }
 
 fn wait_for_led(
@@ -4658,7 +4749,7 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                 ["mach" | "machine", "set", _]
                 | ["numbersMode", _]
                 | ["SetDefaultUartTimeout" | "CreateTerminalTester" | "TestMonitorUartIdle"
-                    | "SetDefaultLedTimeout" | "CreateLedTester" | "AssertLedState"
+                    | "SetDefaultLedTimeout" | "CreateLedTester" | "AssertLedState" | "AssertLedBlinking" | "AssertLedDutyCycle"
                     | "WaitForLineOnUart" | "WaitForTesterPrompt" | "WaitForNextLineOnUart"
                     | "WaitForBytesOnUart" | "ShouldNotBeOnUart" | "WriteTesterUart"
                     | "RegisterFailingUartString" | "UnregisterFailingUartString", ..]
@@ -6301,6 +6392,47 @@ fn execute(
             };
             Some(Action::CreateLedTester(resolve(target)?.to_owned(), timeout))
         }
+        [command @ ("AssertLedBlinking" | "AssertLedDutyCycle"), duration, first, tail @ ..] => {
+            let duration = duration_steps(resolve(duration)?)?;
+            if duration == 0 {
+                return Err("LED test duration must be positive".into());
+            }
+            let (timing, options) = if *command == "AssertLedBlinking" {
+                let (off, options) = tail.split_first().ok_or("expected LED off duration")?;
+                let on = duration_steps(resolve(first)?)?;
+                let off = duration_steps(resolve(off)?)?;
+                if on == 0 || off == 0 {
+                    return Err("LED on and off durations must be positive".into());
+                }
+                (LedTiming::Blink { on, off }, options)
+            } else {
+                let fraction = resolve(first)?.parse::<f64>().map_err(|_| "invalid LED duty cycle")?;
+                if !(0.0..=1.0).contains(&fraction) {
+                    return Err("LED duty cycle must be in the range 0 to 1".into());
+                }
+                (LedTiming::DutyCycle(fraction), tail)
+            };
+            let mut id = None;
+            let mut pause = None;
+            let mut tolerance = None;
+            for option in options {
+                let (key, value) = option.split_once('=').ok_or("expected named LED timing option")?;
+                let value = resolve(value)?;
+                match key {
+                    "testerId" if id.is_none() => id = Some(value.parse().map_err(|_| "invalid LED tester ID")?),
+                    "pauseEmulation" if pause.is_none() => pause = Some(parse_tester_bool(value)?),
+                    "tolerance" if tolerance.is_none() => {
+                        let value = value.parse::<f64>().map_err(|_| "invalid LED timing tolerance")?;
+                        if !(0.0..=1.0).contains(&value) {
+                            return Err("LED timing tolerance must be in the range 0 to 1".into());
+                        }
+                        tolerance = Some(value);
+                    }
+                    _ => return Err(format!("unsupported or duplicate LED timing option {key:?}")),
+                }
+            }
+            Some(Action::AssertLedTiming(id, duration, timing, tolerance.unwrap_or(0.05), pause.unwrap_or(false)))
+        }
         ["AssertLedState", state, options @ ..] => {
             let state = parse_tester_bool(resolve(state)?)?;
             let mut id = None;
@@ -6938,7 +7070,7 @@ fn execute(
                         | Action::DefaultUartTimeout(_)
                         | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..)
                         | Action::CreateUartTester(..)
-                        | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..)
+                        | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..) | Action::AssertLedTiming(..)
                         | Action::DefaultUartTester(_)
                         | Action::ClearUartTesterReport(_)
                         | Action::UartIdle(..)

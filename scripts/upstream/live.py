@@ -48,6 +48,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         "Create LED Tester": "create_led",
         "Set Default Led Timeout": "set_default_led_timeout",
         "Assert LED State": "assert_led",
+        "Assert LED Is Blinking": "assert_led_blinking",
+        "Assert LED Duty Cycle": "assert_led_duty_cycle",
         "Assert And Hold LED State": "hold_led",
         "Execute Script": "execute_script",
         "Download File": "download_file",
@@ -1187,6 +1189,28 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         options = self.log_options(args, set(fields), fields)
         self.wait_for_led(state, options.get("timeout", self.led_timeout),
                           pause=options.get("pauseEmulation"), tester=options.get("testerId"))
+
+    def assert_led_blinking(self, *args):
+        fields = ("testDuration", "onDuration", "offDuration", "tolerance", "testerId", "pauseEmulation")
+        options = self.log_options(args, set(fields), fields)
+        durations = [self.duration(options[field]) for field in fields[:3]]
+        self.assert_led_timing("AssertLedBlinking", durations, options)
+
+    def assert_led_duty_cycle(self, *args):
+        fields = ("testDuration", "expectedDutyCycle", "tolerance", "testerId", "pauseEmulation")
+        options = self.log_options(args, set(fields), fields)
+        values = [self.duration(options["testDuration"]), str(float(options["expectedDutyCycle"]))]
+        self.assert_led_timing("AssertLedDutyCycle", values, options)
+
+    def assert_led_timing(self, command, values, options):
+        tester = self.parse_tester_id(options.get("testerId"))
+        if tester is not None:
+            values.append(f"testerId={tester}")
+        if "tolerance" in options:
+            values.append(f"tolerance={float(options['tolerance'])}")
+        if "pauseEmulation" in options:
+            values.append(f"pauseEmulation={str(self.log_bool(options['pauseEmulation'])).lower()}")
+        self.operation(" ".join([command, *values]), assertion=True)
 
     def wait_for_led(self, state, timeout, hold=None, pause=None, tester=None):
         state = state.lower()
