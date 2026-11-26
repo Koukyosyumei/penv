@@ -235,14 +235,13 @@ impl Csr {
         counters.inhibit & INSTRET_ENABLE == 0
     }
 
-    pub(crate) fn advance_sleep_counters(&mut self, steps: u64, timer: Option<u64>) {
+    pub(crate) fn advance_sleep_counters(&mut self, steps: u64, timer: u64) {
+        self.pending = 0;
         let counters = &mut self.counters;
         if counters.inhibit & CYCLE_ENABLE == 0 {
             counters.cycle = counters.cycle.wrapping_add(steps);
         }
-        if let Some(timer) = timer {
-            counters.time = timer;
-        }
+        counters.time = timer;
         counters.instret_written = false;
     }
 

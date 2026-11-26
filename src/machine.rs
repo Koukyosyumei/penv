@@ -1933,7 +1933,7 @@ impl Machine {
                 self.elapsed_steps = self.elapsed_steps.wrapping_add(quiet);
                 self.time_source.grant_until(self.time_source.elapsed().saturating_add(quiet));
                 self.bus.uart_clock_step = self.elapsed_steps;
-                self.primary.csr.advance_sleep_counters(quiet, Some(timer.unwrap_or(self.elapsed_steps)));
+                self.primary.csr.advance_sleep_counters(quiet, timer.unwrap_or(self.elapsed_steps));
                 remaining -= quiet;
                 if matched(&self.bus, output) {
                     return Ok((Stop::OutputMatch, retired));
