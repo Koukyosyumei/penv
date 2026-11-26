@@ -158,6 +158,33 @@ mod tests {
     }
 
     #[test]
+    fn arm_stage_two_mmio_abort_identifies_the_faulting_transfer() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        cpu.configure_pmsa(12, 16).unwrap();
+        cpu.monitor_system_register("HMAIR0", Some(0xff)).unwrap();
+        cpu.monitor_system_register("HPRBAR0", Some(2)).unwrap();
+        cpu.monitor_system_register("HPRLAR0", Some(0xfc1)).unwrap();
+        cpu.hcr = 1;
+        cpu.hvbar = 0x2000;
+
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        let mut output = Vec::new();
+        bus.write(0, 4, 0xe591_2000, &mut output).unwrap(); // LDR r2, [r1]
+        let mut registers = [0; 32];
+        registers[1] = 0xaf00_0004;
+        cpu.set_cpsr(0x13, &mut registers).unwrap();
+        let mut pc = 0;
+        assert!(matches!(
+            cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output).unwrap(),
+            Step::Trap
+        ));
+        assert_eq!(pc, 0x2014);
+        assert_eq!(cpu.monitor_system_register("HSR", None).unwrap(), Some(0x9382_0000));
+        assert_eq!(cpu.monitor_system_register("HDFAR", None).unwrap(), Some(0xaf00_0004));
+    }
+
+    #[test]
     fn arm_aarch32_translation_table_access_shares_full_register_state() {
         let mut cpu = Cpu::new(Profile::RealTimeV8);
         let mut bus = Bus::default();

@@ -82,6 +82,7 @@ pub(super) enum Access {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Fault {
+    Background = 0,
     Translation = 4,
     Permission = 12,
     Alignment = 33,
@@ -150,7 +151,7 @@ impl Pmsa {
             return if background {
                 Ok(())
             } else {
-                Err(Fault::Permission)
+                Err(Fault::Background)
             };
         };
         if matches.next().is_some() {
