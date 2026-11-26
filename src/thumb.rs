@@ -1,4 +1,5 @@
 mod fpu;
+mod mve;
 pub(crate) mod opcode_counter;
 mod thumb2;
 pub(crate) mod trace;
@@ -351,7 +352,7 @@ impl Thumb {
         self.thread_uses_psp = use_psp;
     }
 
-    fn system_read(&self, register: u32, r: &[u32; 32]) -> Option<u32> {
+    pub(crate) fn system_read(&self, register: u32, r: &[u32; 32]) -> Option<u32> {
         let ipsr = u32::from(self.active_exception);
         Some(match register {
             0 => self.apsr(),
@@ -383,7 +384,7 @@ impl Thumb {
         })
     }
 
-    fn system_write(&mut self, register: u32, value: u32, r: &mut [u32; 32]) -> bool {
+    pub(crate) fn system_write(&mut self, register: u32, value: u32, r: &mut [u32; 32]) -> bool {
         match register {
             0..=3 => self.set_apsr(value),
             5..=7 => {}
@@ -1814,7 +1815,8 @@ impl Thumb {
                 {
                     self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
                 } else {
-                    if Self::is_fpu_instruction(inst, low)
+                    let vector = self.cortex_m55.then(|| mve::VectorTransfer::decode(inst, low)).flatten();
+                    if (vector.is_some() || Self::is_fpu_instruction(inst, low))
                         && let Some((address, hardfault_ready)) = bus.nvic.as_ref().and_then(Nvic::pending_lazy_fp)
                     {
                         let mut state = [0; 18];
@@ -1839,7 +1841,9 @@ impl Thumb {
                             Err(error) => return Err(error.to_string().into()),
                         }
                     }
-                    if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {
+                    if let Some(transfer) = vector {
+                        self.execute_vector_transfer(transfer, inst, low, r, bus, output)?;
+                    } else if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {
                         self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
                     }
                 }

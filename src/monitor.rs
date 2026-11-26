@@ -944,8 +944,9 @@ fn run_commands<'a>(
                     "IsLockedUp" => writeln!(output.reply(), "{}", if thumb.locked_up() { "True" } else { "False" }),
                     "ExecutedInstructions" => writeln!(output.reply(), "{}", thumb.executed_instructions()),
                     "GetItState" => writeln!(output.reply(), "{}", thumb.it_state()),
-                    "FPCAR" => {
-                        let value = machine.bus.read_scalar::<4>(0xe000_ef38, true).map_err(|error| error.to_string())?;
+                    "FPCAR" | "FPCCR" => {
+                        let address = if property == "FPCAR" { 0xe000_ef38 } else { 0xe000_ef34 };
+                        let value = machine.bus.read_scalar::<4>(address, true).map_err(|error| error.to_string())?;
                         writeln!(output.reply(), "0x{value:08x}")
                     }
                     _ => unreachable!(),
@@ -5106,7 +5107,7 @@ fn execute(
                 .parse()
                 .map_err(|_| "expected NVIC Clocked true or false")?,
         )),
-        [target, property @ ("IsLockedUp" | "ExecutedInstructions" | "GetItState" | "FPCAR")] => {
+        [target, property @ ("IsLockedUp" | "ExecutedInstructions" | "GetItState" | "FPCAR" | "FPCCR")] => {
             Some(Action::CpuStatus(resolve(target)?.trim_start_matches("sysbus.").into(), (*property).into()))
         }
         [target, signal @ ("Lockup" | "InSleep" | "InDeepSleep"), "IsSet"] => {

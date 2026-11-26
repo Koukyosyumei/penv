@@ -673,6 +673,31 @@ impl Machine {
             }
             return Ok(Some(u64::from(thumb.xpsr())));
         }
+        if let Some(thumb) = hart.thumb.as_mut() {
+            let system = match register.as_str() {
+                "apsr" => Some(0),
+                "ipsr" => Some(5),
+                "msp" => Some(8),
+                "psp" => Some(9),
+                "primask" => Some(16),
+                "basepri" => Some(17),
+                "faultmask" => Some(19),
+                "control" => Some(20),
+                _ => None,
+            };
+            if let Some(system) = system {
+                let read = thumb.system_read(system, &hart.registers)
+                    .ok_or_else(|| format!("unsupported Cortex-M monitor register {register}"))?;
+                if let Some(value) = value {
+                    let value = u32::try_from(value).map_err(|_| "register value exceeds Cortex-M width")?;
+                    if !thumb.system_write(system, value, &mut hart.registers) {
+                        return Err(format!("Cortex-M register {register} is read-only"));
+                    }
+                    return Ok(None);
+                }
+                return Ok(Some(u64::from(read)));
+            }
+        }
         if hart.thumb.is_some() && register != "resetvector" {
             let index = match register.as_str() {
                 "sp" => Some(13),
