@@ -1,4 +1,4 @@
-use super::{Entry, keys, object_fields};
+use super::{Entry, keys, map_pl011, object_fields};
 use crate::{
     arm32::{Cpu, Profile},
     machine::Machine,
@@ -50,6 +50,7 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
                 map_memory(&mut machine, entry)?;
                 mapped = true;
             }
+            "UART.PL011" => map_pl011(entry, None, &mut machine.bus)?,
             _ => return Err(entry.error("unsupported ARMv7 platform peripheral")),
         }
     }

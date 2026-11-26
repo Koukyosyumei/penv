@@ -1007,6 +1007,10 @@ fn load_platform(
                 }
             }
             "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
+            "UART.PL011" => {
+                let controller = entries.iter().find(|entry| entry.model == "IRQControllers.NVIC");
+                map_pl011(entry, controller, &mut machine.bus)?;
+            }
             "Wireless.NRF52840_Radio" => {
                 keys(entry, &[])?;
                 let radio = crate::nrf52840::Peripheral::radio(
@@ -3711,6 +3715,46 @@ fn memory_registrations(entry: &Entry, length: u32) -> Result<Vec<(u32, u32, u32
         }
         Ok((parse(address)?, length, 0))
     }).collect()
+}
+
+fn map_pl011(entry: &Entry, nvic: Option<&Entry>, bus: &mut Bus) -> Result<(), String> {
+    let mut fifo = None;
+    let mut sbsa = None;
+    let mut frequency = None;
+    let mut irq = None;
+    for (_, line) in &entry.body {
+        if let Some((pin, destination)) = line.split_once("->")
+            && matches!(pin.trim(), "" | "IRQ") && irq.is_none()
+        {
+            let (target, input) = destination.trim().split_once('@')
+                .ok_or_else(|| entry.error("expected PL011 interrupt destination"))?;
+            if nvic.is_none_or(|controller| controller.name != target.trim()) {
+                return Err(entry.error("unsupported PL011 interrupt controller"));
+            }
+            irq = Some(irq_index(input, 256).map_err(|error| entry.error(&error))?);
+            continue;
+        }
+        let (key, value) = line.split_once(':').ok_or_else(|| entry.error("invalid PL011 declaration"))?;
+        match key.trim() {
+            "fifoSize" if fifo.is_none() => {
+                fifo = Some(number(value.trim()).map_err(|error| entry.error(&error))?);
+            }
+            "frequency" if frequency.is_none() => {
+                frequency = Some(number(value.trim()).map_err(|error| entry.error(&error))?);
+            }
+            "sbsa" if sbsa.is_none() => {
+                sbsa = Some(boolean_value(value).ok_or_else(|| entry.error("invalid PL011 sbsa mode"))?);
+            }
+            _ => return Err(entry.error("unknown or duplicate PL011 property")),
+        }
+    }
+    if fifo == Some(0) || frequency == Some(0) {
+        return Err(entry.error("PL011 FIFO size and clock frequency must be positive"));
+    }
+    let uart = crate::pl011::Pl011::new(
+        entry.name.clone(), entry.address()?, fifo.unwrap_or(1), sbsa.unwrap_or(false), irq,
+    );
+    bus.map_pl011(uart).map_err(|error| entry.error(&error))
 }
 
 fn sysbus_range(entry: &Entry, default_size: u32) -> Result<(u32, u32), String> {

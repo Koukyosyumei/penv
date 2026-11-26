@@ -104,6 +104,7 @@ mod ns16550;
 mod nvic;
 mod platform;
 mod plic;
+mod pl011;
 mod pmp;
 mod pydev;
 mod repl_parser;

@@ -211,6 +211,7 @@ enum TesterPort {
     Rv64(usize),
     Ns16550,
     MiV,
+    Pl011(usize),
 }
 
 enum TesterHistory {
@@ -463,6 +464,7 @@ pub struct Bus {
     named_stm32_gpios: Vec<(String, u32)>,
     pub uart: Option<MuraxUart>,
     miv_uart: Option<crate::uart::MiVUart>,
+    pl011_uarts: Vec<crate::pl011::Pl011>,
     miv_gpios: Vec<crate::miv::Gpio>,
     miv_timers: Vec<crate::miv::Timer>,
     miv_buttons: Vec<(String, usize, crate::litex_panel::Button)>,
@@ -2631,7 +2633,7 @@ impl Bus {
     pub(crate) fn advance_f4_quiet(&mut self, limit: u64) -> u64 {
         if self.f4_rcc.is_none() || self.h7_network_control.is_some()
             || !self.nrf_peripherals.is_empty() || self.has_rv64_ethernet_link()
-            || self.litex_uart.is_some() || self.uart.is_some() || self.stm32_rtc.is_some()
+            || self.litex_uart.is_some() || self.uart.is_some() || !self.pl011_uarts.is_empty() || self.stm32_rtc.is_some()
             || self.h7_ltdc.is_some() || !self.h7_i2c.is_empty() || !self.h7_lptimers.is_empty()
             || !self.h7_adc.is_empty() || !self.h7_bdma.is_empty() || !self.stm32_regular_adcs.is_empty()
             || self.stm32_adc.is_some() || self.stm32_dma.as_ref().is_some_and(Stm32Dma::has_enabled_channels)
@@ -3315,6 +3317,9 @@ impl Bus {
             || self.miv_uart.as_ref().is_some_and(|uart| {
                 overlaps_range(start, end, uart.base, crate::uart::MiVUart::SIZE as u32)
             })
+            || self.pl011_uarts.iter().any(|uart| {
+                overlaps_range(start, end, uart.base, crate::pl011::Pl011::SIZE)
+            })
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 uart.bases
                     .iter()
@@ -3687,6 +3692,15 @@ impl Bus {
         self.miv_uart.is_some()
     }
 
+    pub(crate) fn map_pl011(&mut self, uart: crate::pl011::Pl011) -> Result<(), String> {
+        self.check_peripheral_range(uart.base, crate::pl011::Pl011::SIZE)?;
+        if self.pl011_uarts.iter().any(|mapped| mapped.name == uart.name) {
+            return Err("duplicate PL011 name".into());
+        }
+        self.pl011_uarts.push(uart);
+        Ok(())
+    }
+
     pub(crate) fn map_miv_gpio(&mut self, gpio: crate::miv::Gpio) -> Result<(), String> {
         self.check_peripheral_range(gpio.base, crate::miv::Gpio::SIZE)?;
         self.miv_gpios.push(gpio);
@@ -3905,6 +3919,9 @@ impl Bus {
         if let Some(uart) = self.stm32_uarts.iter().find(|uart| uart.name == name) {
             return offset.checked_add(4).filter(|end| *end <= uart.size())
                 .and_then(|_| uart.base.checked_add(offset));
+        }
+        if let Some(uart) = self.pl011_uarts.iter().find(|uart| uart.name == name) {
+            return (offset < crate::pl011::Pl011::SIZE).then(|| uart.base + offset);
         }
         let (_, plic) = self.plics.iter().find(|(registered, _)| registered == name)?;
         (u64::from(offset) < plic.size).then(|| plic.base + offset)
@@ -4355,6 +4372,11 @@ impl Bus {
             for device in &mut self.nrf_peripherals {
                 device.tick(sleeping, nrf_ticks);
                 nvic.set_line(device.irq, device.pending(), active);
+            }
+            for uart in &self.pl011_uarts {
+                if let Some(line) = uart.irq {
+                    nvic.set_line(line, uart.interrupt(), active);
+                }
             }
             if let Some(line) = self.h7_flash.as_ref().and_then(FlashController::interrupt) {
                 nvic.set_line(line, true, active);
@@ -6087,6 +6109,10 @@ impl Bus {
             self.miv_uart.as_mut().unwrap().queue_input(bytes.collect());
             return Ok(());
         }
+        if let TesterPort::Pl011(index) = port {
+            self.pl011_uarts[index].queue_input(bytes);
+            return Ok(());
+        }
         if let TesterPort::Rv64(_) = port {
             self.rv64_devices.select_uart(name.trim_start_matches("sysbus."))?;
             self.rv64_devices.queue_input(bytes.collect());
@@ -6145,6 +6171,7 @@ impl Bus {
     pub fn has_uart_input(&self) -> bool {
         self.uart.is_some()
             || self.miv_uart.is_some()
+            || !self.pl011_uarts.is_empty()
             || self.ns16550.is_some()
             || self.litex_uart.is_some()
             || !self.stm32_uarts.is_empty()
@@ -6160,6 +6187,8 @@ impl Bus {
         if let Some(uart) = self.uart.as_mut() {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.miv_uart.as_mut() {
+            uart.queue_input(bytes);
+        } else if let Some(uart) = self.pl011_uarts.first_mut() {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.ns16550.as_mut() {
             uart.queue_input(bytes);
@@ -6224,6 +6253,8 @@ impl Bus {
             Ok(TesterPort::Ns16550)
         } else if self.miv_uart.as_ref().is_some_and(|uart| uart.name == name) {
             Ok(TesterPort::MiV)
+        } else if let Some(index) = self.pl011_uarts.iter().position(|uart| uart.name == name) {
+            Ok(TesterPort::Pl011(index))
         } else if let Some(index) = self.rv64_devices.uart_index(name) {
             Ok(TesterPort::Rv64(index))
         } else {
@@ -6735,7 +6766,8 @@ impl Bus {
     }
 
     pub(crate) fn supports_rv64_snapshot(&self) -> bool {
-        self.clint.is_none() && self.miv_uart.is_none() && self.rv64_devices.supports_snapshot()
+        self.clint.is_none() && self.miv_uart.is_none() && self.pl011_uarts.is_empty()
+            && self.rv64_devices.supports_snapshot()
             && self.rv64_tohost.is_none() && self.robot_tohost.is_none()
             && self.policy_tags.is_empty() && self.pydevs.is_empty()
             && self.riscv_machine_timer.is_none() && self.clic.is_none()
@@ -7752,6 +7784,11 @@ impl Bus {
         {
             return Ok(uart.read(address));
         }
+        if matches!(N, 1 | 2 | 4)
+            && let Some(uart) = self.pl011_uarts.iter_mut().find(|uart| uart.contains(address))
+        {
+            return Ok(uart.read(address) & (u32::MAX >> (32 - N * 8)));
+        }
         if matches!(N, 1 | 4) && let Some(gpio) = self.miv_gpios.iter().find(|gpio| gpio.contains(address)) {
             return Ok(gpio.read(address));
         }
@@ -8689,6 +8726,17 @@ impl Bus {
                 uart.write_all(&[byte]).map_err(BusError::Output)?;
                 let console = self.monitor_log_enabled(1);
                 self.observe_uart_output(TesterPort::MiV, &[byte], console);
+            }
+            return Ok(());
+        }
+        if matches!(width, 1 | 2 | 4)
+            && let Some((index, device)) = self.pl011_uarts.iter_mut().enumerate()
+                .find(|(_, device)| device.contains(address))
+        {
+            if let Some(byte) = device.write(address, value & (u32::MAX >> (32 - width * 8))) {
+                uart.write_all(&[byte]).map_err(BusError::Output)?;
+                let console = self.monitor_log_enabled(1);
+                self.observe_uart_output(TesterPort::Pl011(index), &[byte], console);
             }
             return Ok(());
         }
