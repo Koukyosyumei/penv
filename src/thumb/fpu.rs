@@ -15,6 +15,9 @@ impl Thumb {
         let mut state = [0; 34];
         state[..16].copy_from_slice(&self.fp[..16]);
         state[16] = self.fpscr;
+        if self.armv81m {
+            state[17] = self.vpr;
+        }
         if full_frame {
             state[18..].copy_from_slice(&self.fp[16..]);
         }
@@ -49,14 +52,29 @@ impl Thumb {
         if rn == 15 {
             return Err("secure FP transfer cannot use PC as its base register".into());
         }
+        let load = instruction & 0x10 != 0;
+        let full_frame = bus.nvic.as_ref().is_some_and(Nvic::secure_full_fp_frame);
+        if self.armv81m {
+            if !self.fp_active {
+                return Ok(());
+            }
+            if let Some(nvic) = &mut bus.nvic {
+                if load && nvic.pending_lazy_fp().is_some() {
+                    nvic.clear_lazy_fp();
+                    return Ok(());
+                }
+                if !load && nvic.lazy_fp_enabled() {
+                    nvic.reserve_lazy_fp(r[rn] & !7, true, full_frame);
+                    return Ok(());
+                }
+            }
+            if r[rn] & 7 != 0 {
+                return Err("unaligned secure floating-point context".into());
+            }
+        }
         self.fp_active = true;
         let mut fp = self.fp;
-        let load = instruction & 0x10 != 0;
-        let count = if bus.nvic.as_ref().is_some_and(Nvic::secure_full_fp_frame) {
-            32
-        } else {
-            16
-        };
+        let count = if full_frame { 32 } else { 16 };
         for index in 0..count {
             let offset = if index < 16 { index } else { index + 2 };
             let address = r[rn].wrapping_add(4 * offset as u32);
@@ -69,9 +87,15 @@ impl Thumb {
         let address = r[rn].wrapping_add(64);
         if load {
             self.fpscr = bus.thumb_read::<4>(address)?;
+            if self.armv81m {
+                self.vpr = bus.thumb_read::<4>(address.wrapping_add(4))?;
+            }
             self.fp = fp;
         } else {
             bus.thumb_write(address, 4, self.fpscr, output)?;
+            if self.armv81m {
+                bus.thumb_write(address.wrapping_add(4), 4, self.vpr, output)?;
+            }
         }
         Ok(())
     }

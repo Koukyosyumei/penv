@@ -212,12 +212,18 @@ impl Thumb {
         Ok(())
     }
 
+    pub(crate) fn enable_armv81m(&mut self) {
+        self.armv81m = true;
+        self.fpscr = 4 << 16;
+    }
+
     pub fn reset_state(&mut self) {
         *self = Self {
             vectors: self.vectors,
             thumb2: self.thumb2,
             cortex_m33: self.cortex_m33,
             armv81m: self.armv81m,
+            fpscr: if self.armv81m { 4 << 16 } else { 0 },
             trustzone: self.trustzone,
             secure: self.trustzone,
             clock_gated: self.clock_gated,
@@ -2281,7 +2287,7 @@ impl Thumb {
                             self.branch_exception = true;
                             return Ok(false);
                         }
-                        if self.preserve_lazy_fp(bus)? {
+                        if !(secure_fp_transfer && self.armv81m) && self.preserve_lazy_fp(bus)? {
                             *pc = LOCKUP_PC;
                             self.branch_exception = true;
                             return Ok(false);

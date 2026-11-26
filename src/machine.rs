@@ -3139,7 +3139,7 @@ impl Hart {
 
     pub(crate) fn configure_armv81m(&mut self, trustzone: bool) -> Result<(), String> {
         let thumb = self.thumb.as_mut().ok_or("Armv8.1-M requires a Cortex-M CPU")?;
-        thumb.armv81m = true;
+        thumb.enable_armv81m();
         thumb.configure_trustzone(trustzone);
         Ok(())
     }
