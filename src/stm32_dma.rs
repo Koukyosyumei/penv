@@ -282,7 +282,7 @@ impl Stm32Dma {
         self.update_active(transfer.channel);
     }
 
-    pub fn interrupts(&self) -> u32 {
+    pub fn interrupts(&self) -> u64 {
         self.channels.iter().fold(0, |pending, channel| {
             if channel.flags & channel.config != 0
                 && let Some(line) = channel.irq

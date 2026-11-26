@@ -65,8 +65,8 @@ pub struct UartObservation {
 
 pub struct Stm32Usart {
     pub name: String,
-    pub dma_rx: u8,
-    pub dma_tx: u8,
+    pub dma_rx: u16,
+    pub dma_tx: u16,
     pub base: u32,
     pub observed: Option<UartObservation>,
     pub irq: Option<Stm32Irq>,
@@ -359,7 +359,7 @@ impl Stm32Usart {
         *register = (*register & !mask) | value;
     }
 
-    pub fn pending_dma(&self) -> u8 {
+    pub fn pending_dma(&self) -> u16 {
         let control = self.registers[0];
         let dma = self.registers[2];
         let rx = if control & (self.enable_bit() | RE) == self.enable_bit() | RE

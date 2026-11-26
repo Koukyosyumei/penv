@@ -21,9 +21,9 @@ pub struct Stm32Timer {
     initial_frequency: u32,
     initial_limit: u32,
     counter_mask: u32,
-    routes: [u32; 8],
-    pub dma_routes: [u8; 8],
-    dma_requests: u8,
+    routes: [u64; 8],
+    pub dma_routes: [u16; 8],
+    dma_requests: u16,
     pub gpio_outputs: Vec<(u8, TimerPin)>,
     output_reference: u8,
     output_enable: u8,
@@ -43,7 +43,7 @@ pub struct Stm32Timer {
 impl Stm32Timer {
     pub const SIZE: u32 = 0x400;
 
-    pub fn new(base: u32, frequency: u32, initial_limit: u32, routes: [u32; 8]) -> Self {
+    pub fn new(base: u32, frequency: u32, initial_limit: u32, routes: [u64; 8]) -> Self {
         Self {
             base,
             name: None,
@@ -241,11 +241,11 @@ impl Stm32Timer {
         }
     }
 
-    pub fn tick(&mut self) -> u32 {
+    pub fn tick(&mut self) -> u64 {
         self.advance(1)
     }
 
-    fn advance(&mut self, steps: u32) -> u32 {
+    fn advance(&mut self, steps: u32) -> u64 {
         if self.registers[0] & ENABLE != 0 && self.active_arr != 0 {
             self.phase += u64::from(self.frequency) * u64::from(steps);
             while self.phase >= CORTEX_M_STEP_HZ
@@ -270,7 +270,7 @@ impl Stm32Timer {
         irqs
     }
 
-    pub fn take_dma_requests(&mut self) -> u8 {
+    pub fn take_dma_requests(&mut self) -> u16 {
         std::mem::take(&mut self.dma_requests)
     }
 
@@ -418,13 +418,13 @@ impl Stm32Timer {
 mod tests {
     use super::*;
 
-    const COMPARE_IRQ: u32 = 1 << 15;
+    const COMPARE_IRQ: u64 = 1 << 15;
     const CC1: u32 = 1 << 1;
     const CNT: u32 = 0x24;
     const CCR1: u32 = 0x34;
     const SR: u32 = 0x10;
 
-    const UPDATE_IRQ: u32 = 1 << 15;
+    const UPDATE_IRQ: u64 = 1 << 15;
 
     fn limit_timer(frequency: u32, period: u32, direction: u32, interrupt: bool) -> Stm32Timer {
         let mut timer = Stm32Timer::new(0, 48_000_000, u32::MAX, [UPDATE_IRQ, 0, 0, 0, 0, 0, 0, 0]);
@@ -626,7 +626,7 @@ mod tests {
     // STM32F4_Discovery.robot: Should Fire Update Event When Counting Up/Down.
     #[test]
     fn renode_tim2_update_irq_repeats_in_both_directions() {
-        const TIM2_IRQ: u32 = 1 << 15;
+        const TIM2_IRQ: u64 = 1 << 15;
         for direction in [0, DOWN] {
             let mut timer = Stm32Timer::new(
                 0,

@@ -678,7 +678,8 @@ fn load_platform(
     let mut stm32_regular_adcs = Vec::new();
     let mut stm32_rtc = None;
     let mut stm32f4_rcc = None;
-    let mut stm32_dma = None;
+    let mut stm32_dmas = Vec::new();
+    let mut stm32f1_i2cs = Vec::new();
     let mut plic = Vec::new();
     let mut timer = None;
     let mut litex_timer = None;
@@ -1010,11 +1011,8 @@ fn load_platform(
                     return Err(entry.error("only one STM32 RTC is supported"));
                 }
             }
-            "DMA.STM32G0DMA" => {
-                if stm32_dma.replace(entry).is_some() {
-                    return Err(entry.error("only one STM32 DMA controller is supported"));
-                }
-            }
+            "DMA.STM32G0DMA" => stm32_dmas.push(entry),
+            "I2C.STM32F1_I2C" => stm32f1_i2cs.push(entry),
             "Miscellaneous.STM32L0_PWR" => {
                 if stm32l0_power.replace(entry).is_some() {
                     return Err(entry.error("only one STM32L0 power controller is supported"));
@@ -1312,7 +1310,14 @@ fn load_platform(
             memory("flash")?, memory("eeprom")?,
         )).map_err(|error| entry.error(&error))?;
     }
-    let irq_lines = if extended_nvic { 48 } else { 32 };
+    let irq_lines = if stm32f1_afio.is_some() {
+        64
+    } else if extended_nvic {
+        48
+    } else {
+        32
+    };
+    let stm32_dma = stm32_dmas.first().copied();
     for entry in stm32_regular_adcs {
         let irq = match entry.body.as_slice() {
             [] => None,
@@ -1697,7 +1702,7 @@ fn load_platform(
                     && nvic.is_some_and(|controller| controller.name == target.trim())
                     && output.is_none()
                 {
-                    output = Some(irq_index(index, 32).map_err(|e| combiner.error(&e))?);
+                    output = Some(irq_index(index, irq_lines).map_err(|e| combiner.error(&e))?);
                 } else {
                     return Err(combiner.error("unsupported combined input property or wiring"));
                 }
@@ -2064,7 +2069,8 @@ fn load_platform(
                 .map_stm32_rtc(device)
                 .map_err(|e| rtc.error(&e))?;
         }
-        let dma_channels = if let Some(dma) = stm32_dma {
+        let mut dma_controllers = HashMap::new();
+        for (controller, &dma) in stm32_dmas.iter().enumerate() {
             let count = dma
                 .body
                 .iter()
@@ -2088,7 +2094,7 @@ fn load_platform(
                     return Err(dma.error("invalid DMA interrupt target"));
                 };
                 let routes = if nvic.is_some_and(|nvic| nvic.name == target.trim()) {
-                    irq_list(pins, 32).map_err(|e| dma.error(&e))?
+                    irq_list(pins, irq_lines).map_err(|e| dma.error(&e))?
                 } else if let Some(&(size, irq)) = combined_routes.get(target.trim()) {
                     irq_list(pins, size)
                         .map_err(|e| dma.error(&e))?
@@ -2116,10 +2122,34 @@ fn load_platform(
                 .bus
                 .map_stm32_dma(device)
                 .map_err(|e| dma.error(&e))?;
-            count
-        } else {
-            0
-        };
+            dma_controllers.insert(dma.name.as_str(), (controller, count));
+        }
+        let dma_channels = stm32_dma.and_then(|dma| dma_controllers.get(dma.name.as_str()))
+            .map_or(0, |(_, channels)| *channels);
+        for i2c in stm32f1_i2cs {
+            let mut device = crate::stm32f1_i2c::F1I2c::new(i2c.address()?);
+            for (_, line) in &i2c.body {
+                let (source, destination) = line.split_once("->").ok_or_else(|| i2c.error("invalid STM32F1 I2C wiring"))?;
+                let (name, pin) = destination.split_once('@').ok_or_else(|| i2c.error("invalid STM32F1 I2C target"))?;
+                let name = name.trim();
+                match source.trim() {
+                    "EventInterrupt" | "ErrorInterrupt" if nvic.is_some_and(|nvic| nvic.name == name) => {
+                        let irq = irq_index(pin, irq_lines).map_err(|error| i2c.error(&error))?;
+                        let route = if source.trim() == "EventInterrupt" { &mut device.event } else { &mut device.error };
+                        if route.replace(Stm32Irq::Nvic(irq)).is_some() {
+                            return Err(i2c.error("duplicate STM32F1 I2C interrupt"));
+                        }
+                    }
+                    output @ ("TxDMARequest" | "RxDMARequest") => {
+                        let &(index, count) = dma_controllers.get(name).ok_or_else(|| i2c.error("unknown STM32F1 I2C DMA target"))?;
+                        let mask = u16::from(dma_input(pin.trim(), count).map_err(|error| i2c.error(&error))?) << (index * 8);
+                        if output == "TxDMARequest" { device.dma_tx |= mask; } else { device.dma_rx |= mask; }
+                    }
+                    _ => return Err(i2c.error("unsupported STM32F1 I2C output")),
+                }
+            }
+            machine.bus.map_f1_i2c(device).map_err(|error| i2c.error(&error))?;
+        }
         if let Some(adc) = stm32_adc {
             let mut volts: Option<f64> = None;
             let mut dma_ref = None;
@@ -2433,17 +2463,15 @@ fn load_platform(
                             ));
                             continue;
                         }
-                        if stm32_dma.is_some_and(|dma| dma.name == target.trim()) {
+                        if let Some(&(controller, count)) = dma_controllers.get(target.trim()) {
                             let source = source.trim();
-                            let sources = if let Some(list) =
-                                source.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
-                            {
-                                list.split(',').map(str::trim).collect::<Vec<_>>()
+                            let sources = if source.starts_with('[') {
+                                irq_list(source, 4).map_err(|e| timer.error(&e))?
+                                    .into_iter().map(|source| source.to_string()).collect::<Vec<_>>()
                             } else {
-                                vec![source]
+                                vec![source.to_owned()]
                             };
-                            let pins =
-                                irq_list(pin, dma_channels + 1).map_err(|e| timer.error(&e))?;
+                            let pins = irq_list(pin, count + 1).map_err(|e| timer.error(&e))?;
                             if pins.len() != sources.len() || pins.contains(&0) {
                                 return Err(
                                     timer.error("invalid STM32 timer DMA wiring width or channel")
@@ -2451,10 +2479,10 @@ fn load_platform(
                             }
                             for (source, pin) in sources.into_iter().zip(pins) {
                                 let flags =
-                                    stm32_timer_output(source).map_err(|e| timer.error(e))?;
+                                    stm32_timer_output(&source).map_err(|e| timer.error(e))?;
                                 for (index, route) in dma_routes.iter_mut().enumerate() {
                                     if flags & (1 << index) != 0 {
-                                        *route |= 1 << (pin - 1);
+                                        *route |= 1 << (controller * 8 + usize::from(pin - 1));
                                     }
                                 }
                             }
@@ -2463,7 +2491,7 @@ fn load_platform(
                         let flags =
                             stm32_timer_output(source.trim()).map_err(|e| timer.error(e))?;
                         let irq = if nvic.is_some_and(|nvic| nvic.name == target.trim()) {
-                            irq_index(pin, 32).map_err(|e| timer.error(&e))?
+                            irq_index(pin, irq_lines).map_err(|e| timer.error(&e))?
                         } else if let Some(&(count, irq)) = combined_routes.get(target.trim()) {
                             irq_index(pin, count).map_err(|e| timer.error(&e))?;
                             irq
@@ -2518,12 +2546,12 @@ fn load_platform(
                             .split_once('@')
                             .ok_or_else(|| uart.error("invalid USART output destination"))?;
                         let name = name.trim();
-                        if stm32_dma.is_some_and(|dma| dma.name == name) {
-                            let mask =
-                                dma_input(line.trim(), dma_channels).map_err(|e| uart.error(&e))?;
+                        if let Some(&(controller, count)) = dma_controllers.get(name) {
+                            let mask = u16::from(dma_input(line.trim(), count).map_err(|e| uart.error(&e))?) << (controller * 8);
                             match source {
                                 "ReceiveDmaRequest" => dma_rx |= mask,
                                 "IRQ" | "TransmitDmaRequest" | "" => dma_tx |= mask,
+                                "DMARequest" => { dma_rx |= mask; dma_tx |= mask; }
                                 _ => return Err(uart.error("unsupported USART DMA output")),
                             }
                             continue;

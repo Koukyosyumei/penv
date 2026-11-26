@@ -12,6 +12,7 @@ const SWRST: u32 = 1 << 15;
 const ITERREN: u32 = 1 << 8;
 const ITEVTEN: u32 = 1 << 9;
 const ITBUFEN: u32 = 1 << 10;
+const DMAEN: u32 = 1 << 11;
 
 const SB: u32 = 1;
 const ADDR: u32 = 1 << 1;
@@ -76,6 +77,8 @@ pub struct F1I2c {
     pub base: u32,
     pub event: Option<Stm32Irq>,
     pub error: Option<Stm32Irq>,
+    pub(crate) dma_rx: u16,
+    pub(crate) dma_tx: u16,
     targets: BTreeMap<u8, Target>,
     registers: [u32; 9],
     phase: Phase,
@@ -97,6 +100,8 @@ impl F1I2c {
             base,
             event: None,
             error: None,
+            dma_rx: 0,
+            dma_tx: 0,
             targets: BTreeMap::new(),
             registers: RESET_REGISTERS,
             phase: Phase::Idle,
@@ -132,6 +137,16 @@ impl F1I2c {
 
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
+    }
+
+    pub(crate) fn pending_dma(&self) -> u16 {
+        if self.registers[1] & DMAEN == 0 || self.status & ADDR != 0 {
+            return 0;
+        }
+        let status = self.status();
+        let rx = if status & RXNE != 0 { self.dma_rx } else { 0 };
+        let tx = if status & TXE != 0 { self.dma_tx } else { 0 };
+        rx | tx
     }
 
     pub fn interrupts(&self) -> impl Iterator<Item = Stm32Irq> {

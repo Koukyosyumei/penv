@@ -63,7 +63,7 @@ impl Exti {
         self.input = (self.input & !changed) | (inputs & changed);
     }
 
-    pub fn sample(&mut self, inputs: u32) -> u32 {
+    pub fn sample(&mut self, inputs: u32) -> u64 {
         self.latch_edges(inputs & !self.input, self.input & !inputs);
         self.input = inputs;
         self.levels = inputs & self.direct;

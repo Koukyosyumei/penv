@@ -559,7 +559,7 @@ pub struct Bus {
     stm32_adc: Option<Stm32F0Adc>,
     stm32_regular_adcs: Vec<crate::stm32_adc::Stm32Adc>,
     stm32_adc_name: Option<String>,
-    stm32_dma: Option<Stm32Dma>,
+    stm32_dma: Vec<Stm32Dma>,
     policy_tags: Vec<BusTag>,
     pub unhandled_access: Option<UnhandledAccess>,
     pub(crate) svd: Vec<crate::svd::Svd>,
@@ -2831,7 +2831,7 @@ impl Bus {
             || self.h7_i2c.iter().any(|i2c| i2c.next_sensor_event() == Some(0))
             || !self.gpio_pwm_leds.is_empty()
             || !self.stm32_regular_adcs.is_empty()
-            || self.stm32_adc.is_some() || self.stm32_dma.as_ref().is_some_and(Stm32Dma::has_enabled_channels)
+            || self.stm32_adc.is_some() || self.stm32_dma.iter().any(Stm32Dma::has_enabled_channels)
             || !self.renesas_ra_sci.is_empty() || !self.renesas_ra_iic.is_empty() || !self.samd5_uarts.is_empty()
             || self.renesas_ra_agt.iter().any(crate::renesas_ra_agt::Agt::running)
             || self.renesas_ra_gpt.iter().any(crate::renesas_ra_gpt::Gpt::running)
@@ -3577,7 +3577,7 @@ impl Bus {
                 let other = u64::from(gpio.base);
                 start < other + u64::from(gpio.size) && other < end
             })
-            || self.stm32_dma.as_ref().is_some_and(|dma| {
+            || self.stm32_dma.iter().any(|dma| {
                 let other = u64::from(dma.base);
                 start < other + u64::from(Stm32Dma::SIZE) && other < end
             })
@@ -4524,26 +4524,22 @@ impl Bus {
     }
 
     pub fn advance_stm32_dma(&mut self, output: &mut impl Write) -> Result<(), BusError> {
-        let Some(dma) = self
-            .stm32_dma
-            .as_ref()
-            .filter(|dma| dma.has_enabled_channels())
-        else {
+        if !self.stm32_dma.iter().any(Stm32Dma::has_enabled_channels) {
             return Ok(());
-        };
-        let mut requests = self.stm32_adc.as_ref().map_or(0, Stm32F0Adc::pending_dma);
+        }
+        let mut requests = u16::from(self.stm32_adc.as_ref().map_or(0, Stm32F0Adc::pending_dma));
         for uart in &self.stm32_uarts {
             requests |= uart.pending_dma();
         }
         for spi in &self.stm32_spis {
-            requests |= spi.pending_dma();
+            requests |= u16::from(spi.pending_dma());
         }
         for i2c in &self.stm32_i2cs {
+            requests |= u16::from(i2c.pending_dma());
+        }
+        for i2c in &self.f1_i2c {
             requests |= i2c.pending_dma();
         }
-        let Some(transfer) = dma.next_transfer(requests) else {
-            return Ok(());
-        };
         use crate::dma_engine::{DmaBus, Width};
         let scalar_width = |address, width| match width {
             1 => Ok(Width::Byte),
@@ -4551,20 +4547,23 @@ impl Bus {
             4 => Ok(Width::DoubleWord),
             _ => Err(BusError::Unmapped(address, width)),
         };
-        let result = scalar_width(transfer.from, transfer.read_width)
-            .and_then(|width| self.read_unit(transfer.from.into(), width))
-            .and_then(|value| {
-                let width = scalar_width(transfer.to, transfer.write_width)?;
-                self.write_unit(transfer.to.into(), width, value, output)
-            });
-        self.stm32_dma
-            .as_mut()
-            .unwrap()
-            .complete(transfer, result.is_ok());
-        match result {
-            Err(error @ (BusError::Output(_) | BusError::CommandError(_))) => Err(error),
-            _ => Ok(()),
+        for controller in 0..self.stm32_dma.len() {
+            let requests = (requests >> (controller * 8)) as u8;
+            let Some(transfer) = self.stm32_dma[controller].next_transfer(requests) else {
+                continue;
+            };
+            let result = scalar_width(transfer.from, transfer.read_width)
+                .and_then(|width| self.read_unit(transfer.from.into(), width))
+                .and_then(|value| {
+                    let width = scalar_width(transfer.to, transfer.write_width)?;
+                    self.write_unit(transfer.to.into(), width, value, output)
+                });
+            self.stm32_dma[controller].complete(transfer, result.is_ok());
+            if let Err(error @ (BusError::Output(_) | BusError::CommandError(_))) = result {
+                return Err(error);
+            }
         }
+        Ok(())
     }
 
     pub fn reset_cortex_m_if_requested(&mut self, scheduled: bool) -> bool {
@@ -4640,7 +4639,7 @@ impl Bus {
         if let Some(adc) = self.stm32_adc.as_mut() {
             adc.reset();
         }
-        if let Some(dma) = self.stm32_dma.as_mut() {
+        for dma in &mut self.stm32_dma {
             dma.reset();
         }
         if let Some(crc) = self.stm32_crc.as_mut() {
@@ -5056,7 +5055,7 @@ impl Bus {
                     pending &= pending - 1;
                 }
             }
-            let mut irqs = timer_irqs | self.external_nvic_levels;
+            let mut irqs = timer_irqs | u64::from(self.external_nvic_levels);
             if self
                 .stm32_flash
                 .as_ref()
@@ -5076,7 +5075,7 @@ impl Bus {
                 irqs |= 1 << line;
             }
             for can in &self.stm32_cans {
-                irqs |= can.interrupts();
+                irqs |= u64::from(can.interrupts());
             }
             for spi in &self.stm32_spis {
                 if spi.interrupt_pending()
@@ -5085,8 +5084,8 @@ impl Bus {
                     irqs |= 1 << line;
                 }
             }
-            if let Some(dma) = self.stm32_dma.as_mut() {
-                dma.queue_requests(timer_dma);
+            for (controller, dma) in self.stm32_dma.iter_mut().enumerate() {
+                dma.queue_requests((timer_dma >> (controller * 8)) as u8);
                 irqs |= dma.interrupts();
             }
             while irqs != 0 {
@@ -5096,7 +5095,7 @@ impl Bus {
         }
     }
 
-    fn tick_stm32_timers(&mut self) -> (u32, u8) {
+    fn tick_stm32_timers(&mut self) -> (u64, u16) {
         let mut irqs = 0;
         let mut dma_requests = 0;
         let mut gpio_changed = false;
@@ -5988,7 +5987,7 @@ impl Bus {
     pub fn map_stm32_dma(&mut self, dma: Stm32Dma) -> Result<(), String> {
         let start = u64::from(dma.base);
         let end = start + u64::from(Stm32Dma::SIZE);
-        if self.stm32_dma.is_some()
+        if self.stm32_dma.len() >= 2
             || dma.base & 3 != 0
             || end > 1 << 32
             || self.overlaps(start, end)
@@ -5998,7 +5997,7 @@ impl Bus {
                 dma.base
             ));
         }
-        self.stm32_dma = Some(dma);
+        self.stm32_dma.push(dma);
         Ok(())
     }
 
@@ -8948,8 +8947,7 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
-            && let Some(dma) = &self.stm32_dma
-            && dma.contains(address)
+            && let Some(dma) = self.stm32_dma.iter().find(|dma| dma.contains(address))
         {
             return Ok(dma.read(address));
         }
@@ -9985,8 +9983,7 @@ impl Bus {
             return Ok(());
         }
         if width == 4
-            && let Some(dma) = self.stm32_dma.as_mut()
-            && dma.contains(address)
+            && let Some(dma) = self.stm32_dma.iter_mut().find(|dma| dma.contains(address))
         {
             dma.write(address, value);
             return Ok(());

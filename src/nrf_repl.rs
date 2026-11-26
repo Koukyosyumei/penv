@@ -1371,8 +1371,8 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 irq,
                 low_power.unwrap_or(false),
             );
-            device.dma_rx = dma_rx;
-            device.dma_tx = dma_tx;
+            device.dma_rx = u16::from(dma_rx);
+            device.dma_tx = u16::from(dma_tx);
             machine
                 .bus
                 .map_stm32_usart(device)
