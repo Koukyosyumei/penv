@@ -224,9 +224,21 @@ enum BinaryOperation {
     Not,
     SaturatingAbsolute,
     SaturatingNegate,
-    AbsoluteDifferenceAccumulate { accumulator: usize },
-    ShiftLeftCarry { accumulator: usize, shift: u32 },
-    ComplexAdd { rotate_270: bool, halve: bool },
+    Sum {
+        accumulator: usize,
+        accumulate: bool,
+    },
+    AbsoluteDifferenceAccumulate {
+        accumulator: usize,
+    },
+    ShiftLeftCarry {
+        accumulator: usize,
+        shift: u32,
+    },
+    ComplexAdd {
+        rotate_270: bool,
+        halve: bool,
+    },
 }
 
 pub(super) struct VectorArithmetic {
@@ -260,6 +272,24 @@ impl VectorArithmetic {
                 scalar: false,
                 unsigned: true,
                 bits: 32,
+            });
+        }
+        if instruction & 0xeff3_1fd1 == 0xeef1_0f00 {
+            let size = (high >> 2) & 3;
+            if size == 3 {
+                return None;
+            }
+            return Some(Self {
+                operation: Sum {
+                    accumulator: ((low >> 12) & 14) as usize,
+                    accumulate: low & 0x20 != 0,
+                },
+                destination: 0,
+                left: ((low >> 1) & 7) as usize,
+                right: 0,
+                scalar: false,
+                unsigned: high & 0x1000 != 0,
+                bits: 8 << size,
             });
         }
         if instruction & 0xefc1_0f51 == 0xee80_0f01 {
@@ -403,6 +433,26 @@ impl Thumb {
         } else {
             (-limit / 2, limit / 2 - 1)
         };
+        if let Sum {
+            accumulator,
+            accumulate,
+        } = inst.operation
+        {
+            let mut sum = if accumulate {
+                registers[accumulator]
+            } else {
+                0
+            };
+            for shift in (0..128).step_by(inst.bits as usize) {
+                if predicate & (1 << (shift / 8)) != 0 {
+                    sum = sum.wrapping_add(lane(left >> shift) as u32);
+                }
+            }
+            registers[accumulator] = sum;
+            self.advance_vector_predicate();
+            self.fp_active = true;
+            return;
+        }
         if let AbsoluteDifferenceAccumulate { accumulator } = inst.operation {
             for shift in (0..128).step_by(inst.bits as usize) {
                 if predicate & (1 << (shift / 8)) == 0 {
@@ -453,7 +503,9 @@ impl Thumb {
                 OrNot => a | !b,
                 ExclusiveOr => a ^ b,
                 Not => !a,
-                AbsoluteDifferenceAccumulate { .. } | ShiftLeftCarry { .. } => unreachable!(),
+                Sum { .. } | AbsoluteDifferenceAccumulate { .. } | ShiftLeftCarry { .. } => {
+                    unreachable!()
+                }
                 SaturatingAbsolute | SaturatingNegate => {
                     let value = if matches!(inst.operation, SaturatingAbsolute) {
                         a.abs()
@@ -735,5 +787,111 @@ fn fp_predicate(a: u32, b: u32, bits: u32, comparison: u32) -> bool {
         3 => a > b,
         7 => a <= b,
         _ => false,
+    }
+}
+
+pub(super) enum LowOverheadBranch {
+    Start {
+        source: usize,
+        skip_offset: Option<u32>,
+        tail_size: Option<u32>,
+    },
+    End {
+        offset: u32,
+        tail: bool,
+        forever: bool,
+    },
+    ClearTail,
+}
+
+impl LowOverheadBranch {
+    pub(super) fn decode(high: u32, low: u32) -> Option<Self> {
+        let instruction = high << 16 | low;
+        let offset = ((low & 0x7fe) << 1) | ((low >> 10) & 2);
+        if instruction == 0xf00f_e001 {
+            return Some(Self::ClearTail);
+        }
+        if instruction & 0xffcf_f001 == 0xf00f_c001 {
+            return Some(Self::End {
+                offset,
+                tail: high & 0x10 != 0,
+                forever: high & 0x20 != 0,
+            });
+        }
+        let skip_offset = if instruction & 0xff80_f001 == 0xf000_c001 {
+            Some(offset)
+        } else if instruction & 0xff80_ffff == 0xf000_e001 {
+            None
+        } else {
+            return None;
+        };
+        let source = (high & 15) as usize;
+        if matches!(source, 13 | 15) {
+            return None;
+        }
+        Some(Self::Start {
+            source,
+            skip_offset,
+            tail_size: (high & 0x40 == 0).then_some((high >> 4) & 3),
+        })
+    }
+}
+
+impl Thumb {
+    pub(super) fn execute_low_overhead_branch(
+        &mut self,
+        branch: LowOverheadBranch,
+        pc: u32,
+        next: u32,
+        registers: &mut [u32; 32],
+        bus: &mut Bus,
+    ) -> Result<u32, String> {
+        const TAIL_SIZE_MASK: u32 = 7 << 16;
+        let tail_size = (self.fpscr & TAIL_SIZE_MASK) >> 16;
+        match branch {
+            LowOverheadBranch::Start {
+                source,
+                skip_offset,
+                tail_size,
+            } => {
+                let count = registers[source];
+                if count == 0
+                    && let Some(offset) = skip_offset
+                {
+                    return Ok(next.wrapping_add(offset));
+                }
+                registers[14] = count;
+                if let Some(size) = tail_size {
+                    self.create_fp_context(bus);
+                    self.fpscr = (self.fpscr & !TAIL_SIZE_MASK) | (size << 16);
+                }
+            }
+            LowOverheadBranch::End {
+                offset,
+                tail,
+                forever,
+            } => {
+                if !tail && tail_size != 4 && self.fp_active {
+                    self.branch_exception = true;
+                    return self.invalid_state_fault(pc, registers, bus);
+                }
+                if forever {
+                    return Ok(next.wrapping_sub(offset));
+                }
+                let lanes = if tail { 16 >> tail_size } else { 1 };
+                if registers[14] > lanes {
+                    registers[14] -= lanes;
+                    return Ok(next.wrapping_sub(offset));
+                }
+                if tail {
+                    self.fpscr = (self.fpscr & !TAIL_SIZE_MASK) | (4 << 16);
+                }
+            }
+            LowOverheadBranch::ClearTail => {
+                self.create_fp_context(bus);
+                self.fpscr = (self.fpscr & !TAIL_SIZE_MASK) | (4 << 16);
+            }
+        }
+        Ok(next)
     }
 }

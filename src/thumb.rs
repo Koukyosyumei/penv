@@ -1624,6 +1624,28 @@ impl Thumb {
         }
     }
 
+    fn invalid_state_fault(
+        &mut self,
+        pc: u32,
+        registers: &mut [u32; 32],
+        bus: &mut Bus,
+    ) -> Result<u32, String> {
+        const USAGEFAULT: u8 = 6;
+        let nvic = bus.nvic.as_mut().ok_or("invalid Thumb state requires NVIC")?;
+        nvic.record_instruction_fault(true);
+        let exception = if nvic.fault_enabled(USAGEFAULT) && self.can_take_sync_exception(USAGEFAULT, nvic) {
+            USAGEFAULT
+        } else {
+            nvic.force_hard_fault()
+        };
+        if exception == HARDFAULT && (self.faultmask || matches!(self.active_exception, NMI | HARDFAULT)) {
+            nvic.enter_lockup();
+            Ok(self.lockup())
+        } else {
+            self.exception_entry(exception, pc, registers, bus)
+        }
+    }
+
     pub(crate) fn execute_guest(
         &mut self,
         pc: &mut u32,
@@ -1636,20 +1658,7 @@ impl Thumb {
         }
         if self.thumb2 {
             if self.invalid_thumb_state {
-                const USAGEFAULT: u8 = 6;
-                let nvic = bus.nvic.as_mut().ok_or("invalid Thumb state requires NVIC")?;
-                nvic.record_instruction_fault(true);
-                let exception = if nvic.fault_enabled(USAGEFAULT) && self.can_take_sync_exception(USAGEFAULT, nvic) {
-                    USAGEFAULT
-                } else {
-                    nvic.force_hard_fault()
-                };
-                if exception == HARDFAULT && (self.faultmask || matches!(self.active_exception, NMI | HARDFAULT)) {
-                    nvic.enter_lockup();
-                    *pc = self.lockup();
-                } else {
-                    *pc = self.exception_entry(exception, *pc, r, bus)?;
-                }
+                *pc = self.invalid_state_fault(*pc, r, bus)?;
                 return Ok(ThumbStep::Exception);
             }
             let fault_pc = *pc;
@@ -2164,6 +2173,15 @@ impl Thumb {
             }
             0xf000..=0xf7ff => {
                 let low = bus.thumb_fetch(next)?;
+                if let Some(branch) = self.armv81m.then(|| mve::LowOverheadBranch::decode(inst, low)).flatten() {
+                    next = self.execute_low_overhead_branch(branch, *pc, architectural_pc, r, bus)?;
+                    if self.branch_exception {
+                        *pc = next;
+                        return Ok(false);
+                    }
+                    *pc = next;
+                    return Ok(true);
+                }
                 let link = low & 0xd000 == 0xd000;
                 let exchange = self.arm_interworking && low & 0xd001 == 0xc000;
                 if link || exchange || (self.thumb2 && low & 0xd000 == 0x9000) {
