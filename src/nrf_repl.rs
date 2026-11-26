@@ -215,7 +215,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         entry.model == "CPU.CortexM"
             && entry.body.iter().any(|(_, text)| {
                 text.split_once(':').is_some_and(|(key, value)| {
-                    key.trim() == "cpuType" && value.trim() == r#""cortex-m4""#
+                    key.trim() == "cpuType" && matches!(value.trim(), r#""cortex-m4""# | r#""cortex-m4f""#)
                 })
             })
     });
@@ -489,7 +489,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 nrf_peripherals.push(entry)
             }
             "UART.STM32F7_USART" => stm32_uarts.push(entry),
-            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
+            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
                 }
@@ -551,9 +551,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         }
         if !matches!(
             cpu_type,
-            Some(r#""cortex-m0""# | r#""cortex-m0+""# | r#""cortex-m4""#)
+            Some(r#""cortex-m0""# | r#""cortex-m0+""# | r#""cortex-m4""# | r#""cortex-m4f""#)
         ) {
-            return Err(entry.error("expected Cortex-M0, Cortex-M0+ or Cortex-M4 cpuType"));
+            return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4 or Cortex-M4F cpuType"));
         }
         if !cortex_m4 {
             machine
@@ -604,7 +604,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .set_frequency(frequency);
         }
         let mut uart_irq = None;
-        if let Some(uart) = uart {
+        if let Some(uart) = uart.filter(|uart| uart.model == "UART.TrivialUart") {
+            keys(uart, &[])?;
+            machine.bus.map_trivial_uart(uart.address()?, &uart.name)
+                .map_err(|error| uart.error(&error))?;
+        } else if let Some(uart) = uart {
             if uart.model != "UART.LiteX_UART" {
                 return Err(uart.error("unsupported Cortex-M UART model"));
             }
