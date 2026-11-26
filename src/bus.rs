@@ -3732,6 +3732,22 @@ impl Bus {
         severity >= self.monitor_log_level.unwrap_or(1)
     }
 
+    pub(crate) fn set_peripheral_log_level(&mut self, target: &str, level: i8) -> Result<(), String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        if self.andes_watchdogs.iter().any(|watchdog| watchdog.name == name)
+            || self.andes_pit.iter().any(|pit| pit.name == name)
+            || self.plic_index(name).is_some()
+            || self.egis_syscon.as_ref().is_some_and(|syscon| syscon.name == name)
+        {
+            crate::monitor_log::set_target_level(name, level);
+            Ok(())
+        } else if level == -1 {
+            self.enable_nvic_log(target)
+        } else {
+            Err(format!("unknown log target {target:?}"))
+        }
+    }
+
     pub fn enable_nvic_log(&mut self, target: &str) -> Result<(), String> {
         self.validate_nvic_name(target)?;
         self.systick

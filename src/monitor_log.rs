@@ -1,6 +1,6 @@
 //! Monitor log history and tester capture on the emulation thread.
 use crate::machine::{Machine, Stop};
-use std::{cell::RefCell, collections::VecDeque, io};
+use std::{cell::RefCell, collections::{HashMap, VecDeque}, io};
 
 struct Capture {
     limit: usize,
@@ -95,10 +95,21 @@ thread_local! {
     static CAPTURE: RefCell<Option<Capture>> = const { RefCell::new(None) };
 }
 
+thread_local! {
+    static TARGET_LEVELS: RefCell<HashMap<String, i8>> = RefCell::new(HashMap::new());
+}
+
+pub(crate) fn set_target_level(target: &str, level: i8) {
+    TARGET_LEVELS.with_borrow_mut(|levels| { levels.insert(target.to_owned(), level); });
+}
+
 pub(crate) fn record(level: i8, message: &str) {
+    let target_level = message.split_once(':').and_then(|(target, _)| {
+        TARGET_LEVELS.with_borrow(|levels| levels.get(target).copied())
+    });
     HISTORY.with_borrow_mut(|history| {
         if let Some(history) = history
-            && level >= history.minimum_level.unwrap_or(1)
+            && level >= target_level.or(history.minimum_level).unwrap_or(1)
         {
             if history.entries.len() == HISTORY_LIMIT {
                 history.entries.pop_front();
@@ -108,7 +119,7 @@ pub(crate) fn record(level: i8, message: &str) {
     });
     CAPTURE.with_borrow_mut(|capture| {
         if let Some(capture) = capture
-            && level >= capture.minimum_level
+            && level >= target_level.unwrap_or(capture.minimum_level)
         {
             if capture.entries.len() == capture.limit {
                 capture.dropped = true;

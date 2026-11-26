@@ -550,7 +550,7 @@ enum Action {
     CpuRegister(String, String, Option<u64>),
     ExecutionMode(String, Option<bool>),
     AddCpuHook(String, Option<u32>, CpuHook),
-    NvicLog(String),
+    PeripheralLog(String, i8),
     PeripheralWrite(String, u32, u32, u32),
     PeripheralRead(String, u32, u32),
     WatchdogIrq(String),
@@ -741,7 +741,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::WatchdogIrq(_) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
-                    | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
+                    | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_) | Action::PeripheralLog(..)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
                     | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
@@ -1185,7 +1185,7 @@ fn run_commands<'a>(
                 machine.bus.set_monitor_log_level(*level);
                 Ok(None)
             }
-            Action::NvicLog(target) => machine.bus.enable_nvic_log(target).map(|()| None),
+            Action::PeripheralLog(target, level) => machine.bus.set_peripheral_log_level(target, *level).map(|()| None),
             Action::EgisSysconProperty(target, property) => {
                 let value = machine.bus.egis_syscon_property(target, property)
                     .ok_or_else(|| format!("unknown AOSMU property {target} {property}"))?;
@@ -4589,7 +4589,7 @@ fn execute(
                 parse_cpu_hook(body.trim())?,
             ))
         }
-        ["logLevel", "-1", target] => Some(Action::NvicLog(resolve(target)?.to_owned())),
+        ["logLevel", level, target] => Some(Action::PeripheralLog(resolve(target)?.to_owned(), crate::monitor_log::parse_level(resolve(level)?)?)),
         [target, method @ ("ReadDoubleWord" | "ReadByteUsingDoubleWord" | "ReadWordUsingDoubleWord"), offset] =>
             Some(Action::PeripheralRead(resolve(target)?.into(), crate::parse_address(resolve(offset)?)?, peripheral_access_width(method))),
         [target, method @ ("WriteDoubleWord" | "WriteByteUsingDoubleWord" | "WriteWordUsingDoubleWord"), offset, value] =>
