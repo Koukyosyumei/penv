@@ -20,12 +20,13 @@ pub struct BitManip {
     pub xandesvqmac: bool,
     pub xandesvdot: bool,
     pub xandesvpackfph: bool,
+    pub xandesvsinth: bool,
 }
 
 impl BitManip {
     pub(crate) fn has_vector_execution(self) -> bool {
         self.xandesvsintload || self.xandesvbfhcvt || self.xandesvqmac
-            || self.xandesvdot || self.xandesvpackfph
+            || self.xandesvdot || self.xandesvpackfph || self.xandesvsinth
     }
 
     pub fn immediate(self, funct3: u32, funct7: u32, value: u32, imm: u32) -> Option<u32> {

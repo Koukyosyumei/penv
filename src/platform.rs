@@ -2050,6 +2050,7 @@ fn load_platform(
                             "xandesvqmac" if !bitmanip.xandesvqmac => bitmanip.xandesvqmac = true,
                             "xandesvdot" if !bitmanip.xandesvdot => bitmanip.xandesvdot = true,
                             "xandesvpackfph" if !bitmanip.xandesvpackfph => bitmanip.xandesvpackfph = true,
+                            "xandesvsinth" if !bitmanip.xandesvsinth => bitmanip.xandesvsinth = true,
                             "v" if bitmanip.has_vector_execution() => {}
                             "xandesbfhcvt" if !bitmanip.xandesbfhcvt => {
                                 bitmanip.xandesbfhcvt = true

@@ -3060,7 +3060,9 @@ impl Hart {
                 self.csr.vectors_dirty();
                 None
             }
-            0x5b if bitmanip.xandesvsintload && matches!(insn & 0xfdf0_707f, 0x0820_405b | 0x0830_405b) => {
+            0x5b if (bitmanip.xandesvsintload && matches!(insn & 0xfdf0_707f, 0x0820_405b | 0x0830_405b))
+                || (bitmanip.xandesvsinth && insn & 0xfff0_707f == 0x0a00_405b) =>
+            {
                 if !self.csr.vectors_active() {
                     return Err(illegal());
                 }
@@ -3303,6 +3305,22 @@ impl Hart {
                     let offset =
                         ((insn >> 31) << 10) | ((insn >> 20) & 0x3e0) | ((insn >> 7) & 0x1e);
                     next = pc.wrapping_add(sign(offset, 11));
+                }
+                None
+            }
+            opcode @ (0x57 | 0x5b) if bitmanip.xandesvsinth
+                && ((opcode == 0x57 && funct3 == 2 && insn >> 26 == 0x12 && matches!((insn >> 15) & 31, 2..=7))
+                    || (opcode == 0x5b && funct3 == 4 && insn >> 26 == 0 && matches!((insn >> 15) & 31, 4..=7))) =>
+            {
+                let floating = opcode == 0x5b;
+                if !self.csr.vectors_active() || (floating && !self.csr.floating_enabled()) {
+                    return Err(illegal());
+                }
+                self.csr.vector_bootstrap.as_mut().and_then(|vector| vector.widen_small_integer(insn, floating))
+                    .ok_or_else(illegal)?;
+                self.csr.vectors_dirty();
+                if floating {
+                    self.csr.floating_dirty();
                 }
                 None
             }

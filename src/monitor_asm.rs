@@ -185,7 +185,25 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
             | 0x405b | (andes_vector_register(rd)? << 7);
         return Ok(format!("{label} .4byte {encoding:#010x}"));
     }
-    if matches!(name, "nds.vln8.v" | "nds.vlnu8.v") {
+    let integer_conversion = match name {
+        "nds.vfwcvt.f.n.v" => Some(4),
+        "nds.vfwcvt.f.nu.v" => Some(5),
+        "nds.vfwcvt.f.b.v" => Some(6),
+        "nds.vfwcvt.f.bu.v" => Some(7),
+        _ => None,
+    };
+    if let Some(selector) = integer_conversion {
+        let args: Vec<_> = args.split(',').map(str::trim).collect();
+        let (rd, vs2, unmasked) = match args.as_slice() {
+            [rd, vs2] => (rd, vs2, true),
+            [rd, vs2, "v0.t"] => (rd, vs2, false),
+            _ => return Err(format!("{name} requires two vector registers and optional v0.t")),
+        };
+        let encoding = (u32::from(unmasked) << 25) | (andes_vector_register(vs2)? << 20)
+            | (selector << 15) | 0x405b | (andes_vector_register(rd)? << 7);
+        return Ok(format!("{label} .4byte {encoding:#010x}"));
+    }
+    if matches!(name, "nds.vln8.v" | "nds.vlnu8.v" | "nds.vle4.v") {
         let args: Vec<_> = args.split(',').map(str::trim).collect();
         let (vd, base, unmasked) = match args.as_slice() {
             [vd, base] => (vd, base, true),
@@ -194,7 +212,15 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
         };
         let base = base.strip_prefix('(').and_then(|base| base.strip_suffix(')'))
             .ok_or("expected a parenthesized Andes vector load base register")?;
-        let encoding = 0x0820_405b | (u32::from(name == "nds.vlnu8.v") << 20)
+        let encoding = if name == "nds.vle4.v" {
+            if !unmasked {
+                return Err("nds.vle4.v does not accept a mask".into());
+            }
+            0x0800_405b
+        } else {
+            0x0820_405b | (u32::from(name == "nds.vlnu8.v") << 20)
+        };
+        let encoding = encoding
             | (u32::from(unmasked) << 25) | (andes_register(base)? << 15)
             | (andes_vector_register(vd)? << 7);
         return Ok(format!("{label} .4byte {encoding:#010x}"));
