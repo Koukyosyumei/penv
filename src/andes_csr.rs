@@ -3,6 +3,7 @@ pub const MMISC_CTL: u32 = 0x7d0;
 #[derive(Clone)]
 pub struct AndesCsrs {
     pub bfloat16: bool,
+    pub quad_mac: bool,
     misc_control: u32,
     stack_control: u32,
     stack_bound: u32,
@@ -14,6 +15,7 @@ impl Default for AndesCsrs {
     fn default() -> Self {
         Self {
             bfloat16: false,
+            quad_mac: false,
             misc_control: 0,
             stack_control: 0,
             stack_bound: u32::MAX,
@@ -35,8 +37,9 @@ impl AndesCsrs {
             0x7c7 => self.stack_bound,
             0x7c8 => self.stack_base,
             0x7ca => u32::MAX,
-            0xfc2 => (1 << 16) | (1 << 5) | (u32::from(self.bfloat16) << 31),
-            0xfc3 => u32::from(self.bfloat16),
+            0xfc2 => (1 << 16) | (1 << 5) | (u32::from(self.bfloat16 || self.quad_mac) << 31),
+            0xfc3 => u32::from(self.bfloat16) | if self.quad_mac { 0x1010_0000 } else { 0 },
+            0xfcb if self.quad_mac => 8,
             0x7c4 | 0xfc0 | 0xfc1 | 0xfc7..=0xfcb | 0xfcf => 0,
             _ => {
                 let name = stub_name(address)?;

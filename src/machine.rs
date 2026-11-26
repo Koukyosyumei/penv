@@ -820,7 +820,7 @@ impl Machine {
         let available = [
             ("+m", hart.csr.m_extension), ("+a", hart.csr.a_extension),
             ("+c", hart.csr.c_extension), ("+f", hart.csr.f_extension),
-            ("+d", hart.csr.d_extension), ("+v", hart.bitmanip.xandesvsintload || hart.bitmanip.xandesvbfhcvt), ("+zba", hart.bitmanip.zba),
+            ("+d", hart.csr.d_extension), ("+v", hart.bitmanip.xandesvsintload || hart.bitmanip.xandesvbfhcvt || hart.bitmanip.xandesvqmac), ("+zba", hart.bitmanip.zba),
             ("+zbb", hart.bitmanip.zbb), ("+zbc", hart.bitmanip.zbc),
             ("+zbs", hart.bitmanip.zbs), ("+zicond", hart.zicond),
             ("+zacas", hart.zacas),
@@ -2297,9 +2297,10 @@ impl Hart {
 
     pub fn set_bitmanip(&mut self, extensions: BitManip) {
         self.bitmanip = extensions;
-        self.csr.andes = (extensions.xandesperf || extensions.xandesbfhcvt).then(|| {
+        self.csr.andes = (extensions.xandesperf || extensions.xandesbfhcvt || extensions.xandesvqmac).then(|| {
             let mut csrs = crate::andes_csr::AndesCsrs::default();
             csrs.bfloat16 = extensions.xandesbfhcvt;
+            csrs.quad_mac = extensions.xandesvqmac;
             csrs
         });
     }
@@ -2405,6 +2406,30 @@ impl Hart {
             )
             .then_some(physical)
             .ok_or(BusError::Denied(address))
+    }
+
+    fn vector_doubleword(&mut self, bus: &mut Bus, address: u32, value: Option<u64>) -> Result<u64, Fault> {
+        let (permission, access) = if value.is_some() {
+            (crate::pmp::WRITE, Access::Store)
+        } else {
+            (crate::pmp::READ, Access::Load)
+        };
+        if self.csr.address_trigger_matches(address, permission) {
+            return Err(Fault::Breakpoint(address));
+        }
+        if address & 7 != 0 {
+            return Err(Fault::Bus(access, BusError::Misaligned(address, 8)));
+        }
+        let physical = self.translate(bus, address, 8, permission)
+            .map_err(|error| Fault::Bus(access, error))?;
+        let bytes = bus.memory64(u64::from(physical), 8)
+            .ok_or(Fault::Bus(access, BusError::Unmapped(address, 8)))?;
+        if let Some(value) = value {
+            bytes.copy_from_slice(&value.to_le_bytes());
+            Ok(0)
+        } else {
+            Ok(u64::from_le_bytes(bytes.try_into().expect("eight-byte RAM slice")))
+        }
     }
 
     fn load<const N: usize>(&mut self, bus: &mut Bus, address: u32) -> Result<u32, Fault> {
@@ -2966,20 +2991,23 @@ impl Hart {
             ..self.bitmanip
         };
         let result = match insn & 0x7f {
-            0x07 | 0x27 if (bitmanip.xandesvsintload || bitmanip.xandesvbfhcvt) && matches!(funct3, 0 | 5 | 6) => {
+            0x07 | 0x27 if (bitmanip.xandesvsintload || bitmanip.xandesvbfhcvt || bitmanip.xandesvqmac) && matches!(funct3, 0 | 5 | 6 | 7) => {
                 if !self.csr.vectors_active() {
                     return Err(illegal());
                 }
                 let mut vector = self.csr.vector_bootstrap.take().ok_or_else(illegal)?;
                 let result = vector.transfer(insn, a, |address, width, value| {
+                    if width == 8 {
+                        return self.vector_doubleword(bus, address, value);
+                    }
                     if let Some(value) = value {
-                        self.store(bus, address, width, value, output)?;
+                        self.store(bus, address, width, value as u32, output)?;
                         return Ok(0);
                     }
                     match width {
-                        1 => self.load::<1>(bus, address),
-                        2 => self.load::<2>(bus, address),
-                        4 => self.load::<4>(bus, address),
+                        1 => self.load::<1>(bus, address).map(u64::from),
+                        2 => self.load::<2>(bus, address).map(u64::from),
+                        4 => self.load::<4>(bus, address).map(u64::from),
                         _ => unreachable!(),
                     }
                 });
@@ -3248,6 +3276,15 @@ impl Hart {
                         ((insn >> 31) << 10) | ((insn >> 20) & 0x3e0) | ((insn >> 7) & 0x1e);
                     next = pc.wrapping_add(sign(offset, 11));
                 }
+                None
+            }
+            0x57 if bitmanip.xandesvqmac && insn >> 26 >= 60 => {
+                if !self.csr.vectors_active() {
+                    return Err(illegal());
+                }
+                self.csr.vector_bootstrap.as_mut().and_then(|vector| vector.quad_mac(insn, a))
+                    .ok_or_else(illegal)?;
+                self.csr.vectors_dirty();
                 None
             }
             0x57 if !self.csr.vector_configured() => {

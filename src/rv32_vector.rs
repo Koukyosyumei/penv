@@ -41,7 +41,7 @@ impl Rv32Vector {
         &mut self,
         insn: u32,
         base: u32,
-        mut access: impl FnMut(u32, usize, Option<u32>) -> Result<u32, E>,
+        mut access: impl FnMut(u32, usize, Option<u64>) -> Result<u64, E>,
     ) -> Result<(), TransferError<E>> {
         let load = match insn & 0x7f {
             0x07 => true,
@@ -56,6 +56,7 @@ impl Rv32Vector {
             0 => (1, 0),
             5 => (2, 1),
             6 => (4, 2),
+            7 => (8, 3),
             _ => return Err(TransferError::Illegal),
         };
         let kind = self.csrs.read(0xc21).unwrap();
@@ -79,9 +80,9 @@ impl Rv32Vector {
             let value = if load {
                 None
             } else {
-                let mut word = [0; 4];
+                let mut word = [0; 8];
                 word[..width].copy_from_slice(bytes);
-                Some(u32::from_le_bytes(word))
+                Some(u64::from_le_bytes(word))
             };
             match access(base.wrapping_add(offset as u32), width, value) {
                 Ok(value) if load => bytes.copy_from_slice(&value.to_le_bytes()[..width]),
@@ -94,6 +95,79 @@ impl Rv32Vector {
         }
         self.csrs.write(0x008, 0);
         Ok(())
+    }
+
+    pub(crate) fn quad_mac(&mut self, insn: u32, scalar: u32) -> Option<()> {
+        let form = (insn >> 12) & 7;
+        let (signed_first, signed_second) = match (insn >> 26, form) {
+            (60, 0 | 4) => (false, false),
+            (61, 0 | 4) => (true, true),
+            (62, 4) => (false, true),
+            (63, 0 | 4) => (true, false),
+            _ => return None,
+        };
+        let kind = self.csrs.read(0xc21)?;
+        let sew = (kind >> 3) & 7;
+        if kind & !0xff != 0 || sew > 1 {
+            return None;
+        }
+        let lmul = match kind & 7 {
+            n @ 0..=3 => n as i32,
+            n @ 5..=7 => n as i32 - 8,
+            _ => return None,
+        };
+        let width = 1usize << sew;
+        let rd = ((insn >> 7) & 31) as usize;
+        let rs1 = ((insn >> 15) & 31) as usize;
+        let rs2 = ((insn >> 20) & 31) as usize;
+        let masked = insn & (1 << 25) == 0;
+        if masked && rd == 0 {
+            return None;
+        }
+        let register_bytes = self.csrs.read(0xc22)? as usize;
+        let group = |register, multiplier: i32| {
+            if !(-3..=3).contains(&multiplier) {
+                return None;
+            }
+            let count = 1 << multiplier.max(0);
+            if register % count != 0 || register + count > 32 {
+                return None;
+            }
+            let offset = register * register_bytes;
+            let size = (register_bytes << multiplier.max(0)) >> (-multiplier).max(0);
+            Some(offset..offset + size)
+        };
+        let dst = group(rd, lmul + 2)?;
+        let src2 = group(rs2, lmul)?;
+        let src1 = if form == 0 { Some(group(rs1, lmul)?) } else { None };
+        for src in src1.iter().chain(std::iter::once(&src2)) {
+            if src.start < dst.end && dst.start < src.end && !(lmul >= 0 && src.end == dst.end) {
+                return None;
+            }
+        }
+        let extend = |value: u64, signed| {
+            let shift = 64 - width * 8;
+            let low = value << shift;
+            if signed { ((low as i64) >> shift) as u64 } else { low >> shift }
+        };
+        for lane in self.csrs.read(0x008)? as usize..self.csrs.read(0xc20)? as usize {
+            if masked && self.registers[lane / 8] & (1 << (lane % 8)) == 0 {
+                continue;
+            }
+            let read = |offset, width| {
+                let mut bytes = [0; 8];
+                bytes[..width].copy_from_slice(&self.registers[offset..offset + width]);
+                u64::from_le_bytes(bytes)
+            };
+            let first = src1.as_ref().map_or(u64::from(scalar), |src| read(src.start + lane * width, width));
+            let second = read(src2.start + lane * width, width);
+            let offset = dst.start + lane * width * 4;
+            let acc = read(offset, width * 4);
+            let result = acc.wrapping_add(extend(first, signed_first).wrapping_mul(extend(second, signed_second)));
+            self.registers[offset..offset + width * 4].copy_from_slice(&result.to_le_bytes()[..width * 4]);
+        }
+        self.csrs.write(0x008, 0);
+        Some(())
     }
 
     pub(crate) fn convert_bfloat16(&mut self, insn: u32, fcsr: u8) -> Option<u8> {
