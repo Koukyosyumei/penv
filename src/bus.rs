@@ -555,6 +555,7 @@ pub struct Bus {
     andes_gpio_routes: Vec<(usize, u8, usize, u8)>,
     andes_watchdogs: Vec<crate::andes_watchdog::AndesWatchdog>,
     andes_spi: Vec<crate::andes_spi::AndesSpi>,
+    andes_rtc: Vec<crate::andes_rtc::AndesRtc>,
     pub(crate) andes_reset_requested: bool,
     sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
@@ -2972,6 +2973,9 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.andes_rtc.iter().any(|rtc| overlaps_range(start, end, rtc.base, crate::andes_rtc::AndesRtc::SIZE)) {
+            return true;
+        }
         if self.andes_spi.iter().any(|spi| overlaps_range(start, end, spi.base, crate::andes_spi::AndesSpi::SIZE)) {
             return true;
         }
@@ -3402,6 +3406,16 @@ impl Bus {
             return Err("PLIC requires 1–63 interrupt sources".into());
         }
         self.register_plic("plic", Plic::new(base, sources, outputs).with_priorities(priorities))
+    }
+
+    pub(crate) fn map_andes_rtc(&mut self, rtc: crate::andes_rtc::AndesRtc) -> Result<(), String> {
+        let start = u64::from(rtc.base);
+        let end = start + u64::from(crate::andes_rtc::AndesRtc::SIZE);
+        if rtc.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping Andes RTC at {start:#010x}"));
+        }
+        self.andes_rtc.push(rtc);
+        Ok(())
     }
 
     pub(crate) fn map_andes_spi(&mut self, spi: crate::andes_spi::AndesSpi) -> Result<(), String> {
@@ -5830,6 +5844,12 @@ impl Bus {
             }
         }
         let step_rate = self.step_hz();
+        for rtc in &mut self.andes_rtc {
+            rtc.tick(step_rate);
+            if let Some((controller, source)) = rtc.irq {
+                self.plics[controller].1.set_line(source, rtc.interrupt());
+            }
+        }
         for watchdog in &mut self.andes_watchdogs {
             self.andes_reset_requested |= watchdog.tick(step_rate);
             if let Some((controller, source)) = watchdog.irq {
@@ -6798,6 +6818,9 @@ impl Bus {
         {
             return Ok(clic.read(offset, N));
         }
+        if N == 4 && let Some(rtc) = self.andes_rtc.iter().find(|rtc| rtc.contains(address)) {
+            return Ok(rtc.read(address));
+        }
         if N == 4 && let Some(spi) = self.andes_spi.iter_mut().find(|spi| spi.contains(address)) {
             return Ok(spi.read(address));
         }
@@ -7681,6 +7704,10 @@ impl Bus {
             && let Some(offset) = clic.offset(address, width)
         {
             clic.write(offset, width, value);
+            return Ok(());
+        }
+        if width == 4 && let Some(rtc) = self.andes_rtc.iter_mut().find(|rtc| rtc.contains(address)) {
+            rtc.write(address, value);
             return Ok(());
         }
         if width == 4 && let Some(spi) = self.andes_spi.iter_mut().find(|spi| spi.contains(address)) {

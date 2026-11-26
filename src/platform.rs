@@ -593,6 +593,7 @@ fn load_platform(
     let mut andes_gpios = Vec::new();
     let mut andes_watchdogs = Vec::new();
     let mut andes_spis = Vec::new();
+    let mut andes_rtcs = Vec::new();
     let mut puya_flashes = Vec::new();
     let mut clic = None;
     let mut nvic = None;
@@ -782,6 +783,7 @@ fn load_platform(
             "Miscellaneous.LED" | "Miscellaneous.Button" if !cortex_m => panel_parts.push(entry),
             "GPIOPort.LiteX_GPIO" => litex_gpios.push(entry),
             "Timers.AndesATCPIT100" => andes_pits.push(entry),
+            "Timers.AndesATCRTC100" => andes_rtcs.push(entry),
             "Timers.AndesATCWDT200_Watchdog" => andes_watchdogs.push(entry),
             "GPIOPort.AndesATCGPIO100" => andes_gpios.push(entry),
             "Timers.RiscVMachineTimer" => {
@@ -2691,6 +2693,23 @@ fn load_platform(
         if !(1..=0x100_0000).contains(&size) || flash_sizes.insert(parent, size).is_some() {
             return Err(flash.error("invalid or duplicate Puya flash"));
         }
+    }
+    for entry in andes_rtcs {
+        let mut irq = None;
+        for (_, wire) in &entry.body {
+            let (pin, destination) = wire.split_once("->").ok_or_else(|| entry.error("expected RTC wiring"))?;
+            let (target, source) = destination.split_once('@').ok_or_else(|| entry.error("expected RTC PLIC destination"))?;
+            let source = number(source.trim()).map_err(|error| entry.error(&error))?;
+            let (_, sources) = plic_config.filter(|(plic, _)| plic.name == target.trim())
+                .ok_or_else(|| entry.error("unknown RTC PLIC destination"))?;
+            if irq.is_some() || !matches!(pin.trim(), "" | "IRQ") || !(1..=sources).contains(&source) {
+                return Err(entry.error("invalid RTC PLIC source"));
+            }
+            irq = machine.bus.plic_index(target.trim()).map(|index| (index, source));
+        }
+        machine.bus.map_andes_rtc(crate::andes_rtc::AndesRtc::new(
+            entry.address()?, irq,
+        )).map_err(|error| entry.error(&error))?;
     }
     for entry in andes_spis {
         let mut irq = None;
