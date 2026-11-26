@@ -509,6 +509,21 @@ impl Machine {
         vector.set_length(bits).map_err(str::to_owned)
     }
 
+    pub(crate) fn install_csr_hook(&mut self, name: &str, csr: u32, source: &str) -> Result<(), String> {
+        if csr > 0xfff {
+            return Err("CSR address exceeds 12 bits".into());
+        }
+        let index = self.rv64_hart_by_name(name)?;
+        let hart_id = self.hart_mut(index).rv64.as_ref().expect("validated RV64 CPU").hart_id;
+        let key = (hart_id, csr);
+        if self.bus.csr_hooks.contains_key(&key) {
+            return Err(format!("CSR {csr:#x} already has a registered handler"));
+        }
+        let hook = crate::cpu_python_hook::Hook::new(source, self.monitor_firmware.clone(), Some(name.to_owned()))?;
+        self.bus.csr_hooks.insert(key, hook);
+        Ok(())
+    }
+
     pub(crate) fn install_stack_access_hook(&mut self, name: &str, source: &str) -> Result<(), String> {
         let index = self.rv64_hart_by_name(name)?;
         let cpu = self.hart_mut(index).rv64.as_ref().expect("validated RV64 CPU");

@@ -534,6 +534,7 @@ enum Action {
     ReadCpuMips(NumberMode),
     TraceStackAccess(String),
     AddStackAccessHook(String, String),
+    AddCsrHook(String, u32, String),
     VectorRegisterLength(String, u64),
     CpuCondition(String, u32),
     CpuXpsr(String),
@@ -702,7 +703,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
             matches!(
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
-                    | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::BusScalar(_)
+                    | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::BusScalar(_)
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
@@ -913,6 +914,7 @@ fn run_commands<'a>(
                     .map(|()| None).map_err(|error| error.to_string())
             }),
             Action::VectorRegisterLength(cpu, bits) => machine.configure_rv64_vlen(cpu, *bits).map(|()| None),
+            Action::AddCsrHook(cpu, csr, source) => machine.install_csr_hook(cpu, *csr, source).map(|()| None),
             Action::AddStackAccessHook(cpu, source) => machine.install_stack_access_hook(cpu, source).map(|()| None),
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
             Action::CpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
@@ -3672,6 +3674,11 @@ fn execute(
             cpu.trim_start_matches("sysbus.").to_owned(),
             crate::parse_address64(resolve(bits)?)?,
         )),
+        [cpu, "RegisterCSRHandlerFromString", csr, source] => Some(Action::AddCsrHook(
+            resolve(cpu)?.trim_start_matches("sysbus.").into(),
+            crate::parse_address(resolve(csr)?)?,
+            monitor_string(resolve(source)?).ok_or("expected quoted CSR hook source")?,
+        )),
         [cpu, "AddPreStackAccessHook", source] => Some(Action::AddStackAccessHook(
             resolve(cpu)?.trim_start_matches("sysbus.").to_owned(),
             monitor_string(resolve(source)?).ok_or("expected quoted stack access hook source")?,
@@ -4556,7 +4563,7 @@ fn execute(
                     action,
                     Action::BusScalar(_)
                         | Action::AssembleBlock(..)
-                        | Action::AddStackAccessHook(..)
+                        | Action::AddStackAccessHook(..) | Action::AddCsrHook(..)
                         | Action::AssertCpuValue(..)
                         | Action::ReadCpuPc(_)
                         | Action::ExecutionMode(..)

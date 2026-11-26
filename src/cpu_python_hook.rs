@@ -38,6 +38,8 @@ class Machine:
 
 class CPU:
     Bus = Machine.SystemBus
+    def DebugLog(self, message, *args):
+        self.Log(0, message, *args)
     def Log(self, level, message, *args):
         if args:
             message = message.format(*args)
@@ -46,13 +48,24 @@ class CPU:
 level = SimpleNamespace(Noisy=-1, Debug=0, Info=1, Warning=2, Error=3)
 cpu = CPU()
 scope = dict(machine=Machine(), cpu=cpu, self=cpu, LogLevel=level)
-program = compile(sys.argv[1], '<CPU address hook>', 'exec')
+request = SimpleNamespace(Value=0)
+program = compile(sys.argv[1], '<CPU hook>', 'exec')
 print('ready', flush=True)
 for line in sys.stdin:
     fields = line.split()
-    scope['pc'] = int(fields[0])
-    if len(fields) == 4:
-        scope.update(address=int(fields[1]), width=int(fields[2]), is_write=fields[3] == 'true')
+    is_csr = fields[0] == 'csr'
+    if is_csr:
+        request.Csr = int(fields[1])
+        request.IsRead = fields[2] == 'read'
+        request.IsWrite = fields[2] == 'write'
+        request.IsInit = False
+        if request.IsWrite:
+            request.Value = int(fields[3])
+        scope['request'] = request
+    else:
+        scope['pc'] = int(fields[0])
+        if len(fields) == 4:
+            scope.update(address=int(fields[1]), width=int(fields[2]), is_write=fields[3] == 'true')
     try:
         with contextlib.redirect_stdout(sys.stderr):
             # RPCs must use the original stdout while ordinary prints go to stderr.
@@ -60,7 +73,10 @@ for line in sys.stdin:
     except Exception as error:
         print('exception ' + str(error).encode().hex(), flush=True)
     else:
-        print('done', flush=True)
+        if is_csr:
+            print('csr-result ' + str(request.Value), flush=True)
+        else:
+            print('done', flush=True)
 "#;
 
 pub(crate) struct Hook {
@@ -127,27 +143,35 @@ impl Hook {
     }
 
     pub(crate) fn execute(&mut self, bus: &mut Bus, pc: u64) -> Result<(), String> {
-        self.invoke(bus, format_args!("{pc}"))
+        self.invoke(bus, format_args!("{pc}")).map(|_| ())
     }
 
     pub(crate) fn execute_stack(&mut self, bus: &mut Bus, pc: u64, address: u64, width: usize, write: bool) -> Result<(), String> {
-        self.invoke(bus, format_args!("{pc} {address} {width} {write}"))
+        self.invoke(bus, format_args!("{pc} {address} {width} {write}")).map(|_| ())
     }
 
-    fn invoke(&mut self, bus: &mut Bus, arguments: std::fmt::Arguments<'_>) -> Result<(), String> {
+    pub(crate) fn execute_csr(&mut self, bus: &mut Bus, csr: u32, value: Option<u64>) -> Result<u64, String> {
+        let operation = if value.is_some() { "write" } else { "read" };
+        let value = value.unwrap_or(0);
+        self.invoke(bus, format_args!("csr {csr} {operation} {value}"))?
+            .ok_or_else(|| "CSR hook returned no value".into())
+    }
+
+    fn invoke(&mut self, bus: &mut Bus, arguments: std::fmt::Arguments<'_>) -> Result<Option<u64>, String> {
         writeln!(self.input, "{arguments}").map_err(|e| e.to_string())?;
         loop {
             let request = self.reply()?;
             let (kind, argument) = request.split_once(' ').unwrap_or((&request, ""));
             let result = match kind {
-                "done" => return Ok(()),
+                "done" => return Ok(None),
+                "csr-result" => return argument.parse::<u64>().map(Some).map_err(|e| e.to_string()),
                 "exception" => {
                     emit(
                         bus,
                         3,
                         &format!("Python runtime error: {}", decode(argument)?),
                     );
-                    return Ok(());
+                    return Ok(None);
                 }
                 "symbol" => decode(argument)
                     .and_then(|name| symbol(self.symbols.as_deref().ok_or("no firmware ELF for symbol lookup")?, &name))

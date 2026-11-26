@@ -480,7 +480,7 @@ impl Rv64 {
                 << 1)
     }
 
-    fn csr(&mut self, instruction: Instruction, operand: u64, hart: usize) -> Option<u64> {
+    fn csr(&mut self, bus: &mut Bus, instruction: Instruction, operand: u64, hart: usize) -> Option<u64> {
         let index = instruction.0 >> 20;
         let mode = instruction.funct3();
         let source = instruction.rs1();
@@ -494,6 +494,34 @@ impl Rv64 {
         let operation = mode & 3;
         if operation == 0 {
             return None;
+        }
+        let key = (self.hart_id, index);
+        if let Some(mut hook) = bus.csr_hooks.remove(&key) {
+            let result = (|| {
+                if (index >> 8) & 3 > self.privilege.mode as u32 {
+                    return None;
+                }
+                let old = if operation == 1 && instruction.rd() == 0 {
+                    0
+                } else {
+                    hook.execute_csr(bus, index, None).ok()?
+                };
+                let new = match operation {
+                    1 => Some(operand),
+                    2 if source != 0 => Some(old | operand),
+                    3 if source != 0 => Some(old & !operand),
+                    _ => None,
+                };
+                if let Some(new) = new {
+                    if index >> 10 == 3 {
+                        return None;
+                    }
+                    hook.execute_csr(bus, index, Some(new)).ok()?;
+                }
+                Some(old)
+            })();
+            bus.csr_hooks.insert(key, hook);
+            return result;
         }
         let trace = self.trace_custom_csr && index == 0x7c0;
         let old = if operation == 1 && instruction.rd() == 0 {
@@ -728,7 +756,7 @@ impl Rv64 {
                 self.compare_swap(fields, bus, lhs, rhs)?
             }
             0x2f if self.isa.atomic => Some(self.atomic(fields, bus, hart, lhs, rhs)?),
-            0x73 if fields.funct3() != 0 => Some(self.csr(fields, lhs, hart).ok_or(illegal)?),
+            0x73 if fields.funct3() != 0 => Some(self.csr(bus, fields, lhs, hart).ok_or(illegal)?),
             0x73 => {
                 let epc_mask = if self.isa.compressed { !1 } else { !3 };
                 match instruction {
