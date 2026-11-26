@@ -252,3 +252,37 @@ impl Port {
         self.configuration[pin] = (self.configuration[pin] & !mask) | (value as u16 & mask);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pin_configuration_unlock_and_external_irq() {
+        let mut protection = Protection::new(0x200, "protect".into(), true);
+        let mut outputs = [None; 16];
+        outputs[6] = Some(7);
+        let mut port =
+            Port::new(0, 0x100, "port0".into(), "protect".into(), 0, 14, outputs).unwrap();
+        let mut signals = Vec::new();
+
+        protection.write(0x214, 0x40);
+        assert_eq!(protection.read(0x214), 0);
+        port.write(0x102, 2, 0x4000, protection.enabled());
+        assert_eq!(port.read(0x102, 2), 0);
+
+        protection.write(0x214, 0x40);
+        assert_eq!(protection.read(0x214), 0x40);
+        port.write(0x102, 2, 0x4000, protection.enabled());
+        port.set_input(0, true);
+        port.sample_irqs(|event, high| signals.push((event, high)));
+        assert_eq!(port.read(0x102, 2), 0x4002);
+        assert_eq!(port.read(0x04, 4), 1);
+        assert_eq!(signals, [(7, true)]);
+
+        port.write(0, 4, 0x0001_0001, protection.enabled());
+        port.sample_irqs(|event, high| signals.push((event, high)));
+        assert_eq!(port.read(0, 4), 0x0001_0001);
+        assert_eq!(signals, [(7, true), (7, false)]);
+    }
+}

@@ -1029,6 +1029,40 @@ fn load_platform(
                     return Err(entry.error("only one UART is currently supported"));
                 }
             }
+            "Python.PythonPeripheral" => {
+                let mut size = None;
+                let mut initable = false;
+                let mut source = None;
+                let mut filename = None;
+                for (key, value) in keys(entry, &["size", "initable", "script", "filename"])? {
+                    match key {
+                        "size" => size = Some(number(value).map_err(|error| entry.error(&error))?),
+                        "initable" => initable = boolean_value(value).ok_or_else(|| entry.error("invalid Python peripheral initable"))?,
+                        "script" => source = Some(value),
+                        "filename" => filename = Some(value),
+                        _ => unreachable!(),
+                    }
+                }
+                let size = size.filter(|size| *size > 0).ok_or_else(|| entry.error("Python peripheral requires a positive size"))?;
+                let quoted = |value: &str| value.strip_prefix('"').and_then(|value| value.strip_suffix('"')).map(str::to_owned);
+                let script = match (source, filename) {
+                    (Some(source), None) => multiline_value(source).or_else(|| quoted(source))
+                        .ok_or_else(|| entry.error("expected a quoted Python script"))?,
+                    (None, Some(filename)) => {
+                        let filename = quoted(filename).ok_or_else(|| entry.error("expected a quoted Python script filename"))?;
+                        let root_path = root.unwrap_or(Path::new(".")).join(&filename);
+                        let path = if root_path.is_file() {
+                            root_path
+                        } else {
+                            entry.source.parent().unwrap_or(Path::new(".")).join(filename)
+                        };
+                        fs::read_to_string(&path).map_err(|error| entry.error(&format!("{}: {error}", path.display())))?
+                    }
+                    _ => return Err(entry.error("expected exactly one of script or filename")),
+                };
+                machine.bus.map_pydev(&script, entry.address()?, size, initable)
+                    .map_err(|error| entry.error(&error))?;
+            }
             "GPIOPort.RenesasRA_GPIOMisc" => {
                 let ra8 = match keys(entry, &["version"])?.as_slice() {
                     [] | [("version", "Version.Default" | "Default")] => false,
