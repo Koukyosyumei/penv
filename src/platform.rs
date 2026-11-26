@@ -3967,12 +3967,25 @@ fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus, root: &Path, assets: Option<&
             .strip_prefix('<')
             .and_then(|text| text.split_once('>'))
             .ok_or_else(|| error("expected <start size>"))?;
-        let mut values = range.split_whitespace();
-        let (Some(start), Some(size), None) = (values.next(), values.next(), values.next()) else {
-            return Err(error("expected <start size>"));
+        let (start, size) = if let Some((start, end)) = range.split_once(',') {
+            let start = number(start.trim()).map_err(|e| error(&e))?;
+            let end = end.trim();
+            let size = if let Some(size) = end.strip_prefix('+') {
+                number(size.trim()).map_err(|e| error(&e))?
+            } else {
+                number(end).map_err(|e| error(&e))?
+                    .checked_sub(start)
+                    .and_then(|length| length.checked_add(1))
+                    .ok_or_else(|| error("invalid inclusive address range"))?
+            };
+            (start, size)
+        } else {
+            let mut values = range.split_whitespace();
+            let (Some(start), Some(size), None) = (values.next(), values.next(), values.next()) else {
+                return Err(error("expected <start size> or <start, end>"));
+            };
+            (number(start).map_err(|e| error(&e))?, number(size).map_err(|e| error(&e))?)
         };
-        let start = number(start).map_err(|e| error(&e))?;
-        let size = number(size).map_err(|e| error(&e))?;
         let tail = tail.trim();
         match command {
             "SilenceRange" if tail.is_empty() => bus.map_silencer(start, size),

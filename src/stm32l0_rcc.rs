@@ -136,6 +136,22 @@ mod tests {
     use super::Stm32l0Rcc;
 
     #[test]
+    fn lptimer_uses_the_programmed_clock_source_and_hsi_divider() {
+        let mut rcc = Stm32l0Rcc::new(0, false, 16_000_000, Some(0x4000_7c00));
+        assert_eq!(rcc.lptimer_frequency(), 32_000_000);
+        for (source, frequency) in [(1, 37_000), (2, 16_000_000), (3, 32_768)] {
+            rcc.write(0x4c, source << 18);
+            assert_eq!(rcc.lptimer_frequency(), frequency);
+        }
+        rcc.write(0x4c, 2 << 18);
+        rcc.write(0, 8);
+        assert_eq!(rcc.lptimer_frequency(), 4_000_000);
+        rcc.reset();
+        assert_eq!(rcc.lptimer_frequency(), 32_000_000);
+        assert_eq!(rcc.lptimer, Some(0x4000_7c00));
+    }
+
+    #[test]
     fn oscillator_ready_and_clock_status_follow_programmed_source_and_divider() {
         let mut rcc = Stm32l0Rcc::new(0, true, 16_000_000, None);
         assert_eq!(rcc.read(0), 0x300);
