@@ -600,7 +600,7 @@ enum Action {
     MachineReset(Vec<ResetHook>),
     ReadScalar(u64, ScalarWidth),
     WriteScalar(u64, ScalarWidth, u32),
-    Tag(u32, u32, u64, bool),
+    Tag(u32, u32, u64, bool, String, bool),
     UnhandledAccess(UnhandledAccess),
     ReadBytes(u32, usize),
     WriteBytes(u32, Vec<u8>),
@@ -1481,9 +1481,9 @@ fn run_commands<'a>(
                     })
                 }
             }
-            Action::Tag(start, size, default, throws) => machine
+            Action::Tag(start, size, default, throws, name, silent) => machine
                 .bus
-                .tag(*start, *size, *default, *throws)
+                .tag_named(*start, *size, *default, *throws, name, *silent)
                 .map(|()| None),
             Action::UnhandledAccess(policy) => {
                 machine.bus.unhandled_access = Some(*policy);
@@ -3465,8 +3465,9 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                         state.machine = true;
                         state.boot.platform = Some(included);
                     }
-                    Some("cs") if fs::canonicalize(root.join("tests/unit-tests/BusFaultingPeripheral.cs"))
-                        .is_ok_and(|native| fs::canonicalize(&included).is_ok_and(|source| source == native)) => {}
+                    Some("cs") if ["BusFaultingPeripheral.cs", "UnimplementedRegistersPeripheral.cs"]
+                        .iter().any(|file| fs::canonicalize(root.join("tests/unit-tests").join(file))
+                            .is_ok_and(|native| fs::canonicalize(&included).is_ok_and(|source| source == native))) => {}
                     Some("repl" | "cs" | "py") => {
                         return Err(error("unsupported command: include needs an available loader"));
                     }
@@ -4808,12 +4809,17 @@ fn execute(
             let [start, size] = fields.as_slice() else {
                 return Err("expected Tag <start size>".into());
             };
-            let (_, options) =
+            let (name, options) =
                 quoted_argument(remainder.trim()).ok_or("expected quoted tag name")?;
             let mut default = None;
             let mut throws = None;
+            let mut silent = None;
             for option in options.split_whitespace() {
-                if let Some(value) = option.strip_prefix("throwException=") {
+                if let Some(value) = option.strip_prefix("silent=") {
+                    if silent.replace(parse_tester_bool(resolve(value)?)?).is_some() {
+                        return Err("duplicate silent option".into());
+                    }
+                } else if let Some(value) = option.strip_prefix("throwException=") {
                     if throws.is_some() {
                         return Err("duplicate throwException option".into());
                     }
@@ -4838,12 +4844,14 @@ fn execute(
                     return Err(format!("unsupported Tag option {option}"));
                 }
             }
-            Some(Action::Tag(
-                crate::parse_address(resolve(start)?)?,
-                crate::parse_address(resolve(size)?)?,
-                default.unwrap_or(0),
-                throws.unwrap_or(false),
-            ))
+            let start = crate::parse_address(resolve(start)?)?;
+            let end_or_size = crate::parse_address(resolve(size)?)?;
+            let size = if range.contains(',') && end_or_size >= start {
+                end_or_size.checked_sub(start).and_then(|span| span.checked_add(1)).ok_or("tag range is too large")?
+            } else {
+                end_or_size
+            };
+            Some(Action::Tag(start, size, default.unwrap_or(0), throws.unwrap_or(false), name.into(), silent.unwrap_or(false)))
         }
         [
             "sysbus",

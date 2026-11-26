@@ -2355,13 +2355,16 @@ impl Machine {
         self.bus
             .tick_litex_uart(self.elapsed_steps, output)
             .map_err(|error| format!("UART: {error}"))?;
-        hart.execute_step(
+        self.bus.guest_access = Some((index, hart.pc));
+        let step = hart.execute_step(
             &mut self.bus,
             self.elapsed_steps,
             self.cpu_halted,
             output,
             self.function_symbols.as_ref(),
-        )
+        );
+        self.bus.guest_access = None;
+        step
     }
 }
 

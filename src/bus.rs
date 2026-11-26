@@ -186,12 +186,14 @@ pub enum UnhandledAccess {
     ThrowExceptionIfNotTagged,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct BusTag {
     start: u32,
     end: u32,
     default: u64,
     throws: bool,
+    name: String,
+    silent: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -380,6 +382,9 @@ enum PeripheralRunState {
 #[derive(Default)]
 pub struct Bus {
     monitor_log_level: Option<i8>,
+    pub(crate) guest_access: Option<(usize, u32)>,
+    pub(crate) guest_cpu_names: Vec<String>,
+    unimplemented_register_peripherals: Vec<(u32, String)>,
     pub monitor_user_state: String,
     pub(crate) csr_hooks: BTreeMap<(usize, u32), crate::cpu_python_hook::Hook>,
     pub(crate) stack_access_hooks: BTreeMap<usize, crate::cpu_python_hook::Hook>,
@@ -3384,6 +3389,8 @@ impl Bus {
                     let base = u64::from(mapping.base);
                     start < base + u64::from(mapping.size) && base < end
                 })
+            || self.unimplemented_register_peripherals.iter()
+                .any(|(base, _)| overlaps_range(start, end, *base, 0x100))
             || self
                 .command_error_peripherals
                 .iter()
@@ -4668,6 +4675,12 @@ impl Bus {
     }
 
     pub fn tag(&mut self, start: u32, size: u32, default: u64, throws: bool) -> Result<(), String> {
+        self.tag_named(start, size, default, throws, "", false)
+    }
+
+    pub fn tag_named(
+        &mut self, start: u32, size: u32, default: u64, throws: bool, name: &str, silent: bool,
+    ) -> Result<(), String> {
         use crate::address_range::AddressRange;
         let invalid = "tag range must be nonempty and within the 32-bit bus";
         let range = AddressRange::by(start.into(), size.into()).map_err(|_| invalid)?;
@@ -4677,6 +4690,8 @@ impl Bus {
             end,
             default,
             throws,
+            name: name.to_owned(),
+            silent,
         };
         let bounds = |tag: &BusTag| AddressRange {
             start: tag.start.into(),
@@ -4687,25 +4702,23 @@ impl Bus {
             .iter()
             .position(|tag| bounds(tag).intersect(range).is_some())
         {
-            let parent = self.policy_tags[index];
-            let parent_bounds = bounds(&parent);
+            let parent_bounds = bounds(&self.policy_tags[index]);
             if !parent_bounds.contains_range(range) {
                 return Err("subtag must be completely contained in a single existing tag".into());
             }
-            self.policy_tags.swap_remove(index);
+            let parent = self.policy_tags.swap_remove(index);
             self.policy_tags.extend(parent_bounds.subtract(range).map(|remaining| BusTag {
                 start: remaining.start as u32,
                 end: remaining.end as u32,
-                ..parent
+                ..parent.clone()
             }));
         }
         self.policy_tags.push(tag);
         Ok(())
     }
 
-    fn log_unmapped_monitor_access(&self, address: u32, width: usize, value: Option<u32>) {
+    fn log_unmapped_access(&self, address: u32, width: usize, value: Option<u32>, monitor: bool) {
         if self.unhandled_access == Some(UnhandledAccess::DoNotReport)
-            || self.policy_tags.iter().any(|tag| tag.start <= address && address <= tag.end)
             || self.stm32f0_tagged(address, width)
         {
             return;
@@ -4716,11 +4729,23 @@ impl Bus {
             4 => "DoubleWord",
             _ => return,
         };
+        let mut source = "sysbus: ".to_owned();
+        if !monitor && let Some((index, pc)) = self.guest_access {
+            let name = self.guest_cpu_names.get(index).map_or("cpu", String::as_str);
+            source.push_str(&format!("[{name}: 0x{pc:X}] "));
+        }
+        let tag = self.policy_tags.iter().find(|tag| tag.start <= address && address <= tag.end);
+        if let Some(tag) = tag {
+            source.push_str(&format!("(tag: '{}') ", tag.name));
+        }
         let message = match value {
-            Some(value) => format!("sysbus: Write{width} to non existing peripheral at 0x{address:X}, value 0x{value:X}."),
-            None => format!("sysbus: Read{width} from non existing peripheral at 0x{address:X}."),
+            Some(value) => format!("{source}Write{width} to non existing peripheral at 0x{address:X}, value 0x{value:X}."),
+            None => match tag {
+                Some(tag) => format!("{source}Read{width} from non existing peripheral at 0x{address:X}, returning 0x{:X}.", tag.default),
+                None => format!("{source}Read{width} from non existing peripheral at 0x{address:X}."),
+            },
         };
-        crate::monitor_log::record(2, &message);
+        crate::monitor_log::record(if tag.is_some_and(|tag| tag.silent) { 0 } else { 2 }, &message);
     }
 
     fn unhandled_value(&self, address: u32, width: usize, monitor: bool) -> Result<u32, BusError> {
@@ -4737,7 +4762,7 @@ impl Bus {
         {
             return Err(BusError::AddressError(address));
         }
-        if tagged || monitor || svd_register || matches!(self.unhandled_access, Some(UnhandledAccess::Report | UnhandledAccess::DoNotReport)) {
+        if tagged || monitor || svd_register || self.renode_unmapped_data || matches!(self.unhandled_access, Some(UnhandledAccess::Report | UnhandledAccess::DoNotReport)) {
             let mask = u32::MAX >> (32 - width * 8);
             return Ok(tag.map_or(0, |tag| tag.default as u32 & mask));
         }
@@ -6377,6 +6402,34 @@ impl Bus {
         )
     }
 
+    pub fn map_unimplemented_register_peripheral(&mut self, base: u32, name: &str) -> Result<(), String> {
+        let start = u64::from(base);
+        if base & 3 != 0 || self.overlaps(start, start + 0x100) {
+            return Err(format!("invalid or overlapping unimplemented-register peripheral at {base:#010x}"));
+        }
+        self.unimplemented_register_peripherals.push((base, name.to_owned()));
+        Ok(())
+    }
+
+    fn log_unimplemented_register(&self, address: u32, value: Option<u32>) -> bool {
+        let Some((offset, name)) = self.unimplemented_register_peripherals.iter().find_map(|(base, name)| {
+            address.checked_sub(*base).filter(|offset| *offset < 0x100).map(|offset| (offset, name))
+        }) else { return false };
+        let register = match offset {
+            0 => " (First)",
+            4 => " (Second)",
+            8 => " (Third)",
+            _ => "",
+        };
+        let message = if let Some(value) = value {
+            format!("{name}: Unhandled write to offset 0x{offset:X}{register}, value 0x{value:X}.")
+        } else {
+            format!("{name}: Unhandled read from offset 0x{offset:X}{register}.")
+        };
+        crate::monitor_log::record(2, &message);
+        true
+    }
+
     pub fn map_command_error_peripheral(
         &mut self,
         base: u32,
@@ -7169,8 +7222,8 @@ impl Bus {
                         return Ok(svd_value);
                     }
                 }
-                if monitor || self.unhandled_access == Some(UnhandledAccess::Report) {
-                    self.log_unmapped_monitor_access(address, N, None);
+                if monitor || self.renode_unmapped_data || self.unhandled_access == Some(UnhandledAccess::Report) {
+                    self.log_unmapped_access(address, N, None, monitor);
                 }
                 Ok(value)
             }
@@ -7179,6 +7232,9 @@ impl Bus {
     }
 
     fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if N == 4 && self.log_unimplemented_register(address, None) {
+            return Ok(0);
+        }
         if let Some(gpio) = self.sifive_gpios.iter().find(|gpio| gpio.contains(address)) {
             return Ok(gpio.read(address, N));
         }
@@ -7895,8 +7951,7 @@ impl Bus {
                         .map(|value| value & (u32::MAX >> (32 - N * 8)))
                 })
                 .or_else(|| {
-                    (self.renode_unmapped_data
-                        || self.zero_mmio(address, N)
+                    (self.zero_mmio(address, N)
                         || self.stm32f0_tagged(address, N))
                     .then_some(0)
                 })
@@ -8014,7 +8069,7 @@ impl Bus {
                     }
                 }
                 if monitor {
-                    self.log_unmapped_monitor_access(address, width, Some(value));
+                    self.log_unmapped_access(address, width, Some(value), true);
                 }
                 Ok(())
             }
@@ -8043,8 +8098,8 @@ impl Bus {
                         return Ok(());
                     }
                 }
-                if self.unhandled_access == Some(UnhandledAccess::Report) {
-                    self.log_unmapped_monitor_access(address, width, Some(value));
+                if self.renode_unmapped_data || self.unhandled_access == Some(UnhandledAccess::Report) {
+                    self.log_unmapped_access(address, width, Some(value), false);
                 }
                 Ok(())
             }
@@ -8060,6 +8115,9 @@ impl Bus {
         uart: &mut impl Write,
         writer: Option<usize>,
     ) -> Result<(), BusError> {
+        if width == 4 && self.log_unimplemented_register(address, Some(value)) {
+            return Ok(());
+        }
         if let Some(gpio) = self.sifive_gpios.iter_mut().find(|gpio| gpio.contains(address)) {
             gpio.write(address, width, value);
             return Ok(());
@@ -9074,8 +9132,7 @@ impl Bus {
             device.write(address, value);
             return Ok(());
         }
-        if self.renode_unmapped_data
-            || self.zero_mmio(address, width)
+        if self.zero_mmio(address, width)
             || self.stm32f0_tagged(address, width)
             || self.nrf_tag(address, width).is_some()
             || self.bus_tag(address, width).is_some()

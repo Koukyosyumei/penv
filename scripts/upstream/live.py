@@ -208,7 +208,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.log_pause = self.log_bool(options.get("defaultPauseEmulation", "false"))
         if self.log_pause and not self.rust_monitor:
             raise Unsupported("log tester pause-on-match requires the Rust monitor")
-        self.log_timeout = self.duration(timeout)
+        self.log_timeout = self.duration(timeout, maximum=18_446_744_073)
         self.log_capacity = int(options.get("maxLogEntries", "1000000"))
         if not 1 <= self.log_capacity <= 1000000:
             raise Unsupported("log tester capacity outside supported range")
@@ -254,7 +254,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         pause = self.log_bool(options["pauseEmulation"]) if "pauseEmulation" in options else self.log_pause
         if pause and not self.rust_monitor:
             raise Unsupported("log tester pause-on-match requires the Rust monitor")
-        duration = self.duration(options.get("timeout", self.log_timeout))
+        duration = self.duration(options.get("timeout", self.log_timeout), maximum=18_446_744_073)
         timeout = f"{duration}s" if self.rust_monitor else int(Decimal(duration) * 1000)
         starts = self.log_bool(options.get("startEmulation", "true"))
         if not self.rust_monitor and timeout and not (starts or self.started):
@@ -813,10 +813,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         return value
 
     @staticmethod
-    def duration(value):
+    def duration(value, maximum=120):
         try:
             duration = Decimal(str(value))
-            if duration.is_finite() and 0 <= duration <= 120:
+            if duration.is_finite() and 0 <= duration <= maximum:
                 return format(duration, "f")
         except InvalidOperation:
             pass

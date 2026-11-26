@@ -893,6 +893,11 @@ fn load_platform(
             "IRQControllers.PlatformLevelInterruptController" | "IRQControllers.AndesNCEPLIC100" => plic.push(entry),
             "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
             "Miscellaneous.LED" => gpio_leds.push(entry),
+            "UnimplementedRegistersPeripheral" => {
+                keys(entry, &[])?;
+                machine.bus.map_unimplemented_register_peripheral(entry.address()?, &entry.name)
+                    .map_err(|error| entry.error(&error))?;
+            }
             "Mocks.BusFaultingPeripheral" if cortex_m => map_bus_faulting_model(entry, &mut machine.bus)?,
             "PWMTester" => gpio_pwm_testers.push(entry),
             "Miscellaneous.Button" => gpio_buttons.push(entry),
@@ -2842,6 +2847,7 @@ fn load_platform(
         // Renode's system bus returns zero for an unmapped data read
         // and discards an unmapped data write.
         machine.bus.use_renode_unmapped_data();
+        machine.bus.guest_cpu_names = configs.iter().map(|config| config.1.name.clone()).collect();
     }
     if let Some(entry) = clic {
         let properties = keys(entry, &["cpu", "machineLevelBits"])?;
