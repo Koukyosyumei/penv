@@ -111,6 +111,7 @@ struct CpuInterface {
     virtual_enabled: bool,
     virtual_control: u32,
     virtual_list: [u64; 16],
+    virtual_active_priorities: [u32; 2],
     priority_mask: u8,
     binary_point: [u8; 2],
     active: Vec<(u16, u8)>,
@@ -132,6 +133,7 @@ impl CpuInterface {
             virtual_enabled: false,
             virtual_control: 0,
             virtual_list: [0; 16],
+            virtual_active_priorities: [0; 2],
             priority_mask: 0,
             binary_point: [0; 2],
             active: Vec::new(),
@@ -388,6 +390,14 @@ impl Gic {
                 return Some(None);
             }
             (0x000c_00ac, value) => return Some(value.is_none().then_some(7)), // ICC_SRE
+            (0x008c_0008 | 0x008c_0009, value) => {
+                let register = &mut interface.virtual_active_priorities[(register & 1) as usize];
+                if let Some(value) = value {
+                    *register = value;
+                    return Some(None);
+                }
+                *register
+            }
             (0x008c_002b, None) => (4 << 29) | (interface.virtual_list.len() as u32 - 1), // ICH_VTR
             (0x008c_000b, None) => u32::from(interface.virtual_enabled), // ICH_HCR
             (0x008c_000b, Some(value)) => {
@@ -464,6 +474,7 @@ impl Gic {
             ])?;
             write_words(output, &[u64::from(cpu.split_eoi), u64::from(cpu.virtual_enabled), u64::from(cpu.virtual_control)])?;
             write_words(output, &cpu.virtual_list)?;
+            write_words(output, &cpu.virtual_active_priorities.map(u64::from))?;
             for &(id, priority) in &cpu.active {
                 write_words(output, &[u64::from(id), u64::from(priority)])?;
             }
@@ -503,6 +514,13 @@ impl Gic {
                 cpu.virtual_enabled = read_bool(enabled)?;
                 cpu.virtual_control = u32::try_from(control).map_err(io::Error::other)?;
                 cpu.virtual_list = read_words(input)?;
+            }
+            if snapshot_version >= 11 {
+                let [group0, group1] = read_words(input)?;
+                cpu.virtual_active_priorities = [
+                    u32::try_from(group0).map_err(io::Error::other)?,
+                    u32::try_from(group1).map_err(io::Error::other)?,
+                ];
             }
             cpu.active.clear();
             for _ in 0..active {
