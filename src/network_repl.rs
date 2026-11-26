@@ -406,8 +406,12 @@ pub(crate) fn load_parsed(path: &Path, root: &Path) -> Result<Machine, String> {
 }
 
 pub fn export_peripherals(path: &Path, root: Option<&Path>, output: &Path) -> Result<(), String> {
-    use std::io::Write;
     load(path, root)?;
+    write_peripheral_map(path, root, output)
+}
+
+pub(crate) fn write_peripheral_map(path: &Path, root: Option<&Path>, output: &Path) -> Result<(), String> {
+    use std::io::Write;
     let entries = crate::repl_parser::load(path, root.unwrap_or(Path::new(".")))?;
     let mut nodes = Vec::new();
     for entry in &entries {

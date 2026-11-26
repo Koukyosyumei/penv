@@ -650,6 +650,7 @@ enum Action {
     GpioOverlay(Vec<(String, u8, String, u8)>),
     ScopedRamOverlay(String, String, u64, u32),
     PeripheralList,
+    ExportPeripherals(PathBuf, PathBuf),
     SubobjectTester(String, u32),
     MonitorCreateMachine(Option<String>),
     MonitorSelectMachine(String),
@@ -967,7 +968,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
                     | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..) | Action::BusScalar(_)
-                    | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
+                    | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels | Action::ExportPeripherals(..)
                     | Action::LoadScopedHex(..) | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                     | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
@@ -1564,6 +1565,10 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::SubobjectTester(name, address) => machine.bus.map_subobject_tester(*address, name).map(|()| None),
+            Action::ExportPeripherals(path, root) => {
+                let platform = machine.monitor_platform.as_deref().ok_or("peripherals export requires a platform")?;
+                crate::network_repl::write_peripheral_map(platform, Some(root), path).map(|()| None)
+            }
             Action::PeripheralList => {
                 for name in machine.bus.monitor_bus_device_names() {
                     writeln!(output.reply(), "{name}").map_err(|error| error.to_string())?;
@@ -4725,6 +4730,9 @@ fn execute(
             Some(Action::UserState(value))
         }
         ["Clear"] => Some(Action::ClearMemory),
+        ["peripherals", "export", value] => Some(Action::ExportPeripherals(
+            snapshot_path(value, monitor_origin(variables), variables)?, root.to_owned(),
+        )),
         ["peripherals"] => Some(Action::PeripheralList),
         ["py" | "python", source] => {
             let source = monitor_string(resolve(source)?).ok_or("Variable type has to be a string.")?;
@@ -5684,7 +5692,7 @@ fn execute(
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
                         | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
-                        | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
+                        | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)

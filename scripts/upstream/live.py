@@ -380,7 +380,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 raise Unsupported("Execute Command machine must be a name")
             select = f"mach set {self.literal(machine)}" if machine and machine.strip() else None
             observes_state = " DisassembleBlock " in command or bool(
-                re.match(r"machine\s+LoadPlatformDescriptionFromString\s", command)
+                re.match(r"peripherals\s+export\s", command)
+                or re.match(r"machine\s+LoadPlatformDescriptionFromString\s", command)
                 and self.proc is not None
                 or re.match(r"(?:py|python)\s", command)
                 or re.fullmatch(r"(?:peripherals|logLevel|printenv|lastLog(?:\s+\S+)?|emulation\s+IsStarted)", command)
