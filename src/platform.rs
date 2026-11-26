@@ -1745,9 +1745,13 @@ fn load_platform(
                     }
                 }
             }
+            let mut device = Stm32Dma::new(dma.address()?, outputs);
+            if stm32l0_rcc.is_some() {
+                device.start_tx_on_enable();
+            }
             machine
                 .bus
-                .map_stm32_dma(Stm32Dma::new(dma.address()?, outputs))
+                .map_stm32_dma(device)
                 .map_err(|e| dma.error(&e))?;
             count
         } else {

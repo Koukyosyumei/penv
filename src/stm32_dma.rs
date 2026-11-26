@@ -11,6 +11,8 @@ pub struct Stm32Dma {
     selection: u32,
     active: u8,
     pending_requests: u8,
+    start_tx_on_enable: bool,
+    software_requests: u8,
 }
 
 struct Channel {
@@ -42,6 +44,8 @@ impl Stm32Dma {
             selection: 0,
             active: 0,
             pending_requests: 0,
+            start_tx_on_enable: false,
+            software_requests: 0,
             channels: irqs
                 .into_iter()
                 .map(|irq| Channel {
@@ -59,10 +63,15 @@ impl Stm32Dma {
         }
     }
 
+    pub(crate) fn start_tx_on_enable(&mut self) {
+        self.start_tx_on_enable = true;
+    }
+
     pub fn reset(&mut self) {
         self.selection = 0;
         self.active = 0;
         self.pending_requests = 0;
+        self.software_requests = 0;
         for channel in &mut self.channels {
             *channel = Channel {
                 irq: channel.irq,
@@ -137,6 +146,9 @@ impl Stm32Dma {
                             channel.config = value & 0x7fff;
                             if value & ENABLE != 0 {
                                 channel.current_peripheral = channel.peripheral;
+                                if self.start_tx_on_enable && value & DIRECTION != 0 {
+                                    self.software_requests |= 1 << index;
+                                }
                                 channel.current_memory = channel.memory;
                             }
                         }
@@ -175,6 +187,7 @@ impl Stm32Dma {
         } else {
             self.active &= !bit;
             self.pending_requests &= !bit;
+            self.software_requests &= !bit;
         }
     }
 
@@ -187,7 +200,7 @@ impl Stm32Dma {
     }
 
     pub fn next_transfer(&self, requests: u8) -> Option<Transfer> {
-        let requests = requests | self.pending_requests;
+        let requests = requests | self.pending_requests | self.software_requests;
         let (index, channel) = self
             .channels
             .iter()
@@ -236,6 +249,7 @@ impl Stm32Dma {
         if !success {
             channel.flags |= 8;
             channel.config &= !ENABLE;
+            self.software_requests &= !(1 << transfer.channel);
             self.update_active(transfer.channel);
             return;
         }
@@ -257,6 +271,7 @@ impl Stm32Dma {
             channel.flags |= 4;
         }
         if channel.count == 0 {
+            self.software_requests &= !(1 << transfer.channel);
             channel.flags |= 2;
             if channel.config & (CIRCULAR | MEMORY_TO_MEMORY) == CIRCULAR {
                 channel.count = channel.original;
