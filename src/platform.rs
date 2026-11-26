@@ -2549,6 +2549,9 @@ fn load_platform(
             machine.bus.nvic.as_mut().unwrap().enable_trustzone();
         }
         machine.set_cortex_m_cpu_wait(&entry.name, cpu_wait)?;
+        if cpu_wait {
+            machine.reset_named_cortex_m(&entry.name)?;
+        }
         return Ok(machine);
     }
     if let Some(nvic) = nvic {

@@ -1449,6 +1449,14 @@ impl Machine {
         Ok(())
     }
 
+    pub(crate) fn cortex_m_cpu_wait(&mut self, name: &str) -> Result<bool, String> {
+        Ok(self.cortex_m_monitor_cpu(name)?.cpu_wait_asserted)
+    }
+
+    pub(crate) fn pending_cortex_m_reset_release(&self) -> bool {
+        self.primary.reset_release.is_some()
+    }
+
     pub fn reset_named_cortex_m(&mut self, name: &str) -> Result<(), String> {
         if self.primary.name.as_deref() != Some(name) || !self.is_cortex_m() {
             return Err(format!("unknown Cortex-M CPU {name:?}"));
@@ -3129,6 +3137,10 @@ impl Hart {
         self.registers[14] = lr;
         self.pc = pc;
         Ok(())
+    }
+
+    pub(crate) fn monitor_is_halted(&self) -> bool {
+        self.monitor_halted || self.reset_held
     }
 
     pub fn configure_cortex_m(&mut self, vectors: Option<u32>, thumb2: bool) {

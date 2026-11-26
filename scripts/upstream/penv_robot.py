@@ -65,6 +65,13 @@ SVD_PINS = {
 }
 
 
+class MonitorXmlRpcServer(SimpleXMLRPCServer):
+    def _marshaled_dispatch(self, data, dispatch_method=None, path=None):
+        response = super()._marshaled_dispatch(data, dispatch_method, path)
+        # XML parsers normalize raw CRLF even inside string values.
+        return response.replace(b"\r", b"&#13;")
+
+
 class Endpoint:
     keywords = {
         "Set Default Uart Timeout": "set_timeout",
@@ -244,6 +251,6 @@ class Endpoint:
         raise RuntimeError(stderr.strip() or "missing successful penv UART observation")
 
     def server(self):
-        server = SimpleXMLRPCServer(("127.0.0.1", 0), logRequests=False)
+        server = MonitorXmlRpcServer(("127.0.0.1", 0), logRequests=False)
         server.register_instance(self)
         return server

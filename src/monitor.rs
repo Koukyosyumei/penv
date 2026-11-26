@@ -1071,7 +1071,7 @@ enum Action {
     CpuWillExecuteIt(String, u8),
     NvicPriorityBoost(String, bool),
     CpuXpsr(String),
-    CpuWait(String, bool),
+    CpuWait(String, Option<bool>),
     CpuPaused(String, Option<bool>),
     CpuHalted(String, Option<bool>),
     ReadCpuPc(String),
@@ -1931,6 +1931,7 @@ fn run_commands<'a>(
                                 machine.bus.monitor_step_hz(),
                             )?
                         }
+                        Action::RunToSyncPoint if machine.pending_cortex_m_reset_release() => 1,
                         Action::RunToSyncPoint => duration_cycles(
                             machine.monitor_quantum, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
                         )?,
@@ -2016,17 +2017,15 @@ fn run_commands<'a>(
             }
             Action::CpuPaused(cpu, requested) | Action::CpuHalted(cpu, requested) => {
                 machine.cortex_m_monitor_cpu(cpu).and_then(|hart| {
-                    let state = if matches!(command.action, Action::CpuPaused(..)) {
-                        &mut hart.monitor_paused
-                    } else {
-                        &mut hart.monitor_halted
-                    };
+                    let paused = matches!(command.action, Action::CpuPaused(..));
                     if let Some(requested) = requested {
+                        let state = if paused { &mut hart.monitor_paused } else { &mut hart.monitor_halted };
                         *state = *requested;
                         Ok(None)
                     } else {
-                        let value = if *state { "True" } else { "False" };
-                        writeln!(output.output, "{value}")
+                        let state = if paused { hart.monitor_paused } else { hart.monitor_is_halted() };
+                        let value = if state { "True" } else { "False" };
+                        writeln!(output.reply(), "{value}")
                             .map_err(|e| e.to_string())
                             .map(|()| None)
                     }
@@ -2273,8 +2272,12 @@ fn run_commands<'a>(
             }
             // Synchronous script actions run at completed instruction boundaries.
             Action::SynchroniseQuantum => Ok(None),
-            Action::CpuWait(cpu, asserted) => {
+            Action::CpuWait(cpu, Some(asserted)) => {
                 machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
+            }
+            Action::CpuWait(cpu, None) => {
+                let value = if machine.cortex_m_cpu_wait(cpu)? { "True" } else { "False" };
+                writeln!(output.reply(), "{value}").map_err(|e| e.to_string()).map(|()| None)
             }
             Action::I2cAcceleration(target, axis, value, default) => {
                 if let Ok(sensor) = machine.bus.lis2dw12(target) {
@@ -6690,6 +6693,9 @@ fn execute(
             }
             Some(Action::SetQuantum(quantum))
         }
+        ["machine" | "mach", "InfoLog", message] => Some(Action::ScriptLog(
+            1, unquote(resolve(message)?).to_owned(),
+        )),
         ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunToSyncPoint),
         ["machine" | "mach", "Reset"] => Some(Action::MachineReset(Vec::new())),
         [target, property @ ("Reset" | "LowPercentage" | "HighPercentage")]
@@ -6703,11 +6709,11 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
             ))
         }
-        [target, "CpuWaitSignal", state @ ("Set" | "Unset")] => {
+        [target, "CpuWaitSignal", state @ ("Set" | "Unset" | "IsSet")] => {
             let cpu = resolve(target)?;
             Some(Action::CpuWait(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
-                *state == "Set",
+                (*state != "IsSet").then_some(*state == "Set"),
             ))
         }
         ["emulation", "RunUntil", timestamp] => {
@@ -6828,7 +6834,7 @@ fn execute(
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)
                         | Action::AssertCpuValue(..)
-                        | Action::ReadCpuPc(_) | Action::CpuHalted(..) | Action::CpuPaused(..)
+                        | Action::ReadCpuPc(_) | Action::CpuHalted(..) | Action::CpuPaused(..) | Action::CpuWait(..)
                         | Action::ExecutionMode(..)
                         | Action::CpuPc(..)
                         | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuMips(..)

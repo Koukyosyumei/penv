@@ -407,6 +407,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 or re.match(r"machine\s+LoadPlatformDescriptionFromString\s", command)
                 and self.proc is not None
                 or re.match(r"(?:py|python)\s|next_value(?:\s|$)", command)
+                or re.fullmatch(r"[\w.]+\s+(?:IsHalted|CpuWaitSignal IsSet)", command)
                 or re.fullmatch(r"(?:peripherals|logLevel|printenv|lastLog(?:\s+\S+)?|emulation\s+IsStarted)", command)
                 or re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
                 or re.match(r"(?:sysbus\s+Read(?:Byte|Bytes|Word|DoubleWord|QuadWord)|[\w.]+\s+Get(?:SystemRegisterValue|Register))\s", command)
