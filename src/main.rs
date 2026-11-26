@@ -1814,6 +1814,9 @@ fn run() -> Result<ExitCode, String> {
         } else if monitor_stdio && machine.is_cortex_m() {
             machine.bus.unhandled_access = Some(bus::UnhandledAccess::Report);
         }
+        // Renode's F4 timer connections are independent of the RCC enable
+        // bits. Scripted monitor sessions retain those timer connections.
+        machine.bus.f4_monitor_timer_clocks = monitor_stdio && script.is_some();
         // The pinned Renode BaseCPU starts at 100 MIPS unless the script
         // overrides it. Configure the CPU budget and SysTick from one rate.
         let renode_default_mips = (script.is_some()

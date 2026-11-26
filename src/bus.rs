@@ -544,6 +544,7 @@ pub struct Bus {
     f4_system: Option<F4System>,
     // The upstream F4 REPL supplies independent TIMx and SysTick clocks.
     pub f4_repl_timing: bool,
+    pub(crate) f4_monitor_timer_clocks: bool,
     f4_gated_ranges: Vec<(u32, u32)>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<H7Gpio>,
@@ -1915,7 +1916,7 @@ impl Bus {
                 .any(|&(base, size)| {
                     address.wrapping_sub(base) < size
                         && !rcc.enabled(base)
-                        && !(self.f4_repl_timing
+                        && !((self.f4_repl_timing || self.f4_monitor_timer_clocks)
                             && self.h7_timers.iter().any(|timer| timer.base == base))
                 })
         })
@@ -2413,11 +2414,16 @@ impl Bus {
         input: usize,
         channel: u16,
     ) -> Result<(), String> {
+        let now = self.h7_sensor_time_us();
         self.h7_i2c
             .iter_mut()
             .find_map(|bus| bus.find_power_monitor(name))
             .ok_or_else(|| format!("unknown INA228 sensor {name:?}"))?
-            .feed(file, input, channel, self.h7_step)
+            .feed(file, input, channel, now)
+    }
+
+    fn h7_sensor_time_us(&self) -> u64 {
+        (self.monitor_time_ns(self.h7_step) / 1000).min(u128::from(u64::MAX)) as u64
     }
 
     pub fn feed_pressure(
@@ -2426,19 +2432,17 @@ impl Bus {
         path: &std::path::Path,
         temperature: bool,
     ) -> Result<(), String> {
+        let now = self.h7_sensor_time_us();
         if temperature
             && let Some(sensor) = self
                 .h7_i2c
                 .iter_mut()
                 .find_map(|bus| bus.find_power_monitor(name))
         {
-            return sensor.feed(path, 2, 0, self.h7_step);
+            return sensor.feed(path, 2, 0, now);
         }
-        let nanoseconds = self
-            .h7_step
-            .saturating_mul(1_000_000_000 / u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND));
         self.find_pressure(name)?
-            .feed_samples(path, temperature, nanoseconds)
+            .feed_samples(path, temperature, now.saturating_mul(1000))
     }
 
     pub fn find_pressure(&mut self, name: &str) -> Result<&mut crate::lps25hb::Lps25hb, String> {
@@ -2572,7 +2576,7 @@ impl Bus {
         }
         let clocked = |timer: &H7Timer| {
             timer_clocked(self.h7_network_control.as_ref(), timer)
-                && (self.f4_repl_timing || f4_clocked(self.f4_rcc.as_ref(), timer.base))
+                && (self.f4_repl_timing || self.f4_monitor_timer_clocks || f4_clocked(self.f4_rcc.as_ref(), timer.base))
         };
         for route in &self.timer_pins {
             if let Some(timer) = self
@@ -2669,7 +2673,7 @@ impl Bus {
             quiet = timer.quiet_steps(quiet);
         }
         let clocked = |base| f4_clocked(self.f4_rcc.as_ref(), base);
-        let timer_clocked = |base| self.f4_repl_timing || clocked(base);
+        let timer_clocked = |base| self.f4_repl_timing || self.f4_monitor_timer_clocks || clocked(base);
         for timer in self.h7_timers.iter().filter(|timer| timer_clocked(timer.base)) {
             quiet = timer.quiet_steps(quiet, rate);
         }
@@ -2702,10 +2706,13 @@ impl Bus {
     pub fn tick_h7_peripherals(&mut self) {
         self.h7_step = self.h7_step.wrapping_add(1);
         let step = self.h7_step;
-        for i2c in &mut self.h7_i2c {
-            for (base, pin, level) in i2c.sample_sensor_outputs(step) {
-                if let Some(port) = self.h7_gpio.iter_mut().find(|port| port.base == base) {
-                    port.set_external(pin, level);
+        if !self.h7_i2c.is_empty() {
+            let now = self.h7_sensor_time_us();
+            for i2c in &mut self.h7_i2c {
+                for (base, pin, level) in i2c.sample_sensor_outputs(now) {
+                    if let Some(port) = self.h7_gpio.iter_mut().find(|port| port.base == base) {
+                        port.set_external(pin, level);
+                    }
                 }
             }
         }
@@ -2732,7 +2739,7 @@ impl Bus {
             }
         }
         for timer in &mut self.h7_timers {
-            if timer_clocked(control, timer) && (self.f4_repl_timing || f4_clocked(self.f4_rcc.as_ref(), timer.base)) {
+            if timer_clocked(control, timer) && (self.f4_repl_timing || self.f4_monitor_timer_clocks || f4_clocked(self.f4_rcc.as_ref(), timer.base)) {
                 timer.tick(rate);
             }
         }
@@ -4481,7 +4488,7 @@ impl Bus {
                         .iter()
                         .filter(|timer| {
                             timer_clocked(control, timer)
-                                && (self.f4_repl_timing || f4_clocked(self.f4_rcc.as_ref(), timer.base))
+                                && (self.f4_repl_timing || self.f4_monitor_timer_clocks || f4_clocked(self.f4_rcc.as_ref(), timer.base))
                         })
                         .flat_map(H7Timer::interrupts),
                 )

@@ -668,6 +668,9 @@ enum Action {
     PlatformFragment(String, PathBuf, PathBuf),
     ReadLogLevels,
     IlluminanceFeed(String, PathBuf),
+    MagneticFeed(String, PathBuf),
+    PressureFeed(String, PathBuf, bool),
+    VoltageFeed(String, PathBuf, usize, u16),
     RunRemaining,
     TimeSourceInfo,
     EmulationIsStarted,
@@ -1680,6 +1683,9 @@ fn run_commands<'a>(
             Action::LogUart(target) => machine.bus.log_uart(target).map(|()| None),
             Action::Illuminance(sensor, value) => machine.bus.set_illuminance(sensor, *value).map(|()| None),
             Action::IlluminanceFeed(sensor, path) => machine.bus.feed_illuminance(sensor, path).map(|()| None),
+            Action::MagneticFeed(sensor, path) => machine.bus.feed_magnetic(sensor, path).map(|()| None),
+            Action::PressureFeed(sensor, path, temperature) => machine.bus.feed_pressure(sensor, path, *temperature).map(|()| None),
+            Action::VoltageFeed(sensor, path, input, channel) => machine.bus.feed_ina228(sensor, path, *input, *channel).map(|()| None),
             Action::Echo(message) => writeln!(output.reply(), "{message}")
                 .map(|()| None).map_err(|error| error.to_string()),
             Action::UserState(value) => {
@@ -4907,11 +4913,27 @@ fn execute(
             let value = resolve(value)?.parse::<f64>().map_err(|_| "invalid illuminance")?;
             Some(Action::Illuminance((*sensor).to_owned(), value))
         }
-        [sensor, "FeedIlluminanceSamplesFromRESD", file]
+        [sensor, method @ ("FeedIlluminanceSamplesFromRESD" | "FeedMagneticSamplesFromRESD"
+            | "FeedPressureSamplesFromRESD" | "FeedTemperatureSamplesFromRESD"), file]
             if boot.started && sensor.starts_with("sysbus.") =>
         {
-            let path = resolve(file)?.strip_prefix('@').ok_or("expected @RESD-path")?;
-            Some(Action::IlluminanceFeed((*sensor).to_owned(), PathBuf::from(path_value(path))))
+            let path = snapshot_path(file, monitor_origin(variables), variables)?;
+            let sensor = (*sensor).to_owned();
+            Some(match *method {
+                "FeedIlluminanceSamplesFromRESD" => Action::IlluminanceFeed(sensor, path),
+                "FeedMagneticSamplesFromRESD" => Action::MagneticFeed(sensor, path),
+                _ => Action::PressureFeed(sensor, path, *method == "FeedTemperatureSamplesFromRESD"),
+            })
+        }
+        [sensor, method @ ("FeedShuntVoltageSamplesFromRESD" | "FeedBusVoltageSamplesFromRESD"), file, channel @ ..]
+            if boot.started && sensor.starts_with("sysbus.") && channel.len() <= 1 =>
+        {
+            let path = snapshot_path(file, monitor_origin(variables), variables)?;
+            let channel = channel.first().map(|channel| {
+                u16::try_from(crate::parse_address(resolve(channel)?)?)
+                    .map_err(|_| "RESD channel exceeds 16 bits".to_owned())
+            }).transpose()?.unwrap_or(0);
+            Some(Action::VoltageFeed((*sensor).to_owned(), path, usize::from(*method == "FeedBusVoltageSamplesFromRESD"), channel))
         }
 
         [verb @ ("Save" | "SaveRestorableMonitorSnapshot" | "Load"), path] => {
