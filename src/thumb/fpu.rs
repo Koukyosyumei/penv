@@ -411,6 +411,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn vrint_preserves_negative_zero_and_sets_inexact_only_for_vrintx() {
+        let mut cpu = Thumb::default();
+        cpu.fp[0] = (-0.5_f32).to_bits();
+        let (mode, exact) = Thumb::fp_round_kind(0xfeb9, 0x1a40).unwrap();
+        assert!(cpu.round_to_integral(0xfeb9, 0x1a40, mode, exact));
+        assert_eq!(cpu.fp[2], (-0.0_f32).to_bits());
+        assert_eq!(cpu.fpscr, 0);
+        let (mode, exact) = Thumb::fp_round_kind(0xeeb7, 0x1a40).unwrap();
+        assert!(cpu.round_to_integral(0xeeb7, 0x1a40, mode, exact));
+        assert_eq!(cpu.fp[2], (-0.0_f32).to_bits());
+        assert_eq!(cpu.fpscr, 1 << 4);
+    }
+
+    #[test]
     fn floating_point_access_and_extended_exception_frame() {
         let mut bus = Bus::default();
         bus.map_ram(0, 0x100).unwrap();
