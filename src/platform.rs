@@ -1343,6 +1343,7 @@ fn load_platform(
         let mut cpu_type = None;
         let mut vectors = None;
         let mut cpu_wait = false;
+        let mut trustzone = false;
         for (key, value) in keys(
             entry,
             &[
@@ -1351,10 +1352,14 @@ fn load_platform(
                 "InitVectorTableOffset",
                 "isCpuWaitSignalSet",
                 "nvic",
+                "enableTrustZone",
             ],
         )? {
             match key {
                 "cpuType" => cpu_type = Some(value),
+                "enableTrustZone" => {
+                    trustzone = value.parse().map_err(|_| entry.error("invalid enableTrustZone"))?;
+                }
                 "isCpuWaitSignalSet" => {
                     cpu_wait = value
                         .parse()
@@ -1376,6 +1381,9 @@ fn load_platform(
         if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) && !cortex_m4f {
             return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4F or Cortex-M55 cpuType"));
         }
+        if trustzone && !cortex_m55 {
+            return Err(entry.error("TrustZone requires a Cortex-M55 CPU"));
+        }
         if !cortex_m4f {
             machine.bus.map_stm32f072_flash().map_err(|error| entry.error(&error))?;
         }
@@ -1383,7 +1391,30 @@ fn load_platform(
         let mut priority = None;
         let mut frequency = None;
         if let Some(controller) = nvic {
-            if controller.address()? != crate::nvic::BASE {
+            let base = if trustzone && let Some(registrations) = controller.registration_list() {
+                let [secure, nonsecure] = registrations.as_slice() else {
+                    return Err(controller.error("TrustZone NVIC expects Secure and Non-secure registrations"));
+                };
+                let alias = nonsecure.strip_prefix("sysbus new Bus.BusMultiRegistration")
+                    .and_then(|fields| fields.trim().strip_prefix('{'))
+                    .and_then(|fields| fields.strip_suffix('}'))
+                    .ok_or_else(|| controller.error("expected a Non-secure NVIC registration"))?;
+                let mut fields = alias.split(';').map(str::trim);
+                let valid = fields.next().and_then(|f| f.strip_prefix("address:"))
+                    .and_then(|address| number(address.trim()).ok()) == Some(0xe002_e000)
+                    && fields.next().and_then(|f| f.strip_prefix("size:"))
+                        .and_then(|size| number(size.trim()).ok()) == Some(0x1000)
+                    && fields.next().and_then(|f| f.strip_prefix("region:"))
+                        .is_some_and(|region| region.trim() == r#""NonSecure""#)
+                    && fields.next().is_none();
+                if !valid {
+                    return Err(controller.error("invalid Non-secure NVIC alias"));
+                }
+                controller.registration_address(secure)?
+            } else {
+                controller.address()?
+            };
+            if base != crate::nvic::BASE {
                 return Err(controller.error("NVIC must be mapped at 0xe000e000"));
             }
             let expected = format!("->{}@0", entry.name);
@@ -2324,7 +2355,10 @@ fn load_platform(
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors, cortex_m4f);
         if cortex_m55 {
-            machine.primary.mark_cortex_m55()?;
+            machine.primary.mark_cortex_m55(trustzone)?;
+            if trustzone {
+                machine.bus.nvic.as_mut().unwrap().enable_trustzone();
+            }
         }
         machine.set_cortex_m_cpu_wait(&entry.name, cpu_wait)?;
         return Ok(machine);

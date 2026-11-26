@@ -42,11 +42,24 @@ pub(crate) enum DebugStep {
     Breakpoint,
 }
 
+#[derive(Clone, Copy, Default)]
+struct SecurityBank {
+    msp: u32,
+    psp: u32,
+    thread_uses_psp: bool,
+    interrupts_masked: bool,
+    faultmask: bool,
+    basepri: u8,
+}
+
 #[derive(Clone, Default)]
 pub struct Thumb {
     vectors: Option<u32>,
     pub(crate) thumb2: bool,
     pub(crate) cortex_m55: bool,
+    pub(crate) trustzone: bool,
+    secure: bool,
+    inactive_security_bank: SecurityBank,
     basepri: u8,
     faultmask: bool,
     itstate: u8,
@@ -124,9 +137,46 @@ impl Thumb {
             vectors: self.vectors,
             thumb2: self.thumb2,
             cortex_m55: self.cortex_m55,
+            trustzone: self.trustzone,
+            secure: self.trustzone,
             clock_gated: self.clock_gated,
             ..Self::default()
         };
+    }
+
+    pub(crate) fn secure_state(&self) -> bool {
+        self.trustzone && self.secure
+    }
+
+    pub(crate) fn switch_security(&mut self, secure: bool, r: &mut [u32; 32]) -> Result<(), String> {
+        if !self.trustzone {
+            return if secure { Err("TrustZone is disabled".into()) } else { Ok(()) };
+        }
+        if secure != self.secure {
+            let bank = self.inactive_security_bank;
+            let (msp, psp) = if self.uses_psp() {
+                (self.msp, r[13])
+            } else {
+                (r[13], self.psp)
+            };
+            self.inactive_security_bank = SecurityBank {
+                msp,
+                psp,
+                thread_uses_psp: self.thread_uses_psp,
+                interrupts_masked: self.interrupts_masked,
+                faultmask: self.faultmask,
+                basepri: self.basepri,
+            };
+            self.secure = secure;
+            self.msp = bank.msp;
+            self.psp = bank.psp;
+            self.thread_uses_psp = bank.thread_uses_psp;
+            self.interrupts_masked = bank.interrupts_masked;
+            self.faultmask = bank.faultmask;
+            self.basepri = bank.basepri;
+            r[13] = if self.uses_psp() { bank.psp } else { bank.msp };
+        }
+        Ok(())
     }
 
     pub fn set_clocked(&mut self, clocked: bool) {
@@ -848,7 +898,7 @@ impl Thumb {
         if self.fp_active {
             r[14] &= !0x10;
         }
-        if self.cortex_m55 {
+        if self.cortex_m55 && !self.trustzone {
             // Without the Security Extension, S and ES read as zero in EXC_RETURN.
             r[14] &= !0x41;
         }

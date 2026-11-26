@@ -6,6 +6,15 @@ pub const VTOR: u32 = BASE + 0xd08;
 pub const IRQ_LINES: usize = 240;
 const BANKS: usize = IRQ_LINES.div_ceil(32);
 const AIRCR: u32 = BASE + 0xd0c;
+const NS_SCS_OFFSET: u32 = 0x20000;
+const ITNS: u32 = BASE + 0x380;
+const SAU_CTRL: u32 = BASE + 0xdd0;
+const SAU_TYPE: u32 = BASE + 0xdd4;
+const SAU_RNR: u32 = BASE + 0xdd8;
+const SAU_RBAR: u32 = BASE + 0xddc;
+const SAU_RLAR: u32 = BASE + 0xde0;
+const SFSR: u32 = BASE + 0xde4;
+const BFHFNMINS: u32 = 1 << 13;
 const ENABLE: u32 = BASE + 0x100;
 const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
@@ -42,8 +51,54 @@ impl ActiveExceptions {
     }
 }
 
+#[derive(Default)]
+struct Security {
+    bfhfnmins: bool,
+    vector_base_ns: u32,
+    nonsecure_irqs: [u32; BANKS],
+    sau_control: u32,
+    sau_region: usize,
+    sau_regions: [(u32, u32); 8],
+    sfsr: u32,
+}
+
+impl Security {
+    fn read_sau(&self, address: u32) -> Option<u32> {
+        let region = self.sau_regions.get(self.sau_region).copied().unwrap_or_default();
+        Some(match address {
+            SAU_CTRL => self.sau_control,
+            SAU_TYPE => self.sau_regions.len() as u32,
+            SAU_RNR => self.sau_region as u32,
+            SAU_RBAR => region.0,
+            SAU_RLAR => region.1,
+            SFSR => self.sfsr,
+            _ => return None,
+        })
+    }
+
+    fn write_sau(&mut self, address: u32, value: u32) -> bool {
+        match address {
+            SAU_CTRL => self.sau_control = value & 3,
+            SAU_RNR => self.sau_region = (value & 0xff) as usize,
+            SAU_RBAR | SAU_RLAR => {
+                if let Some(region) = self.sau_regions.get_mut(self.sau_region) {
+                    if address == SAU_RBAR {
+                        region.0 = value & !31;
+                    } else {
+                        region.1 = value & !28;
+                    }
+                }
+            }
+            SFSR => self.sfsr &= !value,
+            _ => return false,
+        }
+        true
+    }
+}
+
 pub struct Nvic {
     vector_base: Option<u32>,
+    security: Option<Box<Security>>,
     external_lines: usize,
     enabled: [u32; BANKS],
     pending: [u32; BANKS],
@@ -126,6 +181,7 @@ impl Nvic {
     pub fn new(priority_mask: u8, uart_irq: Option<u8>) -> Self {
         Self {
             vector_base: None,
+            security: None,
             external_lines: IRQ_LINES,
             enabled: [0; BANKS],
             pending: [0; BANKS],
@@ -192,10 +248,14 @@ impl Nvic {
         let has_fpu = self.fpccr.is_some();
         let has_nrf_mpu = self.nrf_mpu.is_some();
         let mpu_count = self.mpu.as_ref().map(|mpu| mpu.count);
+        let trustzone = self.security.is_some();
         *self = Self::new(self.priority_mask, self.uart_irq);
         self.external_lines = external_lines;
         if has_fpu {
             self.enable_fpu();
+        }
+        if trustzone {
+            self.enable_trustzone();
         }
         if has_nrf_mpu {
             self.enable_nrf_mpu();
@@ -203,6 +263,69 @@ impl Nvic {
         if let Some(count) = mpu_count {
             self.configure_mpu(count);
         }
+    }
+
+    pub fn enable_trustzone(&mut self) {
+        self.security = Some(Box::default());
+    }
+
+    pub fn bfhfnmins(&self) -> bool {
+        self.security.as_ref().is_some_and(|security| security.bfhfnmins)
+    }
+
+    pub fn exception_targets_nonsecure(&self, exception: u8, source_secure: bool) -> bool {
+        let Some(security) = &self.security else { return false };
+        match exception {
+            2 | 5 => security.bfhfnmins,
+            HARDFAULT => security.bfhfnmins && !source_secure,
+            16.. => {
+                let irq = usize::from(exception - 16);
+                security.nonsecure_irqs[irq / 32] & (1 << (irq % 32)) != 0
+            }
+            _ => !source_secure,
+        }
+    }
+
+    pub fn nonsecure_vector_base(&self) -> Option<u32> {
+        self.security.as_ref().map(|security| security.vector_base_ns)
+    }
+
+    pub fn set_nonsecure_vector_base(&mut self, address: u32) -> Result<(), String> {
+        let security = self.security.as_mut().ok_or("TrustZone is disabled")?;
+        if address & 0x7f != 0 {
+            return Err("Non-secure vector table requires a 128-byte-aligned address".into());
+        }
+        security.vector_base_ns = address;
+        Ok(())
+    }
+
+    pub fn configure_sau(&mut self, register: &str, value: Option<u32>) -> Result<Option<u32>, String> {
+        let security = self.security.as_mut().ok_or("TrustZone is disabled")?;
+        let address = match register {
+            "SAUControl" => SAU_CTRL,
+            "SAURegionNumber" => SAU_RNR,
+            "SAURegionBaseAddress" => SAU_RBAR,
+            "SAURegionLimitAddress" => SAU_RLAR,
+            _ => return Err(format!("unknown SAU register {register:?}")),
+        };
+        if let Some(value) = value {
+            security.write_sau(address, value);
+            Ok(None)
+        } else {
+            Ok(security.read_sau(address))
+        }
+    }
+
+    pub fn address_is_nonsecure(&self, address: u32) -> bool {
+        self.security.as_ref().is_some_and(|security| {
+            if security.sau_control & 1 == 0 {
+                security.sau_control & 2 != 0
+            } else {
+                security.sau_regions.iter().any(|&(base, limit)| {
+                    limit & 3 == 1 && (base..=(limit | 31)).contains(&address)
+                })
+            }
+        })
     }
 
     pub fn take_reset_request(&mut self) -> bool {
@@ -510,6 +633,30 @@ impl Nvic {
 
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         if width == 4 {
+            if let Some(security) = &self.security {
+                if let Some(value) = security.read_sau(address) {
+                    return Some(value);
+                }
+                if let Some(offset) = address.checked_sub(ITNS)
+                    .filter(|offset| *offset < (BANKS * 4) as u32)
+                {
+                    return Some(security.nonsecure_irqs[offset as usize / 4]);
+                }
+                if (BASE + NS_SCS_OFFSET..BASE + NS_SCS_OFFSET + 0x1000).contains(&address) {
+                    let secure_address = address - NS_SCS_OFFSET;
+                    return match secure_address {
+                        DHCSR | SFSR => Some(0),
+                        VTOR => Some(security.vector_base_ns),
+                        address if address == BASE + 0xd28 => {
+                            Some(if security.bfhfnmins { self.bus_fault_status & 0xff00 } else { 0 })
+                        }
+                        address if address == BASE + 0xd38 => {
+                            Some(if security.bfhfnmins { self.bus_fault_address } else { 0 })
+                        }
+                        _ => None,
+                    };
+                }
+            }
             let offset = address.wrapping_sub(BASE);
             if offset == 4 {
                 return Some((self.external_lines.div_ceil(32).saturating_sub(1)) as u32);
@@ -562,7 +709,8 @@ impl Nvic {
                 return Some(self.bus_fault_status | self.cfsr);
             }
             if address == AIRCR {
-                return Some(0xfa05_0000 | (u32::from(self.priority_group) << 8));
+                return Some(0xfa05_0000 | (u32::from(self.priority_group) << 8)
+                    | (u32::from(self.bfhfnmins()) * BFHFNMINS));
             }
             if address == BASE + 0xd10 {
                 return Some(self.scr);
@@ -619,6 +767,27 @@ impl Nvic {
     }
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
+        if width == 4 && let Some(security) = &mut self.security {
+            if security.write_sau(address, value) {
+                return true;
+            }
+            if let Some(offset) = address.checked_sub(ITNS)
+                .filter(|offset| *offset < (BANKS * 4) as u32)
+            {
+                security.nonsecure_irqs[offset as usize / 4] = value;
+                return true;
+            }
+            if address == VTOR + NS_SCS_OFFSET {
+                security.vector_base_ns = value & !0x7f;
+                return true;
+            }
+            if address == BASE + NS_SCS_OFFSET + 0xd28 {
+                if security.bfhfnmins {
+                    self.bus_fault_status &= !(value & 0xff00);
+                }
+                return true;
+            }
+        }
         let offset = address.wrapping_sub(BASE);
         if width == 4 && offset == 0xf00 && self.has_fpu() {
             let irq = (value & 0x1ff) as usize;
@@ -669,6 +838,9 @@ impl Nvic {
         if width == 4 && address == AIRCR {
             if value >> 16 == 0x05fa {
                 self.priority_group = ((value >> 8) & 7) as u8;
+                if let Some(security) = &mut self.security {
+                    security.bfhfnmins = value & BFHFNMINS != 0;
+                }
                 self.reset_requested |= value & (1 << 2) != 0;
             }
             return true;

@@ -582,6 +582,10 @@ enum Action {
     CpuSymbolVectorTable(String, String),
     CpuVectorTable(String, u32),
     CpuStatus(String, String),
+    CpuSecurityState(String, bool),
+    CpuSau(String, String, Option<u32>),
+    CpuNonsecureVectorTable(String, u32),
+    NvicLockup(String, bool),
     NvicSignal(String, String),
     SymbolAddress(String),
     I2cSensorProperty(String, String, String),
@@ -943,6 +947,7 @@ fn run_commands<'a>(
                 match property.as_str() {
                     "IsLockedUp" => writeln!(output.reply(), "{}", if thumb.locked_up() { "True" } else { "False" }),
                     "ExecutedInstructions" => writeln!(output.reply(), "{}", thumb.executed_instructions()),
+                    "SecureState" => writeln!(output.reply(), "{}", if thumb.secure_state() { "True" } else { "False" }),
                     "GetItState" => writeln!(output.reply(), "{}", thumb.it_state()),
                     "FPCAR" | "FPCCR" => {
                         let address = if property == "FPCAR" { 0xe000_ef38 } else { 0xe000_ef34 };
@@ -951,6 +956,29 @@ fn run_commands<'a>(
                     }
                     _ => unreachable!(),
                 }.map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::CpuSecurityState(cpu, secure) => {
+                machine.set_cortex_m_security(cpu, *secure)?;
+                Ok(None)
+            }
+            Action::CpuSau(cpu, register, value) => {
+                machine.cortex_m_cpu(cpu)?;
+                if let Some(value) = machine.bus.nvic.as_mut().ok_or("CPU requires NVIC")?
+                    .configure_sau(register, *value)?
+                {
+                    writeln!(output.reply(), "0x{value:08x}").map_err(|error| error.to_string())?;
+                }
+                Ok(None)
+            }
+            Action::CpuNonsecureVectorTable(cpu, address) => {
+                machine.cortex_m_cpu(cpu)?;
+                machine.bus.nvic.as_mut().ok_or("CPU requires NVIC")?.set_nonsecure_vector_base(*address)?;
+                Ok(None)
+            }
+            Action::NvicLockup(target, state) => {
+                machine.bus.monitor_nvic_signal(target, "Lockup", false)?;
+                machine.bus.nvic.as_mut().unwrap().lockup = *state;
+                Ok(None)
             }
             Action::NvicSignal(target, signal) => {
                 let high = machine.bus.monitor_nvic_signal(target, signal, machine.cortex_m_sleeping())?;
@@ -5107,9 +5135,26 @@ fn execute(
                 .parse()
                 .map_err(|_| "expected NVIC Clocked true or false")?,
         )),
-        [target, property @ ("IsLockedUp" | "ExecutedInstructions" | "GetItState" | "FPCAR" | "FPCCR")] => {
+        [target, property @ ("IsLockedUp" | "ExecutedInstructions" | "GetItState" | "FPCAR" | "FPCCR" | "SecureState")] => {
             Some(Action::CpuStatus(resolve(target)?.trim_start_matches("sysbus.").into(), (*property).into()))
         }
+        [target, "SecureState", value] => Some(Action::CpuSecurityState(
+            resolve(target)?.trim_start_matches("sysbus.").into(), parse_tester_bool(resolve(value)?)?,
+        )),
+        [target, register @ ("SAUControl" | "SAURegionNumber" | "SAURegionBaseAddress" | "SAURegionLimitAddress"), values @ ..]
+            if values.len() <= 1 =>
+        {
+            Some(Action::CpuSau(
+                resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(),
+                values.first().map(|value| crate::parse_address(resolve(value)?)).transpose()?,
+            ))
+        }
+        [target, "VectorTableOffsetNonSecure", value] => Some(Action::CpuNonsecureVectorTable(
+            resolve(target)?.trim_start_matches("sysbus.").into(), crate::parse_address(resolve(value)?)?,
+        )),
+        [target, "Lockup", "Set", value] => Some(Action::NvicLockup(
+            resolve(target)?.into(), parse_tester_bool(resolve(value)?)?,
+        )),
         [target, signal @ ("Lockup" | "InSleep" | "InDeepSleep"), "IsSet"] => {
             Some(Action::NvicSignal(resolve(target)?.into(), (*signal).into()))
         }
@@ -5156,6 +5201,7 @@ fn execute(
                 && !matches!(
                     action,
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
+                        | Action::CpuSecurityState(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)
                         | Action::AssertCpuValue(..)
