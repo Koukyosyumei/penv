@@ -70,8 +70,11 @@ pub(crate) fn assemble_source(
     }
     let instructions = instructions
         .into_iter()
-        .map(normalize_vector_memory_operand)
-        .collect::<Vec<_>>()
+        .map(|line| {
+            let line = normalize_vector_memory_operand(line);
+            lower_andes_branch(&line, triple)
+        })
+        .collect::<Result<Vec<_>, _>>()?
         .join(
             "
 ",
@@ -100,6 +103,55 @@ pub(crate) fn assemble_source(
     .ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
     target.copy_from_slice(&image);
     Ok(image.len())
+}
+
+fn lower_andes_branch(line: &str, triple: &str) -> Result<String, String> {
+    let (label, instruction) = line.split_once(':').map_or(("", line), |(label, rest)| {
+        (&line[..label.len() + 1], rest.trim_start())
+    });
+    let Some((name, args)) = instruction.split_once(char::is_whitespace) else {
+        return Ok(line.into());
+    };
+    let (kind, test) = match name {
+        "nds.bbc" => (7, false),
+        "nds.bbs" => (7, true),
+        "nds.beqc" if triple == "riscv32" => (5, false),
+        "nds.bnec" if triple == "riscv32" => (6, false),
+        _ => return Ok(line.into()),
+    };
+    let operands: Vec<_> = args.split(',').map(str::trim).collect();
+    let [register, immediate, offset] = operands.as_slice() else {
+        return Err(format!("{name} requires a register, an immediate and a byte displacement"));
+    };
+    let registers = [
+        "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1",
+        "a2", "a3", "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
+        "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6",
+    ];
+    let register = registers.iter().position(|name| name == register)
+        .or_else(|| register.strip_prefix('x')?.parse::<usize>().ok())
+        .or_else(|| (*register == "fp").then_some(8))
+        .filter(|register| *register < 32)
+        .ok_or_else(|| format!("invalid Andes branch register {register}"))? as u32;
+    let immediate = crate::parse_address(immediate)?;
+    let limit = match (kind, triple) { (7, "riscv32") => 32, (7, _) => 64, _ => 128 };
+    if immediate >= limit {
+        return Err(format!("Andes branch immediate exceeds the range 0..{}", limit - 1));
+    }
+    let offset = if let Some(magnitude) = offset.strip_prefix('-') {
+        -i64::from(crate::parse_address(magnitude)?)
+    } else {
+        i64::from(crate::parse_address(offset)?)
+    };
+    if !(-1024..=1022).contains(&offset) || offset % 2 != 0 {
+        return Err("Andes branch displacement must be even and between -1024 and 1022".into());
+    }
+    let offset = offset as u32;
+    let bit30 = if kind == 7 { u32::from(test) } else { immediate >> 6 };
+    let encoding = 0x5b | ((immediate & 32) << 2) | (kind << 12) | (register << 15)
+        | ((immediate & 31) << 20) | (bit30 << 30)
+        | ((offset & 0x400) << 21) | ((offset & 0x3e0) << 20) | ((offset & 0x1e) << 7);
+    Ok(format!("{label} .4byte {encoding:#010x}"))
 }
 
 // The Renode assembler accepts explicit zero displacement on RVV memory
