@@ -124,9 +124,9 @@ class CPU(Credential):
     def PC(self):
         return HexValue(scope['pc'])
     def DisassembleBlock(self, address, length):
-        return bytes.fromhex(rpc(f'disassemble {address} {length}')).decode()
+        return bytes.fromhex(rpc(f'disassemble {int(address)} {int(length)}')).decode()
     def RemoveHooksAt(self, address):
-        rpc(f'remove-hooks {address}')
+        rpc(f'remove-hooks {int(address)}')
     def GetItState(self):
         state = scope.get('itstate', 0)
         if state == 0:

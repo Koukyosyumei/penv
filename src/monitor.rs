@@ -1079,6 +1079,9 @@ enum Action {
     ReadCpuPc(String),
     AssertCpuValue(String, Option<String>, u64),
     CpuRegister(String, String, Option<u64>),
+    InstallOpcodeCounter(String, String, String),
+    EnableOpcodeCounters(String, bool),
+    ReadOpcodeCounter(String, String),
     ArmSystemRegister(String, String, Option<u64>),
     ArmExceptionState(String, bool, Option<String>),
     ExecutionMode(String, Option<bool>),
@@ -1362,6 +1365,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(..) | Action::ExecutionMode(..)
+                    | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                     | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
@@ -2267,6 +2271,22 @@ fn run_commands<'a>(
                 writeln!(output.reply(), "0x{pc:08x}")
                     .map_err(|error| error.to_string()).map(|()| None)
             }),
+            Action::InstallOpcodeCounter(cpu, name, pattern) => {
+                machine.cortex_m_cpu(cpu)?;
+                machine.bus.thumb_opcodes.install(name, pattern)?;
+                Ok(None)
+            }
+            Action::EnableOpcodeCounters(cpu, enabled) => {
+                machine.cortex_m_cpu(cpu)?;
+                machine.bus.thumb_opcodes.enabled = *enabled;
+                Ok(None)
+            }
+            Action::ReadOpcodeCounter(cpu, name) => {
+                machine.cortex_m_cpu(cpu)?;
+                let count = machine.bus.thumb_opcodes.get(name)?;
+                writeln!(output.reply(), "{count}").map_err(|error| error.to_string())?;
+                Ok(None)
+            }
             Action::CpuRegister(cpu, register, value) => {
                 machine.monitor_named_register(cpu, register, *value).and_then(|value| {
                     if let Some(value) = value {
@@ -6554,6 +6574,19 @@ fn execute(
                 condition,
             ))
         }
+        [target, "InstallOpcodeCounterPattern", name, pattern] => Some(Action::InstallOpcodeCounter(
+            resolve(target)?.trim_start_matches("sysbus.").into(),
+            unquote(resolve(name)?).into(),
+            unquote(resolve(pattern)?).into(),
+        )),
+        [target, "EnableOpcodesCounting", enabled] => Some(Action::EnableOpcodeCounters(
+            resolve(target)?.trim_start_matches("sysbus.").into(),
+            parse_tester_bool(resolve(enabled)?)?,
+        )),
+        [target, "GetOpcodeCounter", name] => Some(Action::ReadOpcodeCounter(
+            resolve(target)?.trim_start_matches("sysbus.").into(),
+            unquote(resolve(name)?).into(),
+        )),
         [target, "GetRegister", register]
             if matches!(
                 resolve(register)?
@@ -6893,6 +6926,7 @@ fn execute(
                         | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                         | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
+                        | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                         | Action::CpuRegister(..) | Action::AddCpuHook(..) | Action::PythonAddressHook(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)

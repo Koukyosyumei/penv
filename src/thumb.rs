@@ -150,7 +150,10 @@ impl Thumb {
         write_words(output, &[
             self.vectors.map_or(1 << 32, u64::from), u64::from(self.thumb2), u64::from(self.basepri),
             u64::from(self.faultmask), u64::from(self.itstate), u64::from(self.clock_gated),
-            self.retired_instructions, u64::from(self.apsr()), u64::from(self.fpscr) | (u64::from(self.fpdscr_ns) << 32), u64::from(self.fp_active),
+            self.retired_instructions,
+            u64::from(self.apsr()) | (u64::from(self.vpr) << 32),
+            u64::from(self.fpscr) | (u64::from(self.fpdscr_ns) << 32),
+            u64::from(self.fp_active),
             u64::from(self.active_exception), u64::from(self.interrupts_masked), sleep,
             u64::from(self.event), self.system_pending, u64::from(self.invalid_thumb_state),
             u64::from(self.locked_up), u64::from(self.instruction_lockup), u64::from(self.branch_exception),
@@ -178,7 +181,8 @@ impl Thumb {
         self.itstate = byte(itstate)?;
         self.clock_gated = read_bool(clock_gated)?;
         self.retired_instructions = retired;
-        self.set_apsr(word(apsr)?);
+        self.set_apsr(apsr as u32);
+        self.vpr = (apsr >> 32) as u32;
         self.fpscr = fpscr as u32;
         self.fpdscr_ns = (fpscr >> 32) as u32;
         self.fp_active = read_bool(fp_active)?;
@@ -1806,6 +1810,35 @@ impl Thumb {
     }
 
     fn step_fetched(
+        &mut self,
+        inst: u32,
+        pc: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<bool, InstructionError> {
+        use opcode_counter::HookPhase;
+        if !bus.thumb_opcodes.enabled && bus.thumb_opcode_hooks.is_empty() {
+            return self.execute_fetched(inst, pc, r, bus, output);
+        }
+        let address = *pc;
+        let opcode = if inst >= 0xe800 {
+            (inst << 16) | bus.thumb_fetch(address.wrapping_add(2))?
+        } else {
+            inst
+        };
+        if bus.thumb_opcodes.enabled {
+            bus.thumb_opcodes.record(opcode);
+        }
+        bus.thumb_opcode_hooks.emit(HookPhase::Pre, address, opcode, output)?;
+        let retired = self.execute_fetched(inst, pc, r, bus, output)?;
+        if retired {
+            bus.thumb_opcode_hooks.emit(HookPhase::Post, address, opcode, output)?;
+        }
+        Ok(retired)
+    }
+
+    fn execute_fetched(
         &mut self,
         inst: u32,
         pc: &mut u32,
