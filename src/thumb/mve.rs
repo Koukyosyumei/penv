@@ -224,6 +224,8 @@ enum BinaryOperation {
     Not,
     SaturatingAbsolute,
     SaturatingNegate,
+    AbsoluteDifferenceAccumulate { accumulator: usize },
+    ShiftLeftCarry { accumulator: usize, shift: u32 },
     ComplexAdd { rotate_270: bool, halve: bool },
 }
 
@@ -241,6 +243,41 @@ impl VectorArithmetic {
     pub(super) fn decode(high: u32, low: u32) -> Option<Self> {
         use BinaryOperation::*;
         let instruction = high << 16 | low;
+        if instruction & 0xffa0_1ff0 == 0xeea0_0fc0 {
+            let accumulator = (low & 15) as usize;
+            if high & 0x40 != 0 || matches!(accumulator, 13 | 15) {
+                return None;
+            }
+            let destination = (low >> 13) as usize;
+            return Some(Self {
+                operation: ShiftLeftCarry {
+                    accumulator,
+                    shift: ((high & 31) + 31) % 32 + 1,
+                },
+                destination,
+                left: destination,
+                right: destination,
+                scalar: false,
+                unsigned: true,
+                bits: 32,
+            });
+        }
+        if instruction & 0xefc1_0f51 == 0xee80_0f01 {
+            let accumulator = (low >> 12) as usize;
+            let size = (high >> 4) & 3;
+            if size == 3 || low & 0xa0 != 0 || matches!(accumulator, 13 | 15) {
+                return None;
+            }
+            return Some(Self {
+                operation: AbsoluteDifferenceAccumulate { accumulator },
+                destination: 0,
+                left: ((high >> 1) & 7) as usize,
+                right: ((low >> 1) & 7) as usize,
+                scalar: false,
+                unsigned: high & 0x1000 != 0,
+                bits: 8 << size,
+            });
+        }
         let unary = match instruction & 0xffb3_1fd1 {
             0xffb0_0740 => Some(SaturatingAbsolute),
             0xffb0_07c0 => Some(SaturatingNegate),
@@ -341,7 +378,7 @@ impl Thumb {
     pub(super) fn execute_vector_arithmetic(
         &mut self,
         inst: VectorArithmetic,
-        registers: &[u32; 32],
+        registers: &mut [u32; 32],
     ) {
         use BinaryOperation::*;
         let read_q = |q: usize| {
@@ -366,6 +403,26 @@ impl Thumb {
         } else {
             (-limit / 2, limit / 2 - 1)
         };
+        if let AbsoluteDifferenceAccumulate { accumulator } = inst.operation {
+            for shift in (0..128).step_by(inst.bits as usize) {
+                let difference = lane(left >> shift).abs_diff(lane(right >> shift)) as u32;
+                registers[accumulator] = registers[accumulator].wrapping_add(difference);
+            }
+            self.fp_active = true;
+            return;
+        }
+        if let ShiftLeftCarry { accumulator, shift } = inst.operation {
+            let mask = (1u64 << shift) - 1;
+            let mut carry = u64::from(registers[accumulator]);
+            for word in &mut self.fp[inst.destination * 4..inst.destination * 4 + 4] {
+                let previous = u64::from(*word);
+                *word = ((previous << shift) | (carry & mask)) as u32;
+                carry = previous >> (32 - shift);
+            }
+            registers[accumulator] = carry as u32;
+            self.fp_active = true;
+            return;
+        }
         let mut result = 0u128;
         let mut saturated = false;
         for shift in (0..128).step_by(inst.bits as usize) {
@@ -385,6 +442,7 @@ impl Thumb {
                 OrNot => a | !b,
                 ExclusiveOr => a ^ b,
                 Not => !a,
+                AbsoluteDifferenceAccumulate { .. } | ShiftLeftCarry { .. } => unreachable!(),
                 SaturatingAbsolute | SaturatingNegate => {
                     let value = if matches!(inst.operation, SaturatingAbsolute) {
                         a.abs()
