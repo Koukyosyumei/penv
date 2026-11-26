@@ -600,6 +600,16 @@ impl Machine {
         Ok(())
     }
 
+    pub(crate) fn clear_monitor_translation_cache(&mut self, name: &str) -> Result<(), String> {
+        let hart = self.named_hart(name)?;
+        if let Some(cpu) = &mut hart.rv64 {
+            cpu.clear_translation_cache();
+        } else {
+            hart.translations.clear();
+        }
+        Ok(())
+    }
+
     pub(crate) fn require_riscv_cpu(&mut self, name: &str) -> Result<(), String> {
         if self.named_hart(name)?.thumb.is_some() {
             return Err(format!("CSR validation requires a RISC-V CPU, got {name:?}"));

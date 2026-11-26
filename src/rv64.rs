@@ -281,6 +281,10 @@ impl Rv64 {
         self.registers[11] = dtb;
     }
 
+    pub(crate) fn clear_translation_cache(&mut self) {
+        self.translations.clear();
+    }
+
     pub fn isa(&self) -> Isa {
         self.isa
     }

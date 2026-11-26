@@ -530,6 +530,7 @@ enum Action {
     RtcDateTime,
     CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
+    ClearTranslationCache(String),
     CpuMips(u32),
     ReadCsrValidation(String),
     RequireFullCsrValidation(String),
@@ -707,7 +708,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
                     | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..) | Action::BusScalar(_)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                    | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
+                    | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
@@ -888,6 +889,7 @@ fn run_commands<'a>(
                         })
                 }
             },
+            Action::ClearTranslationCache(cpu) => machine.clear_monitor_translation_cache(cpu).map(|()| None),
             Action::CpuStep(cpu, steps) if !machine.is_cortex_m() => {
                 let chunk = (*steps).min(budget);
                 let start = machine.elapsed_steps();
@@ -4341,6 +4343,9 @@ fn execute(
             resolve(cpu)?.trim_start_matches("sysbus.").into(), Some(unquote(resolve(register)?).into()),
             crate::parse_address64(resolve(value)?)?,
         )),
+        [target, "ClearTranslationCache"] => Some(Action::ClearTranslationCache(
+            resolve(target)?.trim_start_matches("sysbus.").into(),
+        )),
         [target, "Step", count @ ..] if count.len() <= 1 => {
             let cpu = resolve(target)?;
             let count = count.first().map(|count| crate::parse_address64(resolve(count)?))
@@ -4592,7 +4597,7 @@ fn execute(
                         | Action::ReadCpuPc(_)
                         | Action::ExecutionMode(..)
                         | Action::CpuPc(..)
-                        | Action::CpuStep(..) | Action::CpuMips(..) | Action::ReadCpuMips(..)
+                        | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuMips(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)
