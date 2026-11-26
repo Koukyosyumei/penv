@@ -60,7 +60,7 @@ pub(crate) struct DeviceSnapshot {
 
 impl Devices {
     pub(crate) fn supports_snapshot(&self) -> bool {
-        self.plic.is_none() && self.ethernet.is_empty() && self.gems.is_empty()
+        self.ethernet.is_empty() && self.gems.is_empty()
             && self.reset_generators.is_empty() && self.mpfs_i2c.is_empty() && self.mpfs_qspi.is_empty()
             && self.mpfs_gpio.is_empty() && self.mpfs_usb.is_empty() && self.fire_ihc.is_none()
             && self.mpfs_sd.is_empty() && self.mpfs_watchdogs.is_empty() && self.mpfs_spi.is_empty()

@@ -1,9 +1,11 @@
+#[derive(Clone)]
 struct Context {
     enabled: Vec<u32>,
     threshold: u32,
     output: u32,
 }
 
+#[derive(Clone)]
 pub struct Plic {
     pub base: u32,
     pub size: u64,
@@ -63,6 +65,72 @@ impl Plic {
         self.size = size;
         self.andes = true;
         self
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[
+            u64::from(self.base), self.size, u64::from(self.sources),
+            self.contexts.len() as u64, u64::from(self.priorities_enabled), u64::from(self.andes),
+        ])?;
+        for field in [&self.priority, &self.level, &self.pending] {
+            for &value in field {
+                write_words(output, &[u64::from(value)])?;
+            }
+        }
+        for &owner in &self.claimed_by {
+            write_words(output, &[owner.map_or(0, |context| context as u64 + 1)])?;
+        }
+        for context in &self.contexts {
+            write_words(output, &[u64::from(context.output), u64::from(context.threshold)])?;
+            for &word in &context.enabled {
+                write_words(output, &[u64::from(word)])?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_words};
+        let [base, size, sources, contexts, priorities, andes] = read_words(input)?;
+        if [base, size, sources, contexts, priorities, andes] != [
+            u64::from(self.base), self.size, u64::from(self.sources),
+            self.contexts.len() as u64, u64::from(self.priorities_enabled), u64::from(self.andes),
+        ] {
+            return Err(invalid("PLIC snapshot layout differs from the platform"));
+        }
+        fn read_word(input: &mut impl std::io::Read) -> std::io::Result<u32> {
+            u32::try_from(read_words::<1>(input)?[0]).map_err(std::io::Error::other)
+        }
+        for field in [&mut self.priority, &mut self.level, &mut self.pending] {
+            for value in field {
+                *value = read_word(input)?;
+            }
+        }
+        let last = (self.sources % 32) + 1;
+        let outside_sources = u32::MAX.checked_shl(last).unwrap_or(0);
+        if [&self.level, &self.pending].into_iter().any(|bits| {
+            bits[0] & 1 != 0 || bits.last().is_some_and(|word| word & outside_sources != 0)
+        }) {
+            return Err(invalid("invalid PLIC snapshot source bitmap"));
+        }
+        for owner in &mut self.claimed_by {
+            let [context] = read_words(input)?;
+            if context > contexts {
+                return Err(invalid("invalid PLIC snapshot claim owner"));
+            }
+            *owner = (context as usize).checked_sub(1);
+        }
+        for context in &mut self.contexts {
+            if read_word(input)? != context.output {
+                return Err(invalid("PLIC snapshot output differs from the platform"));
+            }
+            context.threshold = read_word(input)?;
+            for word in &mut context.enabled {
+                *word = read_word(input)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn set_line(&mut self, source: u32, asserted: bool) {
@@ -239,6 +307,26 @@ mod tests {
         assert_eq!(plic.irq_outputs(), 0);
         plic.write(0x201004, 3);
         assert_eq!(plic.irq_outputs(), 1 << 9);
+    }
+
+    #[test]
+    fn snapshot_preserves_claim_ownership_and_reasserts_level_after_completion() {
+        let mut plic = Plic::new(0, 52, &[1 << 11, 1 << 9]);
+        plic.write(12, 2);
+        plic.write(0x2000, 1 << 3);
+        plic.write(0x2080, 1 << 3);
+        plic.set_line(3, true);
+        assert_eq!(plic.read(0x201004), 3);
+        let mut snapshot = Vec::new();
+        plic.save_snapshot(&mut snapshot).unwrap();
+
+        let mut restored = Plic::new(0, 52, &[1 << 11, 1 << 9]);
+        restored.load_snapshot(&mut snapshot.as_slice()).unwrap();
+        assert_eq!(restored.irq_outputs(), 0);
+        restored.write(0x200004, 3);
+        assert_eq!(restored.irq_outputs(), 0);
+        restored.write(0x201004, 3);
+        assert_eq!(restored.irq_outputs(), (1 << 11) | (1 << 9));
     }
 
     #[test]

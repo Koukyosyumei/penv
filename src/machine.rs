@@ -1638,6 +1638,10 @@ impl Machine {
             if let Some(clint) = &self.bus.clint {
                 clint.save_snapshot(output)?;
             }
+            write_words(output, &[u64::from(self.bus.rv64_devices.plic.is_some())])?;
+            if let Some(plic) = &self.bus.rv64_devices.plic {
+                plic.save_snapshot(output)?;
+            }
             self.bus.save_rv64_memory_snapshot(output)
         };
         write().map_err(|error| error.to_string())
@@ -1684,8 +1688,17 @@ impl Machine {
             if let Some(clint) = &mut clint {
                 clint.load_snapshot(input)?;
             }
+            let has_plic = version >= 3 && read_bool(read_words::<1>(input)?[0])?;
+            let mut plic = self.bus.rv64_devices.plic.clone();
+            if has_plic != plic.is_some() {
+                return Err(invalid("PLIC snapshot configuration differs from the platform"));
+            }
+            if let Some(plic) = &mut plic {
+                plic.load_snapshot(input)?;
+            }
             self.bus.load_rv64_memory_snapshot(input)?;
             self.bus.clint = clint;
+            self.bus.rv64_devices.plic = plic;
             for (hart, (cpu, halt, pause, single)) in std::iter::once(&mut self.primary)
                 .chain(&mut self.secondary).zip(cpus)
             {
