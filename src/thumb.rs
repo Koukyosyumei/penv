@@ -1094,7 +1094,7 @@ impl Thumb {
                 match bus.read_cortex_m_ram_or_mock_word(stack) {
                     Ok(signature) if signature == expected => {}
                     Ok(_) => {
-                        bus.nvic.as_mut().unwrap().record_secure_fault(1);
+                        bus.nvic.as_mut().unwrap().record_secure_fault(1 << 1);
                         return self.exception_return_fault(target, remaining, 7, r, bus);
                     }
                     Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
