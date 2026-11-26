@@ -91,7 +91,7 @@ class SuiteListener:
         case, directory = self.active[data.name]
         record = assess(result, self.endpoint)
         if data.name in self.blocked:
-            record.update(status="skipped", category="dependency_blocked", reason=self.blocked[data.name])
+            record.update(status="not_run", category="dependency_blocked", reason=self.blocked[data.name])
         if result.status == "PASS" and self.endpoint.pending_state and all(
                 call["status"] == "ok" for call in self.endpoint.calls):
             self.endpoint.publish_state()
@@ -124,7 +124,7 @@ class VirtualSleepListener:
             self.mirrored[test] = self.mirrored.get(test, 0) + 1
 
 
-def run_suite(task, *, options, renode, binary, assets, host_case_timeout, rust_monitor):
+def run_suite(task, *, options, renode, binary, assets, host_case_timeout, rust_monitor, case_timeouts):
     """Pool worker entry point. Each worker uses its own Robot process state."""
     from robot_tests_provider import RobotTestSuite
     from tests_engine import TestTag
@@ -164,8 +164,9 @@ def run_suite(task, *, options, renode, binary, assets, host_case_timeout, rust_
                 test.teardown.config(name="Renode Test Teardown")
             # Preserve shorter upstream timeouts and bound unbounded host waits.
             from robot.utils import timestr_to_secs
-            if not test.timeout or timestr_to_secs(str(test.timeout)) > host_case_timeout:
-                test.timeout = f"{host_case_timeout} seconds"
+            timeout = case_timeouts.get(case["id"], host_case_timeout)
+            if not test.timeout or timestr_to_secs(str(test.timeout)) > timeout:
+                test.timeout = f"{timeout} seconds"
         suite.tests = [test for test in suite.tests if test.name in active]
         if active:
             xml = out / "robot.xml"
@@ -241,7 +242,7 @@ def run_suite(task, *, options, renode, binary, assets, host_case_timeout, rust_
         os.chdir(old_cwd)
 
 
-def run_batch(selected, options, renode, binary, out, assets, jobs, host_case_timeout=130, rust_monitor=False):
+def run_batch(selected, options, renode, binary, out, assets, jobs, host_case_timeout=130, rust_monitor=False, case_timeouts=None):
     from concurrent.futures import ProcessPoolExecutor, as_completed
     from run import write_json
 
@@ -255,7 +256,8 @@ def run_batch(selected, options, renode, binary, out, assets, jobs, host_case_ti
     counts = Counter()
     print(f"Robot queued {len(selected)} cases in {len(tasks)} suite variants, jobs={jobs}", flush=True)
     runner = partial(run_suite, options=options, renode=renode, binary=binary, assets=assets,
-                     host_case_timeout=host_case_timeout, rust_monitor=rust_monitor)
+                     host_case_timeout=host_case_timeout, rust_monitor=rust_monitor,
+                     case_timeouts=case_timeouts or {})
     # One worker per suite avoids sharing Robot's global BuiltIn execution context.
     with ProcessPoolExecutor(max_workers=jobs) as pool, (out / "progress.jsonl").open("w") as progress:
         futures = {pool.submit(runner, task): task for task in tasks}

@@ -286,6 +286,8 @@ def main():
     parser.add_argument("--case", action="append", help="exact Robot test name, repeatable for dependencies")
     parser.add_argument("--host-case-timeout", type=int, default=130,
                         help="elapsed host seconds allowed per Robot case (default 130)")
+    parser.add_argument("--case-timeout", metavar="CASE_ID=SECONDS", action="append", default=[],
+                        help="override the host limit for one inventory case, repeatable")
     parser.add_argument("--rust-monitor", action="store_true",
                         help="forward monitor commands unchanged to the Rust session")
     parser.add_argument("--negative-control", action="store_true", help="additional short-deadline HEX pilot")
@@ -309,6 +311,15 @@ def main():
     rows, projects, providers, options = inventory(renode, host)
     if args.host_case_timeout < 1:
         parser.error("--host-case-timeout must be positive")
+    case_timeouts = {}
+    case_ids = {row["id"] for row in rows}
+    for option in args.case_timeout:
+        case_id, separator, seconds = option.rpartition("=")
+        if not separator or case_id not in case_ids or not seconds.isascii() or not seconds.isdecimal() or int(seconds) < 1:
+            parser.error(f"expected a known case ID and positive timeout in {option!r}")
+        if case_id in case_timeouts:
+            parser.error(f"duplicate timeout for {case_id!r}")
+        case_timeouts[case_id] = int(seconds)
     if args.all and (args.suite or args.case):
         parser.error("--all cannot be combined with --suite or --case")
     selected = [row for row in rows if (args.all or row["path"] in (args.suite or DEFAULT_ROBOT))
@@ -325,7 +336,8 @@ def main():
                     invocation=[sys.executable, *sys.argv], cwd=os.getcwd(),
                     renode=str(renode), robot_suites=len(providers), robot_instances=len(rows),
                     robot_host_skipped=sum(row["skipped"] for row in rows),
-                    nunit_projects=len(projects), host_case_timeout_s=args.host_case_timeout)
+                    nunit_projects=len(projects), host_case_timeout_s=args.host_case_timeout,
+                    case_timeouts_s=case_timeouts)
     write_json(out / "inventory.json", dict(metadata=metadata, robot=rows, nunit=projects))
     results, nunit_runs, nunit = [], [], []
     if not args.inventory_only:
@@ -345,7 +357,7 @@ def main():
             assets.mkdir()
             from batch import run_batch
             results.extend(run_batch(selected, options, renode, binary, out, assets, args.jobs,
-                                     args.host_case_timeout, args.rust_monitor))
+                                     args.host_case_timeout, args.rust_monitor, case_timeouts))
             if args.negative_control:
                 pilot, = [row for row in rows if row["path"] == DEFAULT_ROBOT[0]
                           and row["name"] == "Should Load HEX"]
