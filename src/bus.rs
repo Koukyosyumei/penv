@@ -4145,6 +4145,19 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn map_sifive_uart(&mut self, name: &str, base: u32, irq: usize) -> Result<(), String> {
+        let uart = crate::rv64_devices::Uart::new(name.to_owned(), base, irq, Vec::new(), true, false);
+        self.check_litex_ranges(&[base], uart.size() as u32)?;
+        if self.rv64_devices.uarts.iter().any(|other| {
+            u64::from(base) < u64::from(other.base) + other.size()
+                && u64::from(other.base) < u64::from(base) + uart.size()
+        }) {
+            return Err(format!("overlapping SiFive UART at {base:#010x}"));
+        }
+        self.rv64_devices.uarts.push(uart);
+        Ok(())
+    }
+
     pub fn map_litex_uart(
         &mut self,
         bases: Vec<u32>,
@@ -5634,6 +5647,13 @@ impl Bus {
         {
             plic.set_line(source, uart.interrupt_pending());
         }
+        if let Some(plic) = &mut self.plic {
+            for uart in &self.rv64_devices.uarts {
+                if uart.source != 0 {
+                    plic.set_line(uart.source as u32, uart.pending());
+                }
+            }
+        }
         self.plic.as_ref().map_or(0, Plic::irq_outputs)
     }
 
@@ -6463,6 +6483,11 @@ impl Bus {
     }
 
     fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if !self.rv64_devices.uarts.is_empty() && self.rv64_devices.uart_for_hart(0, address).is_some()
+            && let Some(value) = self.rv64_devices.read_for_hart(0, address, N)
+        {
+            return Ok(value);
+        }
         if N < 8
             && let Some(width) = crate::bus_translation::width(N)
             && let Some(value) = self.read_translated(address, width)
@@ -7283,6 +7308,12 @@ impl Bus {
         uart: &mut impl Write,
         writer: Option<usize>,
     ) -> Result<(), BusError> {
+        let hart = writer.unwrap_or(0);
+        if !self.rv64_devices.uarts.is_empty() && self.rv64_devices.uart_for_hart(hart, address).is_some()
+            && let Some(result) = self.write_rv64_peripheral(hart, address, width, value, uart)
+        {
+            return result.map_err(BusError::Output);
+        }
         if let Some(width) = crate::bus_translation::width(width)
             && self.write_translated(address, width, value.into()).is_some()
         {

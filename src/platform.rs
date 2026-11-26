@@ -593,6 +593,7 @@ fn load_platform(
     let mut flash_chip = None;
     let mut uart = None;
     let mut stm32_uarts = Vec::new();
+    let mut sifive_uarts = Vec::new();
     let mut stm32_timers = Vec::new();
     let mut stm32_spis = Vec::new();
     let mut spi_shifts = Vec::new();
@@ -850,6 +851,7 @@ fn load_platform(
                 }
             }
             "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
+            "UART.SiFive_UART" => sifive_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
@@ -2600,6 +2602,21 @@ fn load_platform(
             Ok((entry, sources))
         })
         .transpose()?;
+    for entry in sifive_uarts {
+        let mut irq = 0;
+        for (_, wire) in &entry.body {
+            let (pin, destination) = wire.split_once("->").ok_or_else(|| entry.error("expected SiFive UART IRQ wiring"))?;
+            let (target, index) = destination.split_once('@').ok_or_else(|| entry.error("expected PLIC destination"))?;
+            let index = number(index.trim()).map_err(|error| entry.error(&error))?;
+            if irq != 0 || !matches!(pin.trim(), "" | "IRQ")
+                || !plic_config.is_some_and(|(controller, sources)| controller.name == target.trim() && (1..=sources).contains(&index))
+            {
+                return Err(entry.error("invalid SiFive UART PLIC source"));
+            }
+            irq = index as usize;
+        }
+        machine.bus.map_sifive_uart(&entry.name, entry.address()?, irq).map_err(|error| entry.error(&error))?;
+    }
     for entry in litex_i2s {
         map_litex_i2s(entry, &configs, &mut machine.bus)?;
     }

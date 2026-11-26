@@ -442,7 +442,7 @@ pub struct Uart {
     pub(crate) harts: u64,
     name: String,
     pub base: u32,
-    source: usize,
+    pub(crate) source: usize,
     cpu_lines: Vec<(usize, u32)>,
     kind: UartKind,
 }
@@ -485,7 +485,7 @@ impl Uart {
         u64::from(address.wrapping_sub(self.base)) < self.size()
     }
 
-    fn pending(&self) -> bool {
+    pub(crate) fn pending(&self) -> bool {
         match &self.kind {
             UartKind::Ns16550(uart) => uart.interrupt_pending(),
             UartKind::SiFive {
