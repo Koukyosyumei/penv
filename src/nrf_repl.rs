@@ -1109,10 +1109,10 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                         }
                         "" | "EventInterrupt" | "EventIRQ" if device.irq.is_none() => {
                             device.irq = Some(if nvic.is_some_and(|nvic| nvic.name == target) {
-                                irq_index(pin, 32).map_err(|e| i2c.error(&e))?
+                                crate::stm32_uart::Stm32Irq::Nvic(irq_index(pin, 32).map_err(|e| i2c.error(&e))?)
                             } else if let Some(&(count, output)) = combined_routes.get(target) {
                                 irq_index(pin, count).map_err(|e| i2c.error(&e))?;
-                                output
+                                crate::stm32_uart::Stm32Irq::Nvic(output)
                             } else {
                                 return Err(i2c.error("unsupported STM32 I²C interrupt target"));
                             });

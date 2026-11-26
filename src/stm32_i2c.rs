@@ -14,7 +14,7 @@ const AUTO_STOP: u32 = 1 << 25;
 
 pub struct Stm32I2c {
     pub base: u32,
-    pub irq: Option<u8>,
+    pub irq: Option<crate::stm32_uart::Stm32Irq>,
     pub dma_rx: u8,
     pub dma_tx: u8,
     registers: [u32; 11],

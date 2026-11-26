@@ -4082,6 +4082,15 @@ impl Bus {
                     }
                 }
             }
+            for i2c in self.stm32_i2cs.iter().filter(|i2c| i2c.interrupt_pending()) {
+                match i2c.irq {
+                    Some(Stm32Irq::Nvic(line)) => nvic.set_line(line, true, active),
+                    Some(Stm32Irq::Exti(line)) => {
+                        exti_inputs[usize::from(line / 32)] |= 1 << (line % 32);
+                    }
+                    None => {}
+                }
+            }
             let control = self.h7_network_control.as_ref();
             for route in self
                 .h7_adc
@@ -4279,13 +4288,6 @@ impl Bus {
             }
             for can in &self.stm32_cans {
                 irqs |= can.interrupts();
-            }
-            for i2c in &self.stm32_i2cs {
-                if i2c.interrupt_pending()
-                    && let Some(line) = i2c.irq
-                {
-                    irqs |= 1 << line;
-                }
             }
             for spi in &self.stm32_spis {
                 if spi.interrupt_pending()
