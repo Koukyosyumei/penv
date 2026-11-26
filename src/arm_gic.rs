@@ -328,10 +328,41 @@ impl Gic {
                 }
                 u32::from(interface.enabled_groups >> group) & 1
             }
-            (0x000c_00ac | 0x008c_00a9, value) => return Some(value.is_none().then_some(1)), // ICC_SRE
+            (0x000c_008c, None) => 0x400, // ICC_CTLR
+            (0x000c_008c, Some(value)) if value & 2 == 0 => return Some(None),
+            (0x000c_00ac, value) => return Some(value.is_none().then_some(7)), // ICC_SRE
+            (0x008c_00a9, value) => return Some(value.is_none().then_some(15)), // ICC_HSRE
             _ => return None,
         };
         Some(Some(reply))
+    }
+
+    pub(crate) fn send_aarch32_sgi(&mut self, source: usize, operation: u32, value: u64) -> bool {
+        if self.version != Version::V3 || operation > 2 || source >= self.cpus.len() {
+            return false;
+        }
+        let group = usize::from(operation != 2);
+        let id = ((value >> 24) & 15) as usize;
+        let broadcast = value & (1 << 40) != 0;
+        let affinity_prefix = (((value >> 48) & 255) << 24)
+            | (((value >> 32) & 255) << 16)
+            | (((value >> 16) & 255) << 8);
+        let range = ((value >> 44) & 15) as u32;
+        for (slot, target) in self.cpus.iter_mut().enumerate() {
+            let affinity = target.affinity;
+            let target_index = affinity & 255;
+            let routed = if broadcast {
+                slot != source
+            } else {
+                u64::from(affinity & !255) == affinity_prefix
+                    && target_index / 16 == range
+                    && value & (1 << (target_index % 16)) != 0
+            };
+            if routed && target.private[id].group == group {
+                target.private[id].pending = true;
+            }
+        }
+        true
     }
 
     pub(crate) fn read_window(&mut self, cpu: usize, kind: WindowKind, offset: u32) -> u32 {
@@ -596,6 +627,26 @@ impl Gic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arm_gic_v3_sgi_targets_affinity_and_excludes_broadcast_source() {
+        let mut gic = Gic::new(Version::V3, 32, &[0, 1, 0x101]).unwrap();
+        for slot in 0..3 {
+            gic.write_redistributor(slot, 0x1_0080, 1 << 4);
+            gic.set_cpu_groups(slot, 2);
+            gic.set_priority_mask(slot, 0xff);
+        }
+        gic.write_distributor(0, 0, 2);
+        assert!(gic.send_aarch32_sgi(0, 0, (4 << 24) | (1 << 16) | 2));
+        assert_eq!(gic.highest_pending(0, Some(1)), SPURIOUS_INTERRUPT);
+        assert_eq!(gic.highest_pending(1, Some(1)), SPURIOUS_INTERRUPT);
+        assert_eq!(gic.acknowledge(2, Some(1)), 4);
+        gic.end_interrupt(2, 4);
+        assert!(gic.send_aarch32_sgi(0, 0, (1 << 40) | (4 << 24)));
+        assert_eq!(gic.highest_pending(0, Some(1)), SPURIOUS_INTERRUPT);
+        assert_eq!(gic.highest_pending(1, Some(1)), 4);
+        assert_eq!(gic.highest_pending(2, Some(1)), 4);
+    }
 
     #[test]
     fn distributor_routes_spi_to_selected_cpu_and_reasserts_level() {

@@ -499,6 +499,22 @@ impl Cpu {
             return pmsa[bank].access(register, value);
         }
         let v8r = self.is_v8r();
+        if value.is_some()
+            && matches!(
+                key,
+                0x0007_0026
+                    | 0x0007_002a
+                    | 0x0007_002e
+                    | 0x0007_0005
+                    | 0x0007_0025
+                    | 0x0007_00aa
+                    | 0x0007_008a
+                    | 0x0007_00ba
+            )
+        {
+            // The interpreter reads and writes coherent backing memory directly.
+            return Some(None);
+        }
         if v8r {
             let read_only = match key {
                 0x0000_0000 => Some(0x411f_d132),
@@ -1275,14 +1291,16 @@ impl Cpu {
                             (registers[lhs] as i32).wrapping_div(registers[rhs] as i32) as u32;
                     }
                 }
-                _ if instruction & 0x0f80_0ff0 == 0x0180_0f90 => {
+                _ if instruction & 0x0f80_0cf0 == 0x0180_0c90 && instruction & 0xf00 != 0xd00 => {
                     let load = instruction & (1 << 20) != 0;
+                    let exclusive = instruction & (1 << 9) != 0;
                     let source = (instruction & 15) as usize;
                     let width = [4, 8, 1, 2][((instruction >> 21) & 3) as usize];
                     let first = if load { rd } else { source };
                     if rn == 15
-                        || rd == 15
+                        || (load || exclusive) && rd == 15
                         || (load != (source == 15))
+                        || !exclusive && (width == 8 || !load && rd != 15)
                         || width == 8 && (first & 1 != 0 || first > 12)
                     {
                         *pc = self.undefined(next, registers);
@@ -1309,7 +1327,11 @@ impl Cpu {
                         if width == 8 {
                             registers[rd + 1] = self.load(bus, slot, target.wrapping_add(4), 4)?;
                         }
-                        bus.reserve64(slot, physical, physical, width);
+                        if exclusive {
+                            bus.reserve64(slot, physical, physical, width);
+                        }
+                    } else if !exclusive {
+                        self.store(bus, slot, target, width, registers[source], output)?;
                     } else {
                         let reservation = bus.take_reservation64(slot);
                         let succeeded =
@@ -1383,6 +1405,33 @@ impl Cpu {
                             self.cpsr = (self.cpsr & !(N | Z))
                                 | (result & N)
                                 | (u32::from(result == 0) * Z);
+                        }
+                    }
+                }
+                _ if instruction & 0x0f80_00f0 == 0x0080_0090 => {
+                    let lhs = (instruction & 15) as usize;
+                    let rhs = ((instruction >> 8) & 15) as usize;
+                    if [lhs, rhs, rd, rn].contains(&15) || rn == rd {
+                        next = self.undefined(next, registers);
+                    } else {
+                        let signed = instruction & (1 << 22) != 0;
+                        let mut product = if signed {
+                            (i64::from(registers[lhs] as i32) * i64::from(registers[rhs] as i32))
+                                as u64
+                        } else {
+                            u64::from(registers[lhs]) * u64::from(registers[rhs])
+                        };
+                        if instruction & (1 << 21) != 0 {
+                            product = product.wrapping_add(
+                                (u64::from(registers[rn]) << 32) | u64::from(registers[rd]),
+                            );
+                        }
+                        registers[rd] = product as u32;
+                        registers[rn] = (product >> 32) as u32;
+                        if instruction & (1 << 20) != 0 {
+                            self.cpsr = (self.cpsr & !(N | Z))
+                                | (registers[rn] & N)
+                                | (u32::from(product == 0) * Z);
                         }
                     }
                 }
@@ -1466,6 +1515,19 @@ impl Cpu {
                     };
                     if !handled {
                         next = self.undefined(address.wrapping_add(4), registers);
+                    }
+                }
+                _ if instruction & 0x0ff0_0f0f == 0x0c40_0f0c => {
+                    let operation = (instruction >> 4) & 15;
+                    let valid = self.cpsr & 31 != 0x10 && rd != 15 && rn != 15;
+                    let value = u64::from(registers[rd]) | (u64::from(registers[rn]) << 32);
+                    if !valid
+                        || !bus
+                            .arm_gic
+                            .as_mut()
+                            .is_some_and(|gic| gic.send_aarch32_sgi(slot, operation, value))
+                    {
+                        next = self.undefined(next, registers);
                     }
                 }
                 _ if self.is_v8r()

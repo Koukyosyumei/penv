@@ -68,6 +68,7 @@ struct Region {
 #[derive(Clone)]
 pub(super) struct Pmsa {
     selector: usize,
+    implemented: usize,
     attributes: [u32; 2],
     regions: Vec<Region>,
 }
@@ -114,7 +115,7 @@ impl Pmsa {
         background: bool,
         control: u32,
     ) -> Result<(), Fault> {
-        let mut matches = self.regions.iter().filter(|region| {
+        let mut matches = self.regions[..self.implemented].iter().filter(|region| {
             region.limit & 1 != 0 && ((region.base & !63)..=(region.limit | 63)).contains(&address)
         });
         let Some(region) = matches.next() else {
@@ -153,8 +154,9 @@ impl Pmsa {
     pub(super) fn new(count: usize) -> Self {
         Self {
             selector: 0,
+            implemented: count,
             attributes: [0; 2],
-            regions: vec![Region::default(); count],
+            regions: vec![Region::default(); 32],
         }
     }
 
@@ -163,11 +165,11 @@ impl Pmsa {
             Register::Type => {
                 return value
                     .is_none()
-                    .then_some(Some((self.regions.len() as u32) << 8));
+                    .then_some(Some((self.implemented as u32) << 8));
             }
             Register::Selector => {
                 if let Some(value) = value {
-                    self.selector = (value & 31) as usize;
+                    self.selector = (value & 255) as usize;
                 }
                 self.selector as u32
             }
@@ -185,14 +187,18 @@ impl Pmsa {
                     })
             }
             Register::Base(index) => {
-                let region = self.regions.get_mut(index.unwrap_or(self.selector))?;
+                let Some(region) = self.regions.get_mut(index.unwrap_or(self.selector)) else {
+                    return Some(value.is_none().then_some(0));
+                };
                 if let Some(value) = value {
                     region.base = value & !0x20;
                 }
                 region.base
             }
             Register::Limit(index) => {
-                let region = self.regions.get_mut(index.unwrap_or(self.selector))?;
+                let Some(region) = self.regions.get_mut(index.unwrap_or(self.selector)) else {
+                    return Some(value.is_none().then_some(0));
+                };
                 if let Some(value) = value {
                     region.limit = value & !0x30;
                 }
