@@ -341,7 +341,7 @@ impl Rv64 {
     }
 
     pub(crate) fn initialize_mstatus(&mut self, value: u64) {
-        self.privilege.write(0x300, value, self.misa());
+        self.privilege.set_monitor_mstatus(value, self.misa());
     }
 
     pub(crate) fn translate_read(&self, bus: &mut Bus, address: u64) -> Result<u64, String> {

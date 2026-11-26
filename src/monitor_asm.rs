@@ -82,7 +82,7 @@ pub(crate) fn assemble_source(
         + "
 ";
     let output = crate::llvm_mc_for(triple, &features, "--show-encoding", &instructions)?;
-    if !output.status.success() || !output.stderr.is_empty() {
+    if !output.status.success() {
         return Err(format!(
             "llvm-mc {triple}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -413,7 +413,7 @@ fn link_instructions(
     fs::create_dir(&dir).map_err(|e| format!("assembly scratch directory: {e}"))?;
     let dir = Scratch(dir);
     let object = crate::llvm_mc_for(triple, features, "--filetype=obj", source)?;
-    if !object.status.success() || !object.stderr.is_empty() {
+    if !object.status.success() {
         return Err(format!(
             "llvm-mc {triple}: {}",
             String::from_utf8_lossy(&object.stderr).trim()

@@ -496,6 +496,24 @@ impl Privilege {
                     || self.supervisor_counter_enable & (1 << index) != 0))
     }
 
+    pub(crate) fn set_monitor_mstatus(&mut self, value: u64, misa: u64) {
+        let mut allowed = MSTATUS;
+        if misa & (1 << 5) == 0 {
+            allowed &= !FS;
+        }
+        if self.vector.is_none() {
+            allowed &= !VS;
+        }
+        self.status = value & allowed;
+        if self.levels == Levels::Machine {
+            self.status |= MPP;
+        } else if self.status & MPP == 2 << 11
+            || (self.levels == Levels::MachineUser && self.status & MPP == 1 << 11)
+        {
+            self.status &= !MPP;
+        }
+    }
+
     pub fn write(&mut self, csr: u32, value: u64, misa: u64) -> bool {
         if self.mode == Mode::Machine && matches!(csr, 0x3a0..=0x3af | 0x3b0..=0x3ef) {
             return self.pmp.as_mut().is_some_and(|pmp| pmp.write(csr, value));
@@ -533,16 +551,7 @@ impl Privilege {
             }
             0x180 if matches!(value >> 60, 0 | 8 | 9) => self.satp = value,
             0x180 | 0x301 | 0xb03..=0xb1f | 0x323..=0x33f => {}
-            0x300 => {
-                self.status = value & MSTATUS & extension_mask;
-                if self.levels == Levels::Machine {
-                    self.status |= MPP;
-                } else if self.status & MPP == 2 << 11
-                    || (self.levels == Levels::MachineUser && self.status & MPP == 1 << 11)
-                {
-                    self.status &= !MPP;
-                }
-            }
+            0x300 => self.set_monitor_mstatus(value, misa),
             0x302 => self.medeleg = value & 0xb3ff,
             0x303 => self.mideleg = value & S_INTERRUPTS,
             0x304 => self.enable = value & (M_INTERRUPTS | S_INTERRUPTS | self.platform_interrupts),
