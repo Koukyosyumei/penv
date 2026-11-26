@@ -685,9 +685,9 @@ impl Thumb {
             0xf990..=0xf99e | 0xf9b0..=0xf9be if rt < 15 => {
                 let address = r[rn].wrapping_add(low & 0xfff);
                 r[rt] = if high & 0x20 == 0 {
-                    (bus.thumb_read::<1>(address)? as i8 as i32) as u32
+                    (self.data_read::<1>(bus, address)? as i8 as i32) as u32
                 } else {
-                    (bus.thumb_read::<2>(address)? as i16 as i32) as u32
+                    (self.data_read::<2>(bus, address)? as i16 as i32) as u32
                 };
             }
             // PLD is a hint. The bus has no cache to prefetch into.
@@ -697,13 +697,12 @@ impl Thumb {
                 let width = 1 << ((high >> 5) & 3);
                 if high & 0x10 != 0 {
                     r[rt] = match width {
-                        1 => bus.thumb_read::<1>(address),
-                        2 => bus.thumb_read::<2>(address),
-                        _ => bus.thumb_read::<4>(address),
-                    }
-                    .map_err(|error| error.to_string())?;
+                        1 => self.data_read::<1>(bus, address),
+                        2 => self.data_read::<2>(bus, address),
+                        _ => self.data_read::<4>(bus, address),
+                    }?;
                 } else {
-                    bus.thumb_write(address, width, r[rt], output)?;
+                    self.data_write(bus, address, width, r[rt], output)?;
                 }
             }
             0xf850..=0xf85e if rt == 15 && low & 0x0fc0 == 0 && !matches!(rm, 13 | 15) => {
@@ -740,12 +739,13 @@ impl Thumb {
                     r[rn]
                 };
                 if high & 0x10 == 0 {
-                    bus.thumb_write(address, width, r[rt], output)?;
+                    self.data_write(bus, address, width, r[rt], output)?;
                 } else {
                     let data = match width {
-                        1 => bus.thumb_read::<1>(address),
-                        2 => bus.thumb_read::<2>(address),
-                        _ => bus.thumb_read::<4>(address),
+                        4 if rt == 15 => bus.thumb_read::<4>(address),
+                        1 => self.data_read::<1>(bus, address),
+                        2 => self.data_read::<2>(bus, address),
+                        _ => self.data_read::<4>(bus, address),
                     }?;
                     let value = match (high & 0x100 != 0, width) {
                         (true, 1) => (data as i8 as i32) as u32,
