@@ -91,6 +91,8 @@ pub struct Thumb {
 }
 
 const LOCKUP_PC: u32 = 0xefff_fffe;
+const SECURE_CALLEE_BYTES: u32 = 40;
+const SECURE_INTEGRITY_SIGNATURE: u32 = 0xfefa_125b;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ThumbStep {
@@ -142,6 +144,11 @@ impl Thumb {
             clock_gated: self.clock_gated,
             ..Self::default()
         };
+    }
+
+    pub(crate) fn configure_trustzone(&mut self, enabled: bool) {
+        self.trustzone = enabled;
+        self.secure = enabled;
     }
 
     pub(crate) fn secure_state(&self) -> bool {
@@ -792,6 +799,22 @@ impl Thumb {
         (priority, exception)
     }
 
+    fn vector_address(&self, bus: &Bus, exception: u8, nonsecure: bool) -> Result<u32, String> {
+        let base = if nonsecure {
+            bus.nvic.as_ref().and_then(Nvic::nonsecure_vector_base).unwrap_or(0)
+        } else {
+            bus.nvic.as_ref().and_then(Nvic::vector_base).unwrap_or_else(|| self.vector_base())
+        };
+        base.checked_add(u32::from(exception) * 4).ok_or("exception vector address overflow".into())
+    }
+
+    fn hardfault_masked(&self, nvic: &Nvic) -> bool {
+        if self.trustzone && !self.secure && !nvic.bfhfnmins() {
+            return false;
+        }
+        self.faultmask || matches!(self.active_exception, NMI | HARDFAULT)
+    }
+
     fn exception_entry(
         &mut self,
         exception: u8,
@@ -802,30 +825,36 @@ impl Thumb {
         if !self.thumb2 {
             return Ok(self.exception_entry_m0(exception, return_pc, r, bus));
         }
-        let base = bus.nvic.as_ref().and_then(Nvic::vector_base).unwrap_or_else(|| self.vector_base());
+        let origin_secure = self.secure_state();
         let mut exception = exception;
+        let mut nonsecure = bus.nvic.as_ref()
+            .is_some_and(|nvic| nvic.exception_targets_nonsecure(exception, origin_secure));
+        let initial_nonsecure = nonsecure;
         let mut locked = false;
         let mut handler = loop {
-            let vector = base.checked_add(u32::from(exception) * 4)
-                .ok_or("exception vector address overflow")?;
+            let vector = self.vector_address(bus, exception, nonsecure)?;
             match bus.read_cortex_m_ram_or_mock_word(vector) {
                 Ok(handler) => break handler,
                 Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) if bus.nvic.is_some() => {
-                    bus.nvic.as_mut().unwrap().record_vector_fault();
-                    if matches!(exception, NMI | HARDFAULT) || self.active_exception == NMI
-                        || self.active_exception == HARDFAULT || self.faultmask
+                    let nvic = bus.nvic.as_mut().unwrap();
+                    nvic.record_vector_fault();
+                    let hardfault_nonsecure = nonsecure && nvic.bfhfnmins() && nvic.address_is_nonsecure(vector);
+                    if (matches!(exception, NMI | HARDFAULT) && (!self.trustzone || nonsecure == hardfault_nonsecure))
+                        || self.hardfault_masked(nvic)
                     {
                         locked = true;
                         break LOCKUP_PC;
                     }
                     exception = HARDFAULT;
+                    nonsecure = hardfault_nonsecure;
                 }
                 Err(error) => return Err(error.to_string()),
             }
         };
         let sp = r[13];
-        let frame_size = if self.fp_active { 104 } else { 32 };
-        let stack = (sp & !7).wrapping_sub(frame_size as u32);
+        let full_fp_frame = self.fp_active && origin_secure && bus.nvic.as_ref().is_some_and(Nvic::secure_full_fp_frame);
+        let frame_size = if full_fp_frame { 168 } else if self.fp_active { 104 } else { 32 };
+        let mut stack = (sp & !7).wrapping_sub(frame_size as u32);
         bus.check_thumb_access(stack, frame_size, true, false)?;
         let it = u32::from(self.itstate);
         let xpsr = self.apsr()
@@ -834,15 +863,20 @@ impl Thumb {
             | ((it & 3) << 25)
             | ((it & 0xfc) << 8)
             | u32::from(self.active_exception);
-        let mut frame = [0; 26];
+        let mut frame = [0; 42];
         frame[..8].copy_from_slice(&[r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr]);
         let lazy = self.fp_active && bus.nvic.as_ref().is_some_and(Nvic::lazy_fp_enabled);
         if self.fp_active && !lazy {
             frame[8..24].copy_from_slice(&self.fp[..16]);
             frame[24] = self.fpscr;
+            if full_fp_frame {
+                frame[26..].copy_from_slice(&self.fp[16..]);
+            }
         }
         let stored_words = if lazy { 8 } else { frame_size / 4 };
-        if let Err(error) = bus.write_cortex_m_exception_stack(stack, &frame[..stored_words]) {
+        let stack_result = bus.write_cortex_m_exception_stack(stack, &frame[..stored_words]);
+        let has_callee_frame = origin_secure && initial_nonsecure && stack_result.is_ok();
+        if let Err(error) = stack_result {
             if !matches!(error, BusError::SlaveFault(_) | BusError::Unmapped(..)) || bus.nvic.is_none() {
                 return Err(error.to_string());
             }
@@ -852,7 +886,7 @@ impl Thumb {
             }
             if !locked {
                 const BUSFAULT: u8 = 5;
-                let hardfault_blocked = self.faultmask || matches!(self.active_exception, NMI | HARDFAULT);
+                let hardfault_blocked = self.hardfault_masked(nvic);
                 let derived = if nvic.fault_enabled(BUSFAULT) && self.can_take_sync_exception(BUSFAULT, nvic) {
                     BUSFAULT
                 } else if hardfault_blocked {
@@ -864,8 +898,8 @@ impl Thumb {
                     locked = true;
                 } else if self.thumb2_exception_priority(bus, derived) < self.thumb2_exception_priority(bus, exception) {
                     exception = derived;
-                    let vector = base.checked_add(u32::from(exception) * 4)
-                        .ok_or("exception vector address overflow")?;
+                    nonsecure = bus.nvic.as_ref().unwrap().exception_targets_nonsecure(exception, origin_secure);
+                    let vector = self.vector_address(bus, exception, nonsecure)?;
                     match bus.read_cortex_m_ram_or_mock_word(vector) {
                         Ok(target) => handler = target,
                         Err(_) => {
@@ -878,10 +912,38 @@ impl Thumb {
                 }
             }
         }
+        let fp_address = stack.wrapping_add(32);
+        if has_callee_frame {
+            stack = stack.wrapping_sub(SECURE_CALLEE_BYTES);
+            let mut callee = [0; 10];
+            callee[0] = if self.fp_active { SECURE_INTEGRITY_SIGNATURE & !1 } else { SECURE_INTEGRITY_SIGNATURE };
+            callee[2..].copy_from_slice(&r[4..12]);
+            if let Err(error) = bus.write_cortex_m_exception_stack(stack, &callee) {
+                if !matches!(error, BusError::SlaveFault(_) | BusError::Unmapped(..)) {
+                    return Err(error.to_string());
+                }
+                let nvic = bus.nvic.as_mut().unwrap();
+                nvic.record_stacking_fault();
+                if self.hardfault_masked(nvic) || exception == NMI && !nonsecure {
+                    locked = true;
+                } else {
+                    exception = nvic.force_hard_fault();
+                    nonsecure = false;
+                    let vector = self.vector_address(bus, exception, false)?;
+                    match bus.read_cortex_m_ram_or_mock_word(vector) {
+                        Ok(target) => handler = target,
+                        Err(_) => {
+                            bus.nvic.as_mut().unwrap().record_vector_fault();
+                            locked = true;
+                        }
+                    }
+                }
+            }
+        }
         if lazy && !locked {
             let nvic = bus.nvic.as_mut().unwrap();
             let hardfault_ready = !self.faultmask && !matches!(self.active_exception, NMI | HARDFAULT);
-            nvic.reserve_lazy_fp(stack.wrapping_add(32), hardfault_ready);
+            nvic.reserve_lazy_fp(fp_address, hardfault_ready, full_fp_frame);
         }
         if self.uses_psp() {
             self.psp = stack;
@@ -898,15 +960,20 @@ impl Thumb {
         if self.fp_active {
             r[14] &= !0x10;
         }
-        if self.cortex_m55 && !self.trustzone {
-            // Without the Security Extension, S and ES read as zero in EXC_RETURN.
-            r[14] &= !0x41;
+        if self.cortex_m55 {
+            r[14] = (r[14] & !0x41) | (u32::from(origin_secure) << 6) | u32::from(self.trustzone && !nonsecure);
+            if has_callee_frame && !nonsecure {
+                r[14] &= !0x20;
+            }
         }
         self.fp_active = false;
         bus.clear_reservation(0);
         self.active_exceptions.insert(exception);
         if let Some(nvic) = bus.nvic.as_mut() { nvic.set_active(self.active_exceptions); }
         self.active_exception = exception;
+        if self.trustzone {
+            self.switch_security(!nonsecure, r)?;
+        }
         self.itstate = 0;
         if locked {
             bus.nvic.as_mut().unwrap().enter_lockup();
@@ -929,13 +996,15 @@ impl Thumb {
             .min_by_key(|&number| self.thumb2_exception_priority(bus, number)).unwrap_or(0);
         let nvic = bus.nvic.as_mut().ok_or("exception return requires NVIC")?;
         nvic.set_active(remaining);
-        if fault == 5 {
-            nvic.record_unstacking_fault();
-        } else {
-            nvic.record_invalid_exception_return();
+        match fault {
+            5 => nvic.record_unstacking_fault(),
+            6 => nvic.record_invalid_exception_return(),
+            _ => {}
         }
         self.branch_exception = true;
-        if self.faultmask || matches!(self.active_exception, NMI | HARDFAULT) {
+        if (fault != 7 && self.hardfault_masked(nvic))
+            || (fault == 7 && self.secure && self.hardfault_masked(nvic))
+        {
             let frame_size = if token & 0x10 == 0 { 104 } else { 32 };
             if token & 4 == 0 {
                 r[13] = r[13].wrapping_add(frame_size);
@@ -950,10 +1019,9 @@ impl Thumb {
         } else {
             nvic.force_hard_fault()
         };
-        let base = nvic.vector_base().unwrap_or_else(|| self.vector_base());
+        let mut nonsecure = fault != 7 && nvic.exception_targets_nonsecure(exception, self.secure_state());
         let handler = loop {
-            let vector = base.checked_add(u32::from(exception) * 4)
-                .ok_or("exception vector address overflow")?;
+            let vector = self.vector_address(bus, exception, nonsecure)?;
             match bus.read_cortex_m_ram_or_mock_word(vector) {
                 Ok(handler) => break handler,
                 Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
@@ -964,11 +1032,20 @@ impl Thumb {
                         return Ok(self.lockup());
                     }
                     exception = HARDFAULT;
+                    nonsecure = fault != 7 && nvic.exception_targets_nonsecure(exception, self.secure_state());
                 }
                 Err(error) => return Err(error.to_string()),
             }
         };
         r[14] = token;
+        if self.trustzone {
+            let source_secure = self.secure_state();
+            r[14] = (token & !1) | u32::from(!nonsecure);
+            if !source_secure && !nonsecure && token & 0x40 != 0 {
+                r[14] &= !0x20;
+            }
+            self.switch_security(!nonsecure, r)?;
+        }
         self.fp_active = false;
         self.itstate = 0;
         self.invalid_thumb_state = handler & 1 == 0;
@@ -979,7 +1056,9 @@ impl Thumb {
     }
 
     fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
-        let basic_target = if self.cortex_m55 && target & 0xffff_ffa1 == 0xffff_ffa0 {
+        let basic_target = if self.trustzone && target & 0xffffff82 == 0xffffff80 {
+            target | 0x71
+        } else if self.cortex_m55 && target & 0xffff_ffa1 == 0xffff_ffa0 {
             target | 0x51
         } else if self.thumb2 {
             target | 0x10
@@ -991,11 +1070,52 @@ impl Thumb {
         {
             let extended = target & 0x10 == 0;
             let use_psp = basic_target == 0xffff_fffd;
-            let frame_size = if extended { 104 } else { 32 };
-            let stack = if use_psp { self.psp } else { r[13] };
-            bus.check_thumb_access(stack, frame_size, false, false)?;
+            let return_secure = self.trustzone && target & 0x40 != 0;
+            let full_fp_frame = extended && return_secure && bus.nvic.as_ref().is_some_and(Nvic::secure_full_fp_frame);
+            let frame_size = if full_fp_frame { 168 } else if extended { 104 } else { 32 };
             let mut remaining = self.active_exceptions;
             remaining.remove(self.active_exception);
+            if self.trustzone && target & 0x21 == 0 {
+                bus.nvic.as_mut().unwrap().record_secure_fault(1 << 2);
+                return self.exception_return_fault(target, remaining, 7, r, bus);
+            }
+            let stack = if self.trustzone && return_secure != self.secure {
+                let bank = self.inactive_security_bank;
+                if use_psp { bank.psp } else { bank.msp }
+            } else if use_psp {
+                self.psp
+            } else {
+                r[13]
+            };
+            let restore_callee = return_secure && (!self.secure || target & 0x20 == 0);
+            let mut callee = [0; 8];
+            let stack = if restore_callee {
+                let expected = if extended { SECURE_INTEGRITY_SIGNATURE & !1 } else { SECURE_INTEGRITY_SIGNATURE };
+                match bus.read_cortex_m_ram_or_mock_word(stack) {
+                    Ok(signature) if signature == expected => {}
+                    Ok(_) => {
+                        bus.nvic.as_mut().unwrap().record_secure_fault(1);
+                        return self.exception_return_fault(target, remaining, 7, r, bus);
+                    }
+                    Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
+                        return self.exception_return_fault(target, remaining, 5, r, bus);
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+                for (index, value) in callee.iter_mut().enumerate() {
+                    match bus.read_cortex_m_ram_or_mock_word(stack.wrapping_add((index as u32 + 2) * 4)) {
+                        Ok(word) => *value = word,
+                        Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
+                            return self.exception_return_fault(target, remaining, 5, r, bus);
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    }
+                }
+                stack.wrapping_add(SECURE_CALLEE_BYTES)
+            } else {
+                stack
+            };
+            bus.check_thumb_access(stack, frame_size, false, false)?;
             let mut frame = [0; 8];
             for (index, word) in frame.iter_mut().enumerate() {
                 match bus.read_cortex_m_ram_or_mock_word(stack.wrapping_add(index as u32 * 4)) {
@@ -1023,7 +1143,7 @@ impl Thumb {
                 ));
             }
             let lazy_address = bus.nvic.as_ref().and_then(Nvic::pending_lazy_fp);
-            if extended && lazy_address.is_some_and(|(address, _)| address == stack.wrapping_add(32)) {
+            if extended && lazy_address.is_some_and(|(address, _, _)| address == stack.wrapping_add(32)) {
                 bus.nvic.as_mut().unwrap().clear_lazy_fp();
             } else if extended {
                 let saved = bus
@@ -1033,6 +1153,18 @@ impl Thumb {
                     *value = u32::from_le_bytes(*bytes);
                 }
                 self.fpscr = u32::from_le_bytes(saved[64..68].try_into().unwrap());
+                if full_fp_frame {
+                    let saved = bus.memory_slice(stack.wrapping_add(104), 64).map_err(|e| e.to_string())?;
+                    for (value, bytes) in self.fp[16..].iter_mut().zip(saved.as_chunks::<4>().0) {
+                        *value = u32::from_le_bytes(*bytes);
+                    }
+                }
+            }
+            if self.trustzone {
+                self.switch_security(return_secure, r)?;
+            }
+            if restore_callee {
+                r[4..12].copy_from_slice(&callee);
             }
             r[..4].copy_from_slice(&[r0, r1, r2, r3]);
             r[12] = r12;
@@ -1544,6 +1676,47 @@ impl Thumb {
                     }
                 }
             }
+            0x4700..=0x47ff if inst & 7 == 4 && self.trustzone && self.secure => {
+                let rm = ((inst >> 3) & 15) as usize;
+                if matches!(rm, 13 | 15) {
+                    return Err(unsupported().into());
+                }
+                let target = r[rm];
+                if target & 1 != 0 {
+                    if inst & 0x80 != 0 {
+                        r[14] = next | 1;
+                    }
+                } else {
+                    if inst & 0x80 != 0 {
+                        let stack = r[13].wrapping_sub(8);
+                        let frame = [next | 1, u32::from(self.active_exception)];
+                        match bus.write_cortex_m_exception_stack(stack, &frame) {
+                            Ok(()) => {}
+                            Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
+                                let nvic = bus.nvic.as_mut().unwrap();
+                                nvic.record_stacking_fault();
+                                let exception = if nvic.fault_enabled(5) && self.can_take_sync_exception(5, nvic) {
+                                    5
+                                } else if self.hardfault_masked(nvic) {
+                                    nvic.enter_lockup();
+                                    *pc = self.lockup();
+                                    self.branch_exception = true;
+                                    return Ok(false);
+                                } else {
+                                    nvic.force_hard_fault()
+                                };
+                                *pc = self.exception_entry(exception, *pc, r, bus)?;
+                                return Ok(true);
+                            }
+                            Err(error) => return Err(error.to_string().into()),
+                        }
+                        r[13] = stack;
+                        r[14] = 0xfeff_ffff;
+                    }
+                    self.switch_security(false, r)?;
+                }
+                next = target & !1;
+            }
             0x4700..=0x47ff if inst & 7 == 0 => {
                 let rm = ((inst >> 3) & 15) as usize;
                 let target = if rm == 15 { architectural_pc } else { r[rm] };
@@ -1740,13 +1913,19 @@ impl Thumb {
             0xde00..=0xdeff if self.thumb2 => {
                 let nvic = bus.nvic.as_mut().ok_or_else(unsupported)?;
                 let usage_fault_allowed = self.can_take_sync_exception(6, nvic);
-                let exception = nvic.record_undefined_instruction(usage_fault_allowed);
-                if exception == 3 && (self.faultmask || matches!(self.active_exception, 2 | 3)) {
-                    return Err(InstructionError::Host(
-                        "Cortex-M lockup on undefined instruction".into(),
-                    ));
-                }
+                nvic.record_undefined_instruction();
+                let exception = if usage_fault_allowed && nvic.fault_enabled(6) {
+                    6
+                } else if self.hardfault_masked(nvic) {
+                    nvic.enter_lockup();
+                    *pc = self.lockup();
+                    self.branch_exception = true;
+                    return Ok(false);
+                } else {
+                    nvic.force_hard_fault()
+                };
                 next = self.exception_entry(exception, *pc, r, bus)?;
+                self.branch_exception = true;
             }
             0xdf00..=0xdfff
                 if self.active_exception == 0 && !self.interrupts_masked && !self.faultmask =>
@@ -1866,33 +2045,19 @@ impl Thumb {
                     self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
                 } else {
                     let vector = self.cortex_m55.then(|| mve::VectorTransfer::decode(inst, low)).flatten();
-                    if (vector.is_some() || Self::is_fpu_instruction(inst, low))
-                        && let Some((address, hardfault_ready)) = bus.nvic.as_ref().and_then(Nvic::pending_lazy_fp)
+                    let secure_fp_transfer = self.trustzone && self.secure
+                        && inst & 0xffe0 == 0xec20 && low == 0x0a00;
+                    if (vector.is_some() || secure_fp_transfer || Self::is_fpu_instruction(inst, low))
+                        && self.preserve_lazy_fp(bus)?
                     {
-                        let mut state = [0; 18];
-                        state[..16].copy_from_slice(&self.fp[..16]);
-                        state[16] = self.fpscr;
-                        match bus.write_cortex_m_exception_stack(address, &state) {
-                            Ok(()) => bus.nvic.as_mut().unwrap().clear_lazy_fp(),
-                            Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
-                                let nvic = bus.nvic.as_mut().unwrap();
-                                nvic.record_lazy_fault();
-                                if hardfault_ready {
-                                    nvic.force_hard_fault();
-                                    nvic.set_hard_fault_pending(true);
-                                    nvic.clear_lazy_fp();
-                                } else {
-                                    nvic.enter_lockup();
-                                    *pc = self.lockup();
-                                    self.branch_exception = true;
-                                    return Ok(false);
-                                }
-                            }
-                            Err(error) => return Err(error.to_string().into()),
-                        }
+                        *pc = LOCKUP_PC;
+                        self.branch_exception = true;
+                        return Ok(false);
                     }
                     if let Some(transfer) = vector {
                         self.execute_vector_transfer(transfer, inst, low, r, bus, output)?;
+                    } else if secure_fp_transfer {
+                        self.transfer_secure_fp(inst, r, bus, output)?;
                     } else if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {
                         self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
                     }

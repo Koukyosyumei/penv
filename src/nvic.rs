@@ -116,6 +116,7 @@ pub struct Nvic {
     debug_status: bool,
     active: ActiveExceptions,
     fpcar: u32,
+    lazy_fp_full_frame: bool,
     bus_fault_status: u32,
     bus_fault_address: u32,
     ccr: u32,
@@ -199,6 +200,7 @@ impl Nvic {
             debug_status: false,
             active: ActiveExceptions::default(),
             fpcar: 0,
+            lazy_fp_full_frame: false,
             bus_fault_status: 0,
             bus_fault_address: 0,
             ccr: 1 << 9,
@@ -485,12 +487,13 @@ impl Nvic {
         self.take_pending_event()
     }
 
-    pub fn record_undefined_instruction(&mut self, usage_fault_allowed: bool) -> u8 {
-        self.cfsr |= 1 << 16;
-        if usage_fault_allowed && self.fault_enables & (1 << 18) != 0 {
-            6
-        } else {
-            self.force_hard_fault()
+    pub fn record_undefined_instruction(&mut self) {
+        self.bus_fault_status |= 1 << 16; // UNDEFINSTR
+    }
+
+    pub fn record_secure_fault(&mut self, status: u32) {
+        if let Some(security) = &mut self.security {
+            security.sfsr |= status;
         }
     }
 
@@ -591,17 +594,22 @@ impl Nvic {
         self.fpccr.is_some_and(|value| value & (1 << 30) != 0)
     }
 
-    pub fn reserve_lazy_fp(&mut self, address: u32, hardfault_ready: bool) {
+    pub fn secure_full_fp_frame(&self) -> bool {
+        self.security.is_some() && self.fpccr.is_some_and(|fpccr| fpccr & (1 << 26) != 0)
+    }
+
+    pub fn reserve_lazy_fp(&mut self, address: u32, hardfault_ready: bool, full_frame: bool) {
         self.fpcar = address;
+        self.lazy_fp_full_frame = full_frame;
         if let Some(fpccr) = &mut self.fpccr {
-            *fpccr = (*fpccr & (3 << 30)) | (u32::from(hardfault_ready) << 4) | 1;
+            *fpccr = (*fpccr & ((3 << 30) | (1 << 26))) | (u32::from(hardfault_ready) << 4) | 1;
         }
     }
 
-    pub fn pending_lazy_fp(&self) -> Option<(u32, bool)> {
+    pub fn pending_lazy_fp(&self) -> Option<(u32, bool, bool)> {
         self.fpccr
             .filter(|value| value & 1 != 0)
-            .map(|value| (self.fpcar, value & (1 << 4) != 0))
+            .map(|value| (self.fpcar, value & (1 << 4) != 0, self.lazy_fp_full_frame))
     }
 
     pub fn clear_lazy_fp(&mut self) {
@@ -832,7 +840,8 @@ impl Nvic {
             && offset == 0xf34
             && let Some(fpccr) = &mut self.fpccr
         {
-            *fpccr = (*fpccr & !(3 << 30)) | (value & (3 << 30));
+            let writable = (3 << 30) | (u32::from(self.security.is_some()) << 26);
+            *fpccr = (*fpccr & !writable) | (value & writable);
             return true;
         }
         if width == 4 && address == AIRCR {

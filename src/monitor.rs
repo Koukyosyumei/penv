@@ -583,6 +583,7 @@ enum Action {
     CpuVectorTable(String, u32),
     CpuStatus(String, String),
     CpuSecurityState(String, bool),
+    CpuPreserveFp(String),
     CpuSau(String, String, Option<u32>),
     CpuNonsecureVectorTable(String, u32),
     NvicLockup(String, bool),
@@ -957,6 +958,7 @@ fn run_commands<'a>(
                     _ => unreachable!(),
                 }.map(|()| None).map_err(|error| error.to_string())
             }
+            Action::CpuPreserveFp(cpu) => machine.preserve_cortex_m_fp(cpu).map(|()| None),
             Action::CpuSecurityState(cpu, secure) => {
                 machine.set_cortex_m_security(cpu, *secure)?;
                 Ok(None)
@@ -5138,6 +5140,9 @@ fn execute(
         [target, property @ ("IsLockedUp" | "ExecutedInstructions" | "GetItState" | "FPCAR" | "FPCCR" | "SecureState")] => {
             Some(Action::CpuStatus(resolve(target)?.trim_start_matches("sysbus.").into(), (*property).into()))
         }
+        [target, "DoLazyFloatingPointStatePreservation"] => Some(Action::CpuPreserveFp(
+            resolve(target)?.trim_start_matches("sysbus.").into(),
+        )),
         [target, "SecureState", value] => Some(Action::CpuSecurityState(
             resolve(target)?.trim_start_matches("sysbus.").into(), parse_tester_bool(resolve(value)?)?,
         )),
@@ -5201,7 +5206,7 @@ fn execute(
                 && !matches!(
                     action,
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
-                        | Action::CpuSecurityState(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
+                        | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)
                         | Action::AssertCpuValue(..)

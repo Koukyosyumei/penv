@@ -1216,6 +1216,14 @@ impl Machine {
             .ok_or_else(|| format!("{name:?} is not a Cortex-M CPU"))
     }
 
+    pub(crate) fn preserve_cortex_m_fp(&mut self, name: &str) -> Result<(), String> {
+        self.cortex_m_cpu(name)?;
+        if self.primary.thumb.as_mut().unwrap().preserve_lazy_fp(&mut self.bus)? {
+            self.primary.pc = 0xefff_fffe;
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_cortex_m_security(&mut self, name: &str, secure: bool) -> Result<(), String> {
         let hart = self.cortex_m_monitor_cpu(name)?;
         hart.thumb.as_mut().unwrap().switch_security(secure, &mut hart.registers)
@@ -2440,7 +2448,7 @@ impl Hart {
     pub(crate) fn mark_cortex_m55(&mut self, trustzone: bool) -> Result<(), String> {
         let thumb = self.thumb.as_mut().ok_or("Cortex-M55 requires a Cortex-M CPU")?;
         thumb.cortex_m55 = true;
-        thumb.trustzone = trustzone;
+        thumb.configure_trustzone(trustzone);
         Ok(())
     }
 

@@ -1,10 +1,71 @@
 use std::io::Write;
 
-use crate::bus::Bus;
+use crate::bus::{Bus, BusError};
+use crate::nvic::Nvic;
 
 use super::Thumb;
 
 impl Thumb {
+    pub(crate) fn preserve_lazy_fp(&mut self, bus: &mut Bus) -> Result<bool, String> {
+        let Some((address, hardfault_ready, full_frame)) = bus.nvic.as_ref().and_then(Nvic::pending_lazy_fp) else {
+            return Ok(false);
+        };
+        let mut state = [0; 34];
+        state[..16].copy_from_slice(&self.fp[..16]);
+        state[16] = self.fpscr;
+        if full_frame {
+            state[18..].copy_from_slice(&self.fp[16..]);
+        }
+        let words = if full_frame { 34 } else { 18 };
+        match bus.write_cortex_m_exception_stack(address, &state[..words]) {
+            Ok(()) => {}
+            Err(BusError::SlaveFault(_) | BusError::Unmapped(..)) => {
+                let nvic = bus.nvic.as_mut().unwrap();
+                nvic.record_lazy_fault();
+                if !hardfault_ready {
+                    nvic.enter_lockup();
+                    self.lockup();
+                    return Ok(true);
+                }
+                nvic.force_hard_fault();
+                nvic.set_hard_fault_pending(true);
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        bus.nvic.as_mut().unwrap().clear_lazy_fp();
+        Ok(false)
+    }
+
+    pub(super) fn transfer_secure_fp(
+        &mut self, instruction: u32, r: &[u32; 32], bus: &mut Bus, output: &mut impl Write,
+    ) -> Result<(), String> {
+        let rn = (instruction & 15) as usize;
+        if rn == 15 {
+            return Err("secure FP transfer cannot use PC as its base register".into());
+        }
+        self.fp_active = true;
+        let mut fp = self.fp;
+        let load = instruction & 0x10 != 0;
+        let count = if bus.nvic.as_ref().is_some_and(Nvic::secure_full_fp_frame) { 32 } else { 16 };
+        for index in 0..count {
+            let offset = if index < 16 { index } else { index + 2 };
+            let address = r[rn].wrapping_add(4 * offset as u32);
+            if load {
+                fp[index] = bus.thumb_read::<4>(address)?;
+            } else {
+                bus.thumb_write(address, 4, fp[index], output)?;
+            }
+        }
+        let address = r[rn].wrapping_add(64);
+        if load {
+            self.fpscr = bus.thumb_read::<4>(address)?;
+            self.fp = fp;
+        } else {
+            bus.thumb_write(address, 4, self.fpscr, output)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn is_fpu_instruction(high: u32, low: u32) -> bool {
         matches!(high & 0xff00, 0xec00 | 0xed00 | 0xee00) && matches!(low & 0xf00, 0xa00 | 0xb00)
     }
