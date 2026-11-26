@@ -2318,6 +2318,7 @@ fn run() -> Result<ExitCode, String> {
     let command_budget = max_steps.unwrap_or(if machine.cpu_less { u64::MAX } else { 10_000_000 });
     machine.monitor_firmware.clone_from(&path);
     machine.monitor_platform.clone_from(&platform_path);
+    machine.monitor_asset_dir.clone_from(&asset_dir);
     if let Some(quantum) = monitor_quantum {
         machine.monitor_quantum = quantum;
     }

@@ -565,6 +565,8 @@ enum Action {
     FindBytes(FindBytes),
     BusScalar(BusScalar),
     ContextBusScalar(BusScalar, String),
+    LoadScopedHex(Asset, String, PathBuf),
+    LoadMonitorElf(Asset, bool, PathBuf),
     DisassembleBlock(String, u64, usize),
     BusWhatIsAt(u64, Option<String>),
     ExecutePython(String),
@@ -988,6 +990,15 @@ fn run_commands<'a>(
             Action::SetMachineCleared(cleared) => {
                 apply_machine_selection(&mut session.machine_cleared, *cleared, session.machine.as_deref(), &mut session.variables);
                 Ok(None)
+            }
+            Action::LoadMonitorElf(asset, virtual_addresses, root) => {
+                let path = asset.input_path(root, machine.monitor_asset_dir.as_deref())?;
+                load_monitor_elf(machine, path, *virtual_addresses).map(|()| None)
+            }
+            Action::LoadScopedHex(asset, context, root) => {
+                let path = asset.input_path(root, machine.monitor_asset_dir.as_deref())?;
+                let file = fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+                crate::image::load_hex_in_context(machine, file, context).map(|()| None)
             }
             Action::ContextBusScalar(access, context) => {
                 let readback = if machine.is_cortex_m() {
@@ -2153,15 +2164,19 @@ fn live_load_elf(
         let origin = monitor_origin(&session.variables).join("<monitor>");
         let asset = Asset::new(name, &origin);
         let path = asset.input_path(root, assets)?;
-        let file = fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-        crate::image::load(machine, file, false, Some(virtual_addresses), false)
-            .map_err(|error| format!("{}: {error}", path.display()))?;
-        if machine.is_cortex_m() && machine.monitor_firmware.is_none() && machine.elapsed_steps() == 0 {
-            machine.validate_entry()?;
-        }
-        machine.monitor_firmware = Some(path);
-        Ok(())
+        load_monitor_elf(machine, path, virtual_addresses)
     })())
+}
+
+fn load_monitor_elf(machine: &mut Machine, path: PathBuf, virtual_addresses: bool) -> Result<(), String> {
+    let file = fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    crate::image::load(machine, file, false, Some(virtual_addresses), false)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if machine.is_cortex_m() && machine.monitor_firmware.is_none() && machine.elapsed_steps() == 0 {
+        machine.validate_entry()?;
+    }
+    machine.monitor_firmware = Some(path);
+    Ok(())
 }
 
 pub fn serve(
@@ -4541,6 +4556,16 @@ fn execute(
                 context.first().map(|name| resolve(name).map(|name| unquote(name).to_owned())).transpose()?,
             ))
         }
+        ["sysbus", "LoadELF", value, options @ ..] if boot.started => {
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
+            Some(Action::LoadMonitorElf(Asset::new(file, script), load_elf_address_mode(options)?, root.to_owned()))
+        }
+        ["sysbus", "LoadHEX", value, context] => {
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
+            let context = resolve(context)?;
+            let context = context.strip_prefix("context=").unwrap_or(context);
+            Some(Action::LoadScopedHex(Asset::new(file, script), unquote(context).into(), root.to_owned()))
+        }
         ["sysbus", method, address, rest @ ..]
             if matches!(
                 *method,
@@ -5428,7 +5453,7 @@ fn execute(
                     action,
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
                         | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
-                        | Action::ScopedRamOverlay(..) | Action::PeripheralList
+                        | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)

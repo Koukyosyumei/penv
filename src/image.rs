@@ -39,6 +39,39 @@ pub fn load_hex(machine: &mut Machine, file: File) -> Result<(), String> {
     if !machine.is_cortex_m() {
         return Err("Intel HEX boot requires a Cortex-M platform".into());
     }
+    let base = load_hex_records(file, |address, data| {
+        machine.bus.memory(address, data.len()).map_err(|error| error.to_string())?.copy_from_slice(data);
+        Ok(())
+    })?;
+    machine.infer_cortex_m_vectors(base);
+    Ok(())
+}
+
+pub(crate) fn load_hex_in_context(machine: &mut Machine, file: File, context: &str) -> Result<(), String> {
+    let hart = machine.bus.scoped_cpu_index(context)?;
+    let mut first_missing = None;
+    load_hex_records(file, |address, data| {
+        for (offset, byte) in data.iter().enumerate() {
+            let address = address + offset as u32;
+            if let Some(memory) = machine.bus.cpu_memory64(hart, u64::from(address), 1) {
+                memory[0] = *byte;
+            } else {
+                first_missing.get_or_insert(address);
+            }
+        }
+        Ok(())
+    })?;
+    if let Some(address) = first_missing {
+        crate::monitor_log::record(2, &format!(
+            "sysbus: Tried to access bytes at non-existing peripheral at 0x{address:X}."
+        ));
+    }
+    Ok(())
+}
+
+fn load_hex_records(
+    file: File, mut write: impl FnMut(u32, &[u8]) -> Result<(), String>,
+) -> Result<u32, String> {
     // Each record encodes up to 255 data bytes, five metadata bytes, and CRLF.
     const MAX_LINE: usize = 1 + 2 * (5 + 255) + 2;
     let mut reader = BufReader::new(file);
@@ -107,11 +140,7 @@ pub fn load_hex(machine: &mut Machine, file: File) -> Result<(), String> {
                 address
                     .checked_add((count - 1) as u32)
                     .ok_or_else(|| error("data address exceeds 32 bits"))?;
-                machine
-                    .bus
-                    .memory(address, count)
-                    .map_err(|e| error(&e.to_string()))?
-                    .copy_from_slice(data);
+                write(address, data).map_err(|reason| error(&reason))?;
                 image_base = Some(image_base.map_or(address, |base: u32| base.min(address)));
             }
             (1, 0, []) => eof = true,
@@ -128,8 +157,7 @@ pub fn load_hex(machine: &mut Machine, file: File) -> Result<(), String> {
     if !eof {
         return Err("Intel HEX image is missing an end-of-file record".into());
     }
-    machine.infer_cortex_m_vectors(image_base.ok_or("Intel HEX image has no data")?);
-    Ok(())
+    image_base.ok_or_else(|| "Intel HEX image has no data".into())
 }
 
 pub fn load_rv64_dtb(machine: &mut Machine, mut file: File, address: u64) -> Result<(), String> {

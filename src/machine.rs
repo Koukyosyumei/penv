@@ -146,6 +146,7 @@ pub struct Machine {
     boot_memory_cleared: bool,
     pub(crate) monitor_firmware: Option<std::path::PathBuf>,
     pub(crate) monitor_platform: Option<std::path::PathBuf>,
+    pub(crate) monitor_asset_dir: Option<std::path::PathBuf>,
     pub(crate) monitor_quantum: u64,
     cpu_paused: bool,
     cpu_halted: bool,
@@ -433,6 +434,7 @@ impl Machine {
             boot_memory_cleared: false,
             monitor_firmware: None,
             monitor_platform: None,
+            monitor_asset_dir: None,
             monitor_quantum: DEFAULT_MONITOR_QUANTUM,
             cpu_paused: false,
             cpu_halted: false,
@@ -1150,12 +1152,11 @@ impl Machine {
     }
 
     pub fn set_rv64_entry(&mut self, entry: u64) {
-        for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
-            hart.rv64
-                .as_mut()
-                .expect("RV64 machine")
-                .set_program_counter(entry);
+        for (index, hart) in std::iter::once(&mut self.primary).chain(&mut self.secondary).enumerate() {
+            hart.rv64.as_mut().expect("RV64 machine").set_image_entry(entry);
+            self.bus.take_reservation64(index);
         }
+        self.halted = 0;
     }
 
     pub fn raw_load_address(&self) -> u32 {

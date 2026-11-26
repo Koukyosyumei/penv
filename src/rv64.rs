@@ -316,6 +316,12 @@ impl Rv64 {
         self.pc_follows_reset_vector = false;
     }
 
+    pub(crate) fn set_image_entry(&mut self, address: u64) {
+        self.set_program_counter(address);
+        self.waiting = false;
+        self.translations = TranslationCache::default();
+    }
+
     pub(crate) fn reset_from(&mut self, initial: &Self) {
         let reset_vector = self.reset_vector;
         *self = initial.clone();

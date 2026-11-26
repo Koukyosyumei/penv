@@ -176,6 +176,7 @@ pub fn load(
             range.start, range.end
         );
     }
+    let reloading = machine.monitor_firmware.is_some();
     let mut initialized: Vec<(usize, Range<usize>)> = Vec::new();
     for segment in segments {
         let destination = machine
@@ -186,7 +187,9 @@ pub fn load(
         read_at(&mut file, segment.offset, data)?;
         let zero_start = segment.start + segment.file_size;
         let end = segment.start + segment.size;
-        if zero_start < end {
+        if reloading {
+            bss.fill(0);
+        } else if zero_start < end {
             // The backing starts demand-zero. Touch BSS only where previous
             // segments wrote bytes, including through another RAM alias.
             for (backing, range) in &initialized {
