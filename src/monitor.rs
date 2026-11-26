@@ -2278,6 +2278,9 @@ fn wait_for_led(
     if machine.bus.gpio_led(index).state != state {
         let start = machine.elapsed_steps();
         let limit = timeout.min(*budget);
+        if limit != 0 {
+            machine.set_monitor_active(true);
+        }
         let (stop, count) =
             run_until_deadline(machine, limit, output, |bus, _| bus.gpio_led(index).state == state)?;
         *budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -2291,6 +2294,9 @@ fn wait_for_led(
 
     let transitions = machine.bus.gpio_led(index).transitions;
     let limit = hold.min(*budget);
+    if limit != 0 {
+        machine.set_monitor_active(true);
+    }
     let (stop, count) = run_until_deadline(machine, limit, output, |bus, _| {
         bus.gpio_led(index).transitions != transitions
     })?;
