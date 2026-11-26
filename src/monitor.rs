@@ -4162,6 +4162,18 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         }
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }
+    if command.trim_start().starts_with("machine LoadPlatformDescriptionFromString ") {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && load_text(&source, source.clone(), root, &mut state, &command).is_ok()
+            && state.boot.materialize_platform().is_ok()
+            && let Some(path) = &state.boot.platform
+            && let Err(error) = crate::platform::validate_repl_python_sources(path, root)
+            && error.starts_with(crate::pydev::SYNTAX_ERROR)
+        {
+            return Ok(StartupInput::Reply("REJECTED", error));
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
     if let Ok(["machine", "LoadPlatformDescription", value]) = command_words(command.trim()).as_deref() {
         if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
             && state.machine

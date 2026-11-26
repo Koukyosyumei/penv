@@ -3,6 +3,25 @@ use std::{
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 };
 
+pub(crate) const SYNTAX_ERROR: &str = "KeywordException: [FatalError] unexpected token";
+
+pub(crate) fn validate_source(source: &str) -> Result<(), String> {
+    let result = Command::new("python3")
+        .args(["-c", "import sys; compile(sys.argv[1], '<PyDev>', 'exec')", source])
+        .output().map_err(|error| format!("start Python syntax validator: {error}"))?;
+    if result.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&result.stderr);
+    if detail.lines().any(|line| line.starts_with("SyntaxError:")
+        || line.starts_with("IndentationError:") || line.starts_with("TabError:"))
+    {
+        Err(format!("{SYNTAX_ERROR}\n{}", detail.trim()))
+    } else {
+        Err(format!("Python syntax validator failed: {}", detail.trim()))
+    }
+}
+
 const WORKER: &str = r#"
 import contextlib
 import importlib

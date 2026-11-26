@@ -1030,37 +1030,12 @@ fn load_platform(
                 }
             }
             "Python.PythonPeripheral" => {
-                let mut size = None;
-                let mut initable = false;
-                let mut source = None;
-                let mut filename = None;
-                for (key, value) in keys(entry, &["size", "initable", "script", "filename"])? {
-                    match key {
-                        "size" => size = Some(number(value).map_err(|error| entry.error(&error))?),
-                        "initable" => initable = boolean_value(value).ok_or_else(|| entry.error("invalid Python peripheral initable"))?,
-                        "script" => source = Some(value),
-                        "filename" => filename = Some(value),
-                        _ => unreachable!(),
-                    }
+                let (script, size, initable) = python_peripheral_parameters(entry, root.unwrap_or(Path::new(".")))?;
+                crate::pydev::validate_source(&script)?;
+                if entry.registration.is_some() {
+                    machine.bus.map_pydev(&script, entry.address()?, size, initable)
+                        .map_err(|error| entry.error(&error))?;
                 }
-                let size = size.filter(|size| *size > 0).ok_or_else(|| entry.error("Python peripheral requires a positive size"))?;
-                let script = match (source, filename) {
-                    (Some(source), None) => multiline_value(source).or_else(|| quoted_string(source))
-                        .ok_or_else(|| entry.error("expected a quoted Python script"))?,
-                    (None, Some(filename)) => {
-                        let filename = quoted_string(filename).ok_or_else(|| entry.error("expected a quoted Python script filename"))?;
-                        let local = entry.source.parent().unwrap_or(Path::new(".")).join(&filename);
-                        let path = if local.is_file() {
-                            local
-                        } else {
-                            root.unwrap_or(Path::new(".")).join(filename)
-                        };
-                        fs::read_to_string(&path).map_err(|error| entry.error(&format!("{}: {error}", path.display())))?
-                    }
-                    _ => return Err(entry.error("expected exactly one of script or filename")),
-                };
-                machine.bus.map_pydev(&script, entry.address()?, size, initable)
-                    .map_err(|error| entry.error(&error))?;
             }
             "GPIOPort.RenesasRA_GPIOMisc" => {
                 let ra8 = match keys(entry, &["version"])?.as_slice() {
@@ -4410,6 +4385,49 @@ fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
         }
     }
     Ok(indices)
+}
+
+fn python_peripheral_parameters(entry: &Entry, root: &Path) -> Result<(String, u32, bool), String> {
+    let mut size = None;
+    let mut initable = false;
+    let mut source = None;
+    let mut filename = None;
+    for (key, value) in keys(entry, &["size", "initable", "script", "filename"])? {
+        match key {
+            "size" => size = Some(number(value).map_err(|error| entry.error(&error))?),
+            "initable" => initable = boolean_value(value).ok_or_else(|| entry.error("invalid Python peripheral initable"))?,
+            "script" => source = Some(value),
+            "filename" => filename = Some(value),
+            _ => unreachable!(),
+        }
+    }
+    let size = size.ok_or_else(|| entry.error("Python peripheral requires a size"))?;
+    let script = match (source, filename) {
+        (Some(source), None) => multiline_value(source).or_else(|| quoted_string(source))
+            .ok_or_else(|| entry.error("expected a quoted Python script"))?,
+        (None, Some(filename)) => {
+            let filename = quoted_string(filename).ok_or_else(|| entry.error("expected a quoted Python script filename"))?;
+            let local = entry.source.parent().unwrap_or(Path::new(".")).join(&filename);
+            let path = if local.is_file() {
+                local
+            } else {
+                root.join(filename)
+            };
+            fs::read_to_string(&path).map_err(|error| entry.error(&format!("{}: {error}", path.display())))?
+        }
+        _ => return Err(entry.error("expected exactly one of script or filename")),
+    };
+    Ok((script, size, initable))
+}
+
+pub(crate) fn validate_repl_python_sources(path: &Path, root: &Path) -> Result<(), String> {
+    let mut entries = Vec::new();
+    parse(path, root, &mut HashSet::new(), &mut entries)?;
+    for entry in entries.iter().filter(|entry| entry.model == "Python.PythonPeripheral") {
+        let (source, _, _) = python_peripheral_parameters(entry, root)?;
+        crate::pydev::validate_source(&source)?;
+    }
+    Ok(())
 }
 
 fn map_renesas_gpio(entry: &Entry, entries: &[Entry], bus: &mut Bus) -> Result<(), String> {
