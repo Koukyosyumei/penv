@@ -2049,7 +2049,8 @@ fn load_platform(
                             "xandesvbfhcvt" if !bitmanip.xandesvbfhcvt => bitmanip.xandesvbfhcvt = true,
                             "xandesvqmac" if !bitmanip.xandesvqmac => bitmanip.xandesvqmac = true,
                             "xandesvdot" if !bitmanip.xandesvdot => bitmanip.xandesvdot = true,
-                            "v" if bitmanip.xandesvsintload || bitmanip.xandesvbfhcvt || bitmanip.xandesvqmac || bitmanip.xandesvdot => {}
+                            "xandesvpackfph" if !bitmanip.xandesvpackfph => bitmanip.xandesvpackfph = true,
+                            "v" if bitmanip.has_vector_execution() => {}
                             "xandesbfhcvt" if !bitmanip.xandesbfhcvt => {
                                 bitmanip.xandesbfhcvt = true
                             }
@@ -2321,7 +2322,7 @@ fn load_platform(
                 hart.enable_smepmp();
             }
         }
-        if bitmanip.xandesvsintload || bitmanip.xandesvbfhcvt || bitmanip.xandesvqmac || bitmanip.xandesvdot || split_rv32_init(entry).0.iter().any(|(_, text)| {
+        if bitmanip.has_vector_execution() || split_rv32_init(entry).0.iter().any(|(_, text)| {
             text.split_once(':').is_some_and(|(key, value)| {
                 key.trim() == "vectorBootstrap" && value.trim() == "true"
             })

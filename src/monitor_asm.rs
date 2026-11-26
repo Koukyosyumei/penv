@@ -154,6 +154,19 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
             | (funct3 << 12) | (andes_register(rd)? << 7) | 0x5b;
         return Ok(format!("{label} .4byte {encoding:#010x}"));
     }
+    if matches!(name, "nds.vfpmadt.vf" | "nds.vfpmadb.vf") {
+        let args: Vec<_> = args.split(',').map(str::trim).collect();
+        let (rd, fs1, vs2, unmasked) = match args.as_slice() {
+            [rd, fs1, vs2] => (rd, fs1, vs2, true),
+            [rd, fs1, vs2, "v0.t"] => (rd, fs1, vs2, false),
+            _ => return Err(format!("{name} requires a destination, float source, vector source and optional v0.t")),
+        };
+        let function = if name == "nds.vfpmadt.vf" { 2 } else { 3 };
+        let encoding = (function << 26) | (u32::from(unmasked) << 25)
+            | (andes_vector_register(vs2)? << 20) | (andes_float_register(fs1)? << 15)
+            | 0x405b | (andes_vector_register(rd)? << 7);
+        return Ok(format!("{label} .4byte {encoding:#010x}"));
+    }
     let dot = match name {
         "nds.vd4dots.vv" => Some(4),
         "nds.vd4dotsu.vv" => Some(5),

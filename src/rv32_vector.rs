@@ -97,6 +97,46 @@ impl Rv32Vector {
         Ok(())
     }
 
+    pub(crate) fn packed_half_multiply_add(&mut self, insn: u32, scalar: u32, fcsr: u8) -> Option<u8> {
+        use crate::rv64_float::{Format, Rounding};
+
+        let kind = self.csrs.read(0xc21)?;
+        if kind & !0xff != 0 || (kind >> 3) & 7 != 1 {
+            return None;
+        }
+        let alignment = match kind & 7 {
+            n @ 0..=3 => 1 << n,
+            5..=7 => 1,
+            _ => return None,
+        };
+        let rd = ((insn >> 7) & 31) as usize;
+        let rs2 = ((insn >> 20) & 31) as usize;
+        let masked = insn & (1 << 25) == 0;
+        if (masked && rd == 0) || rd % alignment != 0 || rs2 % alignment != 0 {
+            return None;
+        }
+        let format = Format::Half;
+        let rounding = Rounding::decode(7, fcsr)?;
+        let top = insn >> 26 == 2;
+        let multiplier = format.decode(format.boxed(u64::from((scalar >> if top { 16 } else { 0 }) as u16)));
+        let addend = format.decode(format.boxed(u64::from((scalar >> if top { 0 } else { 16 }) as u16)));
+        let register_bytes = self.csrs.read(0xc22)? as usize;
+        let mut flags = 0;
+        for lane in self.csrs.read(0x008)? as usize..self.csrs.read(0xc20)? as usize {
+            if masked && self.registers[lane / 8] & (1 << (lane % 8)) == 0 {
+                continue;
+            }
+            let source = rs2 * register_bytes + lane * 2;
+            let raw = u16::from_le_bytes(self.registers[source..source + 2].try_into().ok()?);
+            let result = format.fused(multiplier, format.decode(format.boxed(u64::from(raw))), addend, rounding);
+            let dest = rd * register_bytes + lane * 2;
+            self.registers[dest..dest + 2].copy_from_slice(&(result.bits as u16).to_le_bytes());
+            flags |= result.flags;
+        }
+        self.csrs.write(0x008, 0);
+        Some(flags)
+    }
+
     pub(crate) fn dot_product(&mut self, insn: u32) -> Option<()> {
         let (signed_first, signed_second) = match insn >> 26 {
             4 => (true, true),

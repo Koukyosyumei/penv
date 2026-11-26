@@ -820,7 +820,7 @@ impl Machine {
         let available = [
             ("+m", hart.csr.m_extension), ("+a", hart.csr.a_extension),
             ("+c", hart.csr.c_extension), ("+f", hart.csr.f_extension),
-            ("+d", hart.csr.d_extension), ("+v", hart.bitmanip.xandesvsintload || hart.bitmanip.xandesvbfhcvt || hart.bitmanip.xandesvqmac || hart.bitmanip.xandesvdot), ("+zba", hart.bitmanip.zba),
+            ("+d", hart.csr.d_extension), ("+v", hart.bitmanip.has_vector_execution()), ("+zba", hart.bitmanip.zba),
             ("+zbb", hart.bitmanip.zbb), ("+zbc", hart.bitmanip.zbc),
             ("+zbs", hart.bitmanip.zbs), ("+zicond", hart.zicond),
             ("+zacas", hart.zacas),
@@ -2992,7 +2992,7 @@ impl Hart {
             ..self.bitmanip
         };
         let result = match insn & 0x7f {
-            0x07 | 0x27 if (bitmanip.xandesvsintload || bitmanip.xandesvbfhcvt || bitmanip.xandesvqmac || bitmanip.xandesvdot) && matches!(funct3, 0 | 5 | 6 | 7) => {
+            0x07 | 0x27 if bitmanip.has_vector_execution() && matches!(funct3, 0 | 5 | 6 | 7) => {
                 if !self.csr.vectors_active() {
                     return Err(illegal());
                 }
@@ -3018,6 +3018,24 @@ impl Hart {
                     crate::rv32_vector::TransferError::Illegal => illegal(),
                     crate::rv32_vector::TransferError::Memory(error) => error,
                 })?;
+                None
+            }
+            0x5b if bitmanip.xandesvpackfph && funct3 == 4 && matches!(insn >> 26, 2 | 3) => {
+                if !self.csr.vectors_active() || !self.csr.floating_enabled() {
+                    return Err(illegal());
+                }
+                let fs1 = ((insn >> 15) & 31) as usize;
+                let mut scalar = self.floating.as_ref().ok_or_else(illegal)?[fs1];
+                if self.csr.d_extension && scalar >> 32 != u64::from(u32::MAX) {
+                    scalar = 0x7fc0_0000;
+                }
+                let fcsr = self.csr.fcsr;
+                let flags = self.csr.vector_bootstrap.as_mut()
+                    .and_then(|vector| vector.packed_half_multiply_add(insn, scalar as u32, fcsr))
+                    .ok_or_else(illegal)?;
+                self.csr.fcsr |= flags;
+                self.csr.floating_dirty();
+                self.csr.vectors_dirty();
                 None
             }
             0x5b if bitmanip.xandesvdot && funct3 == 4 && matches!(insn >> 26, 4 | 5 | 7) => {
