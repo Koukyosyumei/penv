@@ -108,6 +108,7 @@ mod pl011;
 mod pmp;
 mod pydev;
 mod renesas_ra_agt;
+mod renesas_ra_gpio;
 mod renesas_ra_gpt;
 mod renesas_ra_icu;
 mod renesas_ra_sci;

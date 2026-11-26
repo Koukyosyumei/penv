@@ -1029,6 +1029,17 @@ fn load_platform(
                     return Err(entry.error("only one UART is currently supported"));
                 }
             }
+            "GPIOPort.RenesasRA_GPIOMisc" => {
+                let ra8 = match keys(entry, &["version"])?.as_slice() {
+                    [] | [("version", "Version.Default" | "Default")] => false,
+                    [("version", "Version.RA8" | "RA8")] => true,
+                    _ => return Err(entry.error("unsupported Renesas GPIO protection version")),
+                };
+                machine.bus.map_renesas_gpio_protection(crate::renesas_ra_gpio::Protection::new(
+                    entry.address()?, entry.name.clone(), ra8,
+                )).map_err(|error| entry.error(&error))?;
+            }
+            "GPIOPort.RenesasRA8_GPIO" => map_renesas_gpio(entry, &entries, &mut machine.bus)?,
             "UART.RenesasRA8M1_SCI" => {
                 let (routes, properties) = renesas_icu_routes(
                     entry, &entries, ["ReceiveIRQ", "TransmitIRQ", "TransmitEndIRQ"],
@@ -4317,6 +4328,53 @@ fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
         }
     }
     Ok(indices)
+}
+
+fn map_renesas_gpio(entry: &Entry, entries: &[Entry], bus: &mut Bus) -> Result<(), String> {
+    use crate::renesas_ra_gpio::Port;
+    let mut base = None;
+    let mut pfs = None;
+    for registration in entry.registration_list().ok_or_else(|| entry.error("GPIO requires two windows"))? {
+        match multi_registration(entry, registration)? {
+            Some((address, Port::PFS_SIZE, "pinConfiguration")) if pfs.is_none() => pfs = Some(address),
+            None if base.is_none() => base = Some(entry.registration_address(registration)?),
+            _ => return Err(entry.error("invalid or duplicate GPIO window")),
+        }
+    }
+    let mut outputs = [None; 16];
+    let mut properties = Vec::new();
+    for item in &entry.body {
+        if let Some((pin, target)) = item.1.split_once("->") {
+            let output = pin.trim().strip_prefix("IRQ").and_then(|pin| pin.parse::<usize>().ok())
+                .and_then(|pin| outputs.get_mut(pin)).ok_or_else(|| entry.error("invalid GPIO IRQ output"))?;
+            let (name, event) = target.trim().split_once('@').ok_or_else(|| entry.error("missing ICU event"))?;
+            let event = number(event.trim()).map_err(|error| entry.error(&error))?;
+            if event >= 512 || output.is_some() || !entries.iter().any(|candidate| {
+                candidate.name == name.trim() && candidate.model == "IRQControllers.RenesasRA_ICU"
+            }) {
+                return Err(entry.error("invalid or duplicate GPIO IRQ route"));
+            }
+            *output = Some(event as usize);
+        } else {
+            properties.push(item.clone());
+        }
+    }
+    let fields = keys_in(entry, &properties, &["portNumber", "numberOfConnections", "pfsMisc"])?;
+    let field = |name| fields.iter().find(|(key, _)| *key == name).map(|(_, value)| *value)
+        .ok_or_else(|| entry.error(&format!("missing GPIO property {name}")));
+    let protection = field("pfsMisc")?;
+    if !entries.iter().any(|candidate| candidate.name == protection && candidate.model == "GPIOPort.RenesasRA_GPIOMisc") {
+        return Err(entry.error("unknown GPIO protection peripheral"));
+    }
+    let port = Port::new(
+        base.ok_or_else(|| entry.error("missing GPIO base"))?,
+        pfs.ok_or_else(|| entry.error("missing pin configuration window"))?,
+        entry.name.clone(), protection.into(),
+        number(field("portNumber")?).map_err(|error| entry.error(&error))? as usize,
+        number(field("numberOfConnections")?).map_err(|error| entry.error(&error))? as usize,
+        outputs,
+    ).map_err(|error| entry.error(&error))?;
+    bus.map_renesas_gpio(port).map_err(|error| entry.error(&error))
 }
 
 fn renesas_icu_routes(

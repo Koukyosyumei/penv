@@ -526,6 +526,8 @@ pub struct Bus {
     renesas_ra_agt: Vec<crate::renesas_ra_agt::Agt>,
     renesas_ra_sci: Vec<crate::renesas_ra_sci::Sci>,
     renesas_sci_input: usize,
+    renesas_gpio: Vec<crate::renesas_ra_gpio::Port>,
+    renesas_gpio_protection: Vec<crate::renesas_ra_gpio::Protection>,
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
@@ -1871,6 +1873,12 @@ impl Bus {
         }
         if let Some(device) = &mut self.dwt {
             device.reset();
+        }
+        for port in &mut self.renesas_gpio {
+            port.reset();
+        }
+        for protection in &mut self.renesas_gpio_protection {
+            protection.reset();
         }
         for uart in &mut self.renesas_ra_sci {
             uart.reset();
@@ -3699,6 +3707,13 @@ impl Bus {
                 let other = u64::from(rcc.base);
                 start < other + u64::from(Stm32F4Rcc::SIZE) && other < end
             })
+            || self.renesas_gpio.iter().any(|port| {
+                overlaps_range(start, end, port.base, crate::renesas_ra_gpio::Port::SIZE)
+                    || overlaps_range(start, end, port.pfs, crate::renesas_ra_gpio::Port::PFS_SIZE)
+            })
+            || self.renesas_gpio_protection.iter().any(|protection| {
+                overlaps_range(start, end, protection.base, protection.size)
+            })
             || self.renesas_ra_sci.iter().any(|uart| {
                 start < u64::from(uart.base) + u64::from(crate::renesas_ra_sci::Sci::SIZE)
                     && end > u64::from(uart.base)
@@ -4599,6 +4614,34 @@ impl Bus {
         if let Some(exti) = self.exti.as_mut() {
             exti.reset(self.gpio_exti_levels);
         }
+    }
+
+    pub(crate) fn map_renesas_gpio(&mut self, port: crate::renesas_ra_gpio::Port) -> Result<(), String> {
+        use crate::renesas_ra_gpio::Port;
+        self.check_peripheral_range(port.base, Port::SIZE)?;
+        self.check_peripheral_range(port.pfs, Port::PFS_SIZE)?;
+        if overlaps_range(u64::from(port.base), u64::from(port.base) + u64::from(Port::SIZE), port.pfs, Port::PFS_SIZE)
+            || port.base % 4 != 0 || port.pfs % 4 != 0
+        {
+            return Err("invalid Renesas GPIO windows".into());
+        }
+        self.renesas_gpio.push(port);
+        Ok(())
+    }
+
+    pub(crate) fn map_renesas_gpio_protection(&mut self, protection: crate::renesas_ra_gpio::Protection) -> Result<(), String> {
+        self.check_peripheral_range(protection.base, protection.size)?;
+        self.renesas_gpio_protection.push(protection);
+        Ok(())
+    }
+
+    pub(crate) fn drive_renesas_gpio(&mut self, target: &str, pin: usize, high: bool) -> bool {
+        let Some(port) = self.renesas_gpio.iter_mut().find(|port| port.name == target) else { return false };
+        port.set_input(pin, high);
+        if let Some(icu) = &mut self.renesas_ra_icu {
+            port.sample_irqs(|event, high| icu.set_event(event, high));
+        }
+        true
     }
 
     pub(crate) fn map_renesas_ra_sci(&mut self, uart: crate::renesas_ra_sci::Sci) -> Result<(), String> {
@@ -8448,6 +8491,12 @@ impl Bus {
         {
             return Ok(exti.read(address));
         }
+        if let Some(port) = self.renesas_gpio.iter().find(|port| port.contains(address)) {
+            return Ok(port.read(address, N));
+        }
+        if N == 1 && let Some(protection) = self.renesas_gpio_protection.iter().find(|device| device.contains(address)) {
+            return Ok(protection.read(address));
+        }
         if N == 4 && address & 3 == 0
             && let Some(device) = self.renesas_ra_sci.iter_mut().find(|uart| uart.contains(address))
         {
@@ -9541,6 +9590,19 @@ impl Bus {
             && exti.contains(address)
         {
             exti.write(address, value);
+            return Ok(());
+        }
+        if let Some(port) = self.renesas_gpio.iter_mut().find(|port| port.contains(address)) {
+            let enabled = self.renesas_gpio_protection.iter()
+                .any(|device| device.name == port.protection && device.enabled());
+            port.write(address, width, value, enabled);
+            if let Some(icu) = &mut self.renesas_ra_icu {
+                port.sample_irqs(|event, high| icu.set_event(event, high));
+            }
+            return Ok(());
+        }
+        if width == 1 && let Some(protection) = self.renesas_gpio_protection.iter_mut().find(|device| device.contains(address)) {
+            protection.write(address, value);
             return Ok(());
         }
         if width == 4 && address & 3 == 0

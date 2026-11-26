@@ -2036,7 +2036,9 @@ fn run_commands<'a>(
                 machine.add_monitor_cpu_hook(cpu, *address, hook.clone()).map(|()| None)
             }
             Action::ClicGpio(name, id, asserted) if machine.is_cortex_m() => {
-                if machine.bus.drive_renesas_ra_event(name, *id as usize, *asserted) {
+                if machine.bus.drive_renesas_ra_event(name, *id as usize, *asserted)
+                    || machine.bus.drive_renesas_gpio(name, *id as usize, *asserted)
+                {
                     Ok(None)
                 } else {
                     let line = u8::try_from(*id).ok().filter(|&line| line < 32).ok_or("expected NVIC IRQ line 0 through 31")?;
