@@ -20,6 +20,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     proc = None
     pending_state = None
     rust_monitor = False
+    response_timeout = 120
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
         "Wait For Next Line On Uart": "wait_for_next_uart_line",
@@ -632,12 +633,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
 
     def receive(self):
         fd = self.proc.stdout.fileno()
-        deadline = time.monotonic() + 120
+        timeout = self.response_timeout
+        deadline = time.monotonic() + timeout
 
         def more():
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
-                raise subprocess.TimeoutExpired(self.proc.args, 120)
+                raise subprocess.TimeoutExpired(self.proc.args, timeout)
             chunk = os.read(fd, 65536)
             if not chunk:
                 raise RuntimeError((self.out / "penv.stderr").read_text(errors="replace")

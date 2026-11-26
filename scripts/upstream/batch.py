@@ -91,17 +91,19 @@ def assess(test, endpoint):
 class SuiteListener:
     ROBOT_LISTENER_API_VERSION = 3
 
-    def __init__(self, endpoint, active, out, xml):
+    def __init__(self, endpoint, active, out, xml, case_timeouts):
         self.endpoint, self.active, self.out, self.xml = endpoint, active, out, xml
         self.results = {}
+        self.case_timeouts = case_timeouts
         self.endpoint.states = {}
         self.blocked = {}
 
     def start_test(self, data, result):
         from state_dependency_listener import keyword_states
 
-        _, directory = self.active[data.name]
+        case, directory = self.active[data.name]
         self.endpoint.begin_case(directory)
+        self.endpoint.response_timeout = max(120, self.case_timeouts.get(case["id"], 120))
         missing = [state for state in keyword_states(data, "Requires")
                    if state not in self.endpoint.states]
         if missing:
@@ -196,7 +198,7 @@ def run_suite(task, *, options, renode, binary, assets, host_case_timeout, rust_
             xml = out / "robot.xml"
             endpoint = LiveEndpoint(renode, binary, out, assets, False)
             endpoint.rust_monitor = rust_monitor
-            listener = SuiteListener(endpoint, active, out, xml)
+            listener = SuiteListener(endpoint, active, out, xml, case_timeouts)
             # This suite sleeps while a GPIO button is held. Advance its single
             # Cortex-M machine during the same keyword before releasing the button.
             virtual_sleep = (VirtualSleepListener(endpoint)
