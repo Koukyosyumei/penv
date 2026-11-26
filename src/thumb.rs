@@ -2158,12 +2158,29 @@ impl Thumb {
                     let vector = self.cortex_m55.then(|| mve::VectorTransfer::decode(inst, low)).flatten();
                     let secure_fp_transfer = self.trustzone && self.secure
                         && inst & 0xffe0 == 0xec20 && low == 0x0a00;
-                    if (vector.is_some() || secure_fp_transfer || Self::is_fpu_instruction(inst, low))
-                        && self.preserve_lazy_fp(bus)?
-                    {
-                        *pc = LOCKUP_PC;
-                        self.branch_exception = true;
-                        return Ok(false);
+                    if vector.is_some() || secure_fp_transfer || Self::is_fpu_instruction(inst, low) {
+                        if self.cortex_m33 && let Some(nvic) = bus.nvic.as_mut().filter(|nvic| !nvic.fpu_access()) {
+                            const USAGEFAULT: u8 = 6;
+                            nvic.record_fault(None);
+                            let exception = if nvic.fault_enabled(USAGEFAULT) && self.can_take_sync_exception(USAGEFAULT, nvic) {
+                                USAGEFAULT
+                            } else {
+                                nvic.force_hard_fault()
+                            };
+                            *pc = if exception == HARDFAULT && bus.thumb_negative_priority {
+                                nvic.enter_lockup();
+                                self.lockup()
+                            } else {
+                                self.exception_entry(exception, *pc, r, bus)?
+                            };
+                            self.branch_exception = true;
+                            return Ok(false);
+                        }
+                        if self.preserve_lazy_fp(bus)? {
+                            *pc = LOCKUP_PC;
+                            self.branch_exception = true;
+                            return Ok(false);
+                        }
                     }
                     if let Some(transfer) = vector {
                         self.execute_vector_transfer(transfer, inst, low, r, bus, output)?;

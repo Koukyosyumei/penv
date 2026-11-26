@@ -106,6 +106,7 @@ for line in sys.stdin:
     fields = line.split()
     is_csr = fields[0] == 'csr'
     is_monitor = fields[0] == 'monitor'
+    is_instruction = fields[0] == 'instruction'
     if is_csr:
         request.Csr = int(fields[1])
         request.IsRead = fields[2] == 'read'
@@ -116,6 +117,8 @@ for line in sys.stdin:
         scope['request'] = request
     elif fields[0] == 'thumb-block':
         scope.update(pc=int(fields[1]), itstate=int(fields[2]))
+    elif is_instruction:
+        scope.update(pc=int(fields[1]), instruction=int(fields[2]))
     elif not is_monitor:
         scope['pc'] = int(fields[0])
         if len(fields) == 4:
@@ -130,7 +133,7 @@ for line in sys.stdin:
             else:
                 exec(program, scope)
     except Exception as error:
-        marker = 'monitor-exception' if is_monitor else 'exception'
+        marker = 'monitor-exception' if is_monitor else 'instruction-exception' if is_instruction else 'exception'
         print(marker + ' ' + str(error).encode().hex(), flush=True)
     else:
         if is_monitor:
@@ -232,6 +235,10 @@ impl Hook {
         self.invoke(bus, format_args!("{pc}")).map(|_| ())
     }
 
+    pub(crate) fn execute_instruction(&mut self, bus: &mut Bus, pc: u32, instruction: u32) -> Result<(), String> {
+        self.invoke(bus, format_args!("instruction {pc} {instruction}")).map(|_| ())
+    }
+
     pub(crate) fn execute_monitor(
         &mut self, bus: &mut Bus, source: &str, symbols: Option<PathBuf>,
     ) -> Result<String, String> {
@@ -308,6 +315,7 @@ impl Hook {
                     );
                     return Ok(None);
                 }
+                "instruction-exception" => return Err(decode(argument)?),
                 "symbol" => (|| {
                     let (encoded, index) = match argument.split_once(' ') {
                         Some((name, value)) => (name, Some(value.parse().map_err(|_| "invalid symbol index")?)),

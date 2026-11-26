@@ -389,6 +389,8 @@ pub struct Bus {
     subobject_testers: Vec<(u32, String, u32)>,
     pub monitor_user_state: String,
     pub(crate) csr_hooks: BTreeMap<(usize, u32), crate::cpu_python_hook::Hook>,
+    pub(crate) suppress_cpu_abort: bool,
+    pub(crate) instruction_hooks: Vec<(usize, u32, u32, crate::cpu_python_hook::Hook)>,
     pub(crate) thumb_block_hooks: [Option<crate::cpu_python_hook::Hook>; 2],
     pub(crate) stack_access_hooks: BTreeMap<usize, crate::cpu_python_hook::Hook>,
     traceable_memory: Vec<(String, Vec<u32>, u32)>,
@@ -4671,6 +4673,13 @@ impl Bus {
         self.map_pydev_range(source, base, size, size, initable)
     }
 
+    pub(crate) fn access_pydev(
+        &mut self, address: u64, width: u32, value: Option<u64>,
+    ) -> Option<Result<u64, BusError>> {
+        let device = self.pydevs.iter_mut().find(|device| device.contains(address, width))?;
+        Some(device.access(address, width, value).map_err(BusError::Python))
+    }
+
     pub(crate) fn map_pydev_range(
         &mut self,
         source: &str,
@@ -7418,6 +7427,18 @@ impl Bus {
         result
     }
 
+    pub(crate) fn execute_instruction_hook(
+        &mut self, hart: usize, pc: u32, instruction: u32,
+    ) -> Option<Result<(), String>> {
+        let index = self.instruction_hooks.iter().position(|(cpu, mask, opcode, _)| {
+            *cpu == hart && instruction & mask == *opcode
+        })?;
+        let mut entry = self.instruction_hooks.remove(index);
+        let result = entry.3.execute_instruction(self, pc, instruction);
+        self.instruction_hooks.insert(index, entry);
+        Some(result)
+    }
+
     pub fn apply_cpu_hooks(&mut self, pc: u32, output: &mut impl Write) -> Result<bool, BusError> {
         let Some(hooks) = self.cpu_hooks.get(&pc).cloned() else {
             return Ok(false);
@@ -7450,6 +7471,9 @@ impl Bus {
     pub fn thumb_read<const N: usize>(&mut self, address: u32) -> Result<u32, String> {
         self.check_thumb_bus_context(address, N)?;
         self.check_thumb_instruction_access(address, N, false, false)?;
+        if let Some(value) = self.nvic.as_ref().and_then(|nvic| nvic.read_fault_status_part(address, N)) {
+            return Ok(value);
+        }
         if N == 4
             && address == crate::nvic::DHCSR
             && self.nvic.as_ref().is_some_and(Nvic::has_debug_status)
@@ -7656,15 +7680,8 @@ impl Bus {
             return Ok(u32::from(value));
         }
         // Mapped devices cannot overlap RAM. Try the common RAM access first.
-        if let Some(device) = self
-            .pydevs
-            .iter_mut()
-            .find(|device| device.contains(address.into(), N as u32))
-        {
-            return device
-                .access(address.into(), N as u32, None)
-                .map(|value| value as u32)
-                .map_err(BusError::Python);
+        if let Some(result) = self.access_pydev(address.into(), N as u32, None) {
+            return result.map(|value| value as u32);
         }
         if N == 4 && self.trivial_peripheral_at(address) {
             return Ok(0);
@@ -8515,15 +8532,8 @@ impl Bus {
         {
             return Ok(());
         }
-        if let Some(device) = self
-            .pydevs
-            .iter_mut()
-            .find(|device| device.contains(address.into(), width as u32))
-        {
-            return device
-                .access(address.into(), width as u32, Some(value.into()))
-                .map(|_| ())
-                .map_err(BusError::Python);
+        if let Some(result) = self.access_pydev(address.into(), width as u32, Some(value.into())) {
+            return result.map(|_| ());
         }
         if width == 4 && let Some(power) = self.stm32l0_power.as_mut().filter(|power| power.contains(address)) {
             power.write(address, value);

@@ -281,6 +281,7 @@ enum Fault {
     Bus(Access, BusError),
     Illegal(u32),
     InvalidCsr(u32, String),
+    Abort(String),
     MisalignedTarget(u32),
     Breakpoint(u32),
 }
@@ -327,6 +328,7 @@ impl Fault {
             Self::Illegal(insn) | Self::InvalidCsr(insn, _) => (2, *insn),
             Self::MisalignedTarget(address) => (0, *address),
             Self::Breakpoint(address) => (3, *address),
+            Self::Abort(_) => return None,
         })
     }
 }
@@ -337,6 +339,7 @@ impl std::fmt::Display for Fault {
             Self::Bus(_, error) => error.fmt(f),
             Self::Illegal(insn) => write!(f, "unsupported instruction {insn:#010x}"),
             Self::InvalidCsr(_, error) => f.write_str(error),
+            Self::Abort(error) => f.write_str(error),
             Self::Breakpoint(address) => write!(f, "address breakpoint at {address:#010x}"),
             Self::MisalignedTarget(address) => {
                 write!(f, "misaligned instruction target {address:#010x}")
@@ -972,6 +975,22 @@ impl Machine {
             hart.monitor_single_step = single_step;
         }
         Ok(hart.monitor_single_step)
+    }
+
+    pub(crate) fn install_instruction_hook(&mut self, cpu: &str, mask: u32, opcode: u32, source: &str) -> Result<(), String> {
+        let hart = self.named_hart(cpu)?;
+        if hart.thumb.is_some() || hart.arm32.is_some() || hart.rv64.is_some() {
+            return Err("Python instruction hooks require an RV32 CPU".into());
+        }
+        let slot = hart.slot;
+        if self.bus.instruction_hooks.iter().any(|(cpu, other_mask, other_opcode, _)| {
+            *cpu == slot && (opcode ^ other_opcode) & (mask & other_mask) == 0
+        }) {
+            return Err("overlapping custom instruction patterns".into());
+        }
+        let hook = crate::cpu_python_hook::Hook::with_cpu(source, self.monitor_firmware.clone(), None, cpu)?;
+        self.bus.instruction_hooks.push((slot, mask, opcode, hook));
+        Ok(())
     }
 
     pub(crate) fn monitor_riscv_halted(
@@ -3386,6 +3405,14 @@ impl Hart {
                 Ok(Step::Retired)
             }
             Ok(step) => Ok(step),
+            Err(Fault::Abort(error)) => {
+                self.monitor_halted = true;
+                if bus.suppress_cpu_abort {
+                    Ok(Step::Trap)
+                } else {
+                    Err(error)
+                }
+            }
             Err(fault) => {
                 if let Some(target) = fault
                     .exception()
@@ -3525,6 +3552,26 @@ impl Hart {
         let (encoded, width) = self
             .fetch(bus)
             .map_err(|error| Fault::Bus(Access::Fetch, error))?;
+        if width == 4 && !bus.instruction_hooks.is_empty()
+            && let Some(result) = bus.execute_instruction_hook(self.slot, pc, encoded)
+        {
+            return match result {
+                Ok(()) => {
+                    self.pc = pc.wrapping_add(width);
+                    Ok(Step::Retired)
+                }
+                Err(error) => {
+                    let message = format!("Python runtime error: {error}");
+                    crate::monitor_log::record(3, &message);
+                    crate::monitor_log::record(3, "CPU abort detected, halting.");
+                    if bus.monitor_log_enabled(3) {
+                        eprintln!("{message}");
+                        eprintln!("CPU abort detected, halting.");
+                    }
+                    Err(Fault::Abort(message))
+                }
+            };
+        }
         if let Some(name) = symbols.and_then(|symbols| symbols.get(&pc)) {
             let message = format!("Entering function {name} at 0x{pc:X}");
             crate::monitor_log::record(1, &message);

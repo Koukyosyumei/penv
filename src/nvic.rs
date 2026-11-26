@@ -807,6 +807,16 @@ impl Nvic {
         self.fault_enables & (1 << (exception + 12)) != 0
     }
 
+    pub(crate) fn read_fault_status_part(&self, address: u32, width: usize) -> Option<u32> {
+        let offset = address.checked_sub(BASE + 0xd28)?;
+        if !matches!(width, 1 | 2 | 4) || offset == 0 && width == 4 || offset >= 4 {
+            return None;
+        }
+        let status = u64::from(self.bus_fault_status | self.cfsr) | (u64::from(self.hfsr) << 32);
+        let mask = u32::MAX >> (32 - width * 8);
+        Some((status >> (offset * 8)) as u32 & mask)
+    }
+
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         if width == 4 {
             if let Some(security) = &self.security {

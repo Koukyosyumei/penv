@@ -83,6 +83,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.pending_state = None
         super().begin_case(out)
 
+    def crash_on_abort(self, value):
+        if self.rust_monitor:
+            self.operation(f"SetCrashOnAbort {str(self.log_bool(value)).lower()}")
+        else:
+            super().crash_on_abort(value)
+
     def publish_state(self):
         if self.pending_state:
             state, recipe = self.pending_state

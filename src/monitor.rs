@@ -700,6 +700,8 @@ enum Action {
     ExecutePython(String),
     InvalidPythonSource(String),
     RegisterPyDev(String, u32, u32, bool),
+    SetCrashOnAbort(bool),
+    InstallInstructionHook(String, u32, u32, String),
     PythonAssignment(String, String),
     PythonHook(String, String, Option<String>),
     RecordTo(PathBuf),
@@ -826,6 +828,9 @@ struct BusScalar {
 
 impl BusScalar {
     fn read_value(bus: &mut crate::bus::Bus, address: u64, width: usize) -> Result<u64, String> {
+        if width == 8 && let Some(result) = bus.access_pydev(address, 8, None) {
+            return result.map_err(|error| error.to_string());
+        }
         let address32 = u32::try_from(address)
             .ok()
             .filter(|&address| address.checked_add(width as u32 - 1).is_some());
@@ -898,6 +903,9 @@ impl BusScalar {
             .ok()
             .filter(|&address| address.checked_add(width as u32 - 1).is_some());
         if let Some(value) = value {
+            if width == 8 && let Some(result) = bus.access_pydev(address, 8, Some(value)) {
+                return result.map(|_| ()).map_err(|error| error.to_string());
+            }
             if let Some(address) = address32 && width == 8
                 && bus.riscv_machine_timer.as_mut().and_then(|timer| timer.write(address, width, value)).is_some()
             {
@@ -1001,6 +1009,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
                     | Action::PythonAssignment(..) | Action::ExecutePython(..)
                     | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
+                    | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..)
                     | Action::DefaultLedTimeout(..) | Action::CreateLedTester(..) | Action::AssertLedState(..)
                     | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
@@ -1210,6 +1219,13 @@ fn run_commands<'a>(
             )),
             Action::RegisterPyDev(source, address, size, initable) => machine.bus
                 .map_pydev(source, *address, *size, *initable)
+                .map(|()| None),
+            Action::SetCrashOnAbort(enabled) => {
+                machine.bus.suppress_cpu_abort = !enabled;
+                Ok(None)
+            }
+            Action::InstallInstructionHook(cpu, mask, opcode, source) => machine
+                .install_instruction_hook(cpu, *mask, *opcode, source)
                 .map(|()| None),
             Action::PythonAssignment(name, source) => {
                 let result = session.execute_python(machine, source)?;
@@ -3565,7 +3581,7 @@ fn is_empty_machine_action(action: &Action) -> bool {
         | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::RunFor(_) | Action::RunUntil(_)
         | Action::RunToSyncPoint | Action::SetEmulationPaused(_)
         | Action::ClearMemory | Action::DescribeSnapshotPlatform | Action::InvalidPythonSource(..)
-        | Action::RegisterPyDev(..))
+        | Action::RegisterPyDev(..) | Action::SetCrashOnAbort(..))
 }
 
 pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), String> {
@@ -4920,6 +4936,30 @@ fn execute(
             crate::parse_address(resolve(size)?)?,
             parse_tester_bool(resolve(initable)?)?,
         )),
+        ["SetCrashOnAbort", value] => Some(Action::SetCrashOnAbort(parse_tester_bool(resolve(value)?)?)),
+        [cpu, "InstallCustomInstructionHandlerFromString", pattern, source] => {
+            let pattern = monitor_string(resolve(pattern)?).ok_or("expected quoted opcode pattern")?;
+            if pattern.len() != 32 {
+                return Err("expected a 32-bit custom instruction pattern".into());
+            }
+            let mut mask = 0;
+            let mut opcode = 0;
+            for bit in pattern.bytes() {
+                mask <<= 1;
+                opcode <<= 1;
+                match bit {
+                    b'0' => mask |= 1,
+                    b'1' => {
+                        mask |= 1;
+                        opcode |= 1;
+                    }
+                    b'x' | b'X' | b'?' => {}
+                    _ => return Err("invalid custom instruction pattern character".into()),
+                }
+            }
+            let source = monitor_string(resolve(source)?).ok_or("expected quoted Python source")?;
+            Some(Action::InstallInstructionHook(resolve(cpu)?.trim_start_matches("sysbus.").into(), mask, opcode, source))
+        }
         [target, method @ ("AddHook" | "RemoveHooksAt"), ..]
             if text.contains("`sysbus GetSymbolAddress ")
                 && (*method == "RemoveHooksAt" || text.rsplit_once('`').is_some_and(|(_, body)| body.trim_start().starts_with('"'))) =>
@@ -5921,6 +5961,7 @@ fn execute(
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
                         | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
                         | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
+                        | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..)
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
                         | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuFpuEnabled(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
