@@ -5961,7 +5961,8 @@ fn execute(
     if let Some(action) = action {
         let empty_machine_command = *machine && !boot.has_platform() && is_empty_machine_action(&action);
         if !empty_machine_command && !is_console_action(&action) && !is_monitor_snapshot_action(&action)
-            && !matches!(action, Action::MonitorLog(_) | Action::EmulationIsStarted | Action::AllowPrivates(_))
+            && !matches!(action, Action::MonitorLog(_) | Action::EmulationIsStarted
+                | Action::AllowPrivates(_) | Action::SetCrashOnAbort(_))
             && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
@@ -6026,7 +6027,8 @@ fn execute(
     }
     if boot.started || !matches!(words, ["showAnalyzer", _]) && boot.runtime.iter().any(|entry|
         !is_console_action(&entry.action) && !is_log_capture_setup(&entry.action)
-            && !matches!(entry.action, Action::AllowPrivates(_) | Action::ExecutePython(_) | Action::PythonAssignment(..)))
+            && !matches!(entry.action, Action::AllowPrivates(_) | Action::ExecutePython(_)
+                | Action::PythonAssignment(..) | Action::SetCrashOnAbort(_)))
     {
         if matches!(
             boot.runtime.last().map(|entry| &entry.action),
