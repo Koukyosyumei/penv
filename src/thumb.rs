@@ -1297,6 +1297,80 @@ impl Thumb {
         self.retired_instructions = self.retired_instructions.wrapping_add(count);
     }
 
+    pub(crate) fn stable_polling_period(&self, pc: u32, registers: &[u32; 32], bus: &Bus) -> Option<u64> {
+        if !self.can_repeat_self_branch() {
+            return None;
+        }
+        let fetch = |address| bus.read_quiet_loop_instruction(address);
+        let high = fetch(pc)?;
+        if high == 0xe7fe {
+            return Some(1);
+        }
+        if high & 0xf800 != 0xf000 {
+            return None;
+        }
+        let low = fetch(pc.wrapping_add(2))?;
+        let branch = fetch(pc.wrapping_add(8))?;
+        if low & 0xd000 != 0xd000 || branch & 0xff00 != 0xd300
+            || pc.wrapping_add(12).wrapping_add(((branch as i8 as i32) * 2) as u32) != pc
+        {
+            return None;
+        }
+        let return_address = pc.wrapping_add(4);
+        if registers[14] != return_address | 1 {
+            return None;
+        }
+        let sign = (high >> 10) & 1;
+        let displacement = (sign << 24)
+            | ((1 ^ (((low >> 13) & 1) ^ sign)) << 23)
+            | ((1 ^ (((low >> 11) & 1) ^ sign)) << 22)
+            | ((high & 0x3ff) << 12)
+            | ((low & 0x7ff) << 1);
+        let function = return_address.wrapping_add(((displacement << 7) as i32 >> 7) as u32);
+        let literal = fetch(function)?;
+        let load = fetch(function.wrapping_add(2))?;
+        if literal & 0xf800 != 0x4800 || load & 0xf800 != 0x6800
+            || fetch(function.wrapping_add(4))? != 0x4770
+        {
+            return None;
+        }
+        let pointer = ((literal >> 8) & 7) as usize;
+        if ((load >> 3) & 7) as usize != pointer {
+            return None;
+        }
+        let read = |address| {
+            bus.check_thumb_access(address, 4, false, false).ok()?;
+            bus.read_unobserved_loop_ram(address)
+        };
+        let literal_address = (function.wrapping_add(4) & !3).wrapping_add((literal & 0xff) * 4);
+        let base = read(literal_address)?;
+        let data_address = base.wrapping_add(((load >> 6) & 31) * 4);
+        let sample = read(data_address)?;
+
+        let sub = fetch(return_address)?;
+        let compare = fetch(return_address.wrapping_add(2))?;
+        if sub & 0xfe00 != 0x1a00 || compare & 0xffc0 != 0x4280 {
+            return None;
+        }
+        let mut next = *registers;
+        next[pointer] = base;
+        next[(load & 7) as usize] = sample;
+        next[(sub & 7) as usize] = next[((sub >> 3) & 7) as usize]
+            .wrapping_sub(next[((sub >> 6) & 7) as usize]);
+        if next != *registers {
+            return None;
+        }
+        let lhs = next[(compare & 7) as usize];
+        let rhs = next[((compare >> 3) & 7) as usize];
+        if lhs >= rhs {
+            return None;
+        }
+        let value = lhs.wrapping_sub(rhs);
+        let negative = value >> 31 != 0;
+        let overflow = ((lhs ^ rhs) & (lhs ^ value)) >> 31 != 0;
+        (self.negative == negative && !self.zero && !self.carry && self.overflow == overflow).then_some(7)
+    }
+
     fn signal_event(&mut self) {
         if self.sleep == Sleep::Event {
             self.sleep = Sleep::Running;

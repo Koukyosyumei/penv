@@ -2620,17 +2620,27 @@ impl Bus {
         input_changed
     }
 
-    pub(crate) fn can_batch_thumb_branch(&self, pc: u32) -> bool {
-        self.f4_rcc.is_some() && !self.cpu_hooks.contains_key(&pc)
+    pub(crate) fn can_batch_thumb_polling(&self) -> bool {
+        self.f4_rcc.is_some() && self.cpu_hooks.is_empty()
             && self.thumb_block_hooks.iter().all(Option::is_none)
-            && matches!(self.read_ram::<2>(pc), Ok(0xe7fe))
-            && self.check_thumb_bus_context(pc, 2).is_ok()
-            && self.check_thumb_access(pc, 2, false, true).is_ok()
+            && self.thumb_read_watchpoints.is_empty() && self.traced_memory.is_empty()
+            && self.ram_io_logs.is_empty()
+    }
+
+    pub(crate) fn read_unobserved_loop_ram(&self, address: u32) -> Option<u32> {
+        self.check_thumb_bus_context(address, 4).ok()?;
+        self.read_ram::<4>(address).ok()
+    }
+
+    pub(crate) fn read_quiet_loop_instruction(&self, address: u32) -> Option<u32> {
+        self.check_thumb_bus_context(address, 2).ok()?;
+        self.check_thumb_access(address, 2, false, true).ok()?;
+        self.read_ram::<2>(address).ok()
     }
 
     // Stop before the next modeled clock edge. The ordinary scheduler runs
     // that edge, including capture wiring, DMA and NVIC sampling, in order.
-    pub(crate) fn advance_f4_quiet(&mut self, limit: u64) -> u64 {
+    pub(crate) fn advance_f4_quiet(&mut self, limit: u64, stride: u64) -> u64 {
         if self.f4_rcc.is_none() || self.h7_network_control.is_some()
             || !self.nrf_peripherals.is_empty() || self.has_rv64_ethernet_link()
             || self.litex_uart.is_some() || self.uart.is_some() || !self.pl011_uarts.is_empty() || self.stm32_rtc.is_some()
@@ -2666,6 +2676,7 @@ impl Bus {
         for rtc in self.h7_rtc.iter().filter(|rtc| clocked(rtc.base)) {
             quiet = rtc.quiet_steps(quiet, rate);
         }
+        let quiet = quiet - quiet % stride;
         if quiet < 2 {
             return 0;
         }

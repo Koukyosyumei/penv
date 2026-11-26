@@ -2280,18 +2280,22 @@ impl Machine {
         }
         let Some(thumb) = self.primary.thumb.as_mut() else { return (0, 0) };
         let pc = self.primary.pc;
-        let branch = thumb.can_repeat_self_branch()
-            && self.primary.busy_wait.is_none()
+        let period = if !thumb.sleeping() && self.primary.busy_wait.is_none()
             && self.primary.monitor_hooks.is_empty() && self.python_hooks.is_empty()
-            && self.bus.can_batch_thumb_branch(pc);
-        if !thumb.sleeping() && !branch {
+            && self.bus.can_batch_thumb_polling()
+        {
+            thumb.stable_polling_period(pc, &self.primary.registers, &self.bus)
+        } else {
+            None
+        };
+        if !thumb.sleeping() && period.is_none() {
             return (0, 0);
         }
-        let quiet = self.bus.advance_f4_quiet(remaining);
-        if branch {
+        let quiet = self.bus.advance_f4_quiet(remaining, period.unwrap_or(1));
+        if period.is_some() {
             thumb.retire_repeated_branch(quiet);
         }
-        (quiet, if branch { quiet } else { 0 })
+        (quiet, if period.is_some() { quiet } else { 0 })
     }
 
     fn run_selected<W: Write>(
