@@ -1721,11 +1721,17 @@ impl Machine {
                 plic.load_snapshot(input)?;
             }
             let has_reset_pin = version >= 5 && read_bool(read_words::<1>(input)?[0])?;
-            if has_reset_pin != self.bus.rv64_devices.starlight_reset_pin.is_some() {
-                return Err(invalid("StarLight reset pin layout differs from the platform"));
+            if has_reset_pin && self.bus.rv64_devices.starlight_reset_pin.is_none() {
+                return Err(invalid("StarLight reset pin is missing from the restored platform"));
             }
-            let reset_pin = has_reset_pin.then(|| crate::rv64_starfive::StarLightResetPin::read_snapshot(input))
-                .transpose()?;
+            let reset_pin = if has_reset_pin {
+                Some(crate::rv64_starfive::StarLightResetPin::read_snapshot(input)?)
+            } else {
+                // Older generated StarLight REPLs could omit the reset pin
+                // because its board model was selected only by the filename.
+                self.bus.rv64_devices.starlight_reset_pin.as_ref()
+                    .map(|_| crate::rv64_starfive::StarLightResetPin::default())
+            };
             let ethernet_count = if version >= 6 { read_words::<1>(input)?[0] } else { 0 };
             if ethernet_count != self.bus.rv64_devices.ethernet.len() as u64 {
                 return Err(invalid("Ethernet snapshot layout differs from the platform"));
