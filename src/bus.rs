@@ -5984,17 +5984,17 @@ impl Bus {
             }
         }
         let step_rate = self.step_hz();
-        for rtc in &mut self.andes_rtc {
+        for rtc in &self.andes_rtc {
             if let Some((controller, source)) = rtc.irq {
                 self.plics[controller].1.set_line(source, rtc.interrupt());
             }
         }
-        for watchdog in &mut self.andes_watchdogs {
+        for watchdog in &self.andes_watchdogs {
             if let Some((controller, source)) = watchdog.irq {
                 self.plics[controller].1.set_line(source, watchdog.interrupt());
             }
         }
-        for pit in &mut self.andes_pit {
+        for pit in &self.andes_pit {
             if let Some((controller, source)) = pit.irq {
                 let (name, plic) = &mut self.plics[controller];
                 if plic.line_is_asserted(source) != pit.interrupt() {

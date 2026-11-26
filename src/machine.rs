@@ -564,6 +564,10 @@ impl Machine {
         self.egis_reset_cpu = Some(Box::new(self.primary.clone()));
     }
 
+    pub(crate) fn is_egis_platform(&self) -> bool {
+        self.egis_reset_cpu.is_some()
+    }
+
     pub(crate) fn set_egis_reset_entry(&mut self, entry: Option<(&str, u32)>) {
         if self.egis_reset_cpu.is_some() {
             self.egis_reset_entry = entry
