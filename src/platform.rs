@@ -1370,13 +1370,13 @@ fn load_platform(
                 _ => unreachable!(),
             }
         }
-        if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) {
-            return Err(entry.error("expected Cortex-M0 or Cortex-M0+ cpuType"));
+        let cortex_m4f = cpu_type == Some(r#""cortex-m4f""#);
+        if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) && !cortex_m4f {
+            return Err(entry.error("expected Cortex-M0, Cortex-M0+ or Cortex-M4F cpuType"));
         }
-        machine
-            .bus
-            .map_stm32f072_flash()
-            .map_err(|e| entry.error(&e))?;
+        if !cortex_m4f {
+            machine.bus.map_stm32f072_flash().map_err(|error| entry.error(&error))?;
+        }
         machine.bus.map_systick().map_err(|e| entry.error(&e))?;
         let mut priority = None;
         let mut frequency = None;
@@ -1416,7 +1416,11 @@ fn load_platform(
         }
         machine.bus.refresh_stm32l0_clock();
         let mut uart_irq = None;
-        if let Some(uart) = uart {
+        if let Some(uart) = uart.filter(|uart| uart.model == "UART.TrivialUart") {
+            keys(uart, &[])?;
+            machine.bus.map_trivial_uart(uart.address()?, &uart.name)
+                .map_err(|error| uart.error(&error))?;
+        } else if let Some(uart) = uart {
             if uart.model != "UART.LiteX_UART" {
                 return Err(uart.error("unsupported Cortex-M UART model"));
             }
@@ -2304,7 +2308,7 @@ fn load_platform(
         }
         machine
             .bus
-            .map_nvic(priority.unwrap_or(0xc0), uart_irq)
+            .map_nrf_nvic(priority.unwrap_or(if cortex_m4f { 0xe0 } else { 0xc0 }), uart_irq, cortex_m4f)
             .map_err(|e| entry.error(&e))?;
         machine
             .bus
@@ -2316,7 +2320,7 @@ fn load_platform(
             machine.bus.set_nvic_name(controller.name.clone());
         }
         machine.primary.name = Some(entry.name.clone());
-        machine.primary.configure_cortex_m(vectors, false);
+        machine.primary.configure_cortex_m(vectors, cortex_m4f);
         machine.set_cortex_m_cpu_wait(&entry.name, cpu_wait)?;
         return Ok(machine);
     }

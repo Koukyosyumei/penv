@@ -489,7 +489,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 nrf_peripherals.push(entry)
             }
             "UART.STM32F7_USART" => stm32_uarts.push(entry),
-            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart" => {
+            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart"
+                if entry.model != "UART.TrivialUart" || cortex_m4 =>
+            {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
                 }
