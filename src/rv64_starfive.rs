@@ -1,4 +1,5 @@
 // JH7100 reset banks provided by the upstream REPL's Python peripherals.
+#[derive(Clone)]
 pub struct ResetGenerator {
     pub base: u32,
     asserted: [u32; 4],
@@ -21,6 +22,23 @@ impl ResetGenerator {
             status_invert,
             words,
         })
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[u64::from(self.base), self.words as u64])?;
+        write_words(output, &self.asserted.map(u64::from))
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_words};
+        if read_words::<2>(input)? != [u64::from(self.base), self.words as u64] {
+            return Err(invalid("reset generator snapshot differs from the platform"));
+        }
+        for (word, value) in self.asserted.iter_mut().zip(read_words::<4>(input)?) {
+            *word = u32::try_from(value).map_err(std::io::Error::other)?;
+        }
+        Ok(())
     }
 
     pub fn size(&self) -> u64 {

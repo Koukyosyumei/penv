@@ -7006,10 +7006,10 @@ impl Bus {
                 write_words(output, &[0; 5])?;
             }
         }
-        self.save_memory(output)
+        self.save_sparse_memory(output)
     }
 
-    pub(crate) fn load_rv64_memory_snapshot(&mut self, input: &mut impl Read) -> io::Result<()> {
+    pub(crate) fn load_rv64_memory_snapshot(&mut self, input: &mut impl Read, version: u8) -> io::Result<()> {
         use crate::snapshot::{invalid, read_bool, read_words};
         let [count] = read_words(input)?;
         if count != self.aliases.len() as u64 {
@@ -7046,7 +7046,14 @@ impl Bus {
                 *slot = Some(Reservation64 { guest, backing: backing as usize, offset: offset as usize, width: width as usize });
             }
         }
-        self.restore_memory(input)?;
+        if version >= 9 {
+            let contents = self.read_sparse_memory(input)?;
+            for (region, contents) in self.regions.iter_mut().zip(contents) {
+                region.bytes = contents;
+            }
+        } else {
+            self.restore_memory(input)?;
+        }
         for (alias, base) in self.aliases.iter_mut().zip(bases) {
             alias.base = base;
         }
@@ -7122,6 +7129,11 @@ impl Bus {
         for uart in &self.pl011_uarts {
             uart.save_snapshot(output)?;
         }
+        self.save_sparse_memory(output)
+    }
+
+    fn save_sparse_memory(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::write_words;
         write_words(output, &[self.regions.len() as u64])?;
         let zero_page = [0; 4096];
         for region in &self.regions {
@@ -7152,6 +7164,21 @@ impl Bus {
         for uart in &mut uarts {
             uart.load_snapshot(input)?;
         }
+        let contents = self.read_sparse_memory(input)?;
+        for (region, contents) in self.regions.iter_mut().zip(contents) {
+            region.bytes = contents;
+        }
+        if let Some(testers) = testers {
+            self.restore_uart_testers_snapshot(testers);
+        }
+        self.arm_events = events;
+        self.arm_gic = Some(gic);
+        self.pl011_uarts = uarts;
+        Ok(())
+    }
+
+    fn read_sparse_memory(&self, input: &mut impl Read) -> io::Result<Vec<Vec<u8>>> {
+        use crate::snapshot::{invalid, read_words};
         let [regions] = read_words(input)?;
         if regions != self.regions.len() as u64 {
             return Err(invalid("snapshot RAM count differs from the platform"));
@@ -7182,16 +7209,7 @@ impl Bus {
         if input.read(&mut [0])? != 0 {
             return Err(invalid("trailing snapshot data"));
         }
-        for (region, contents) in self.regions.iter_mut().zip(contents) {
-            region.bytes = contents;
-        }
-        if let Some(testers) = testers {
-            self.restore_uart_testers_snapshot(testers);
-        }
-        self.arm_events = events;
-        self.arm_gic = Some(gic);
-        self.pl011_uarts = uarts;
-        Ok(())
+        Ok(contents)
     }
 
     pub fn save_memory(&self, output: &mut impl Write) -> io::Result<()> {

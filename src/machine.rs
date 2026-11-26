@@ -1652,6 +1652,10 @@ impl Machine {
             for ethernet in &self.bus.rv64_devices.ethernet {
                 ethernet.save_snapshot(output)?;
             }
+            write_words(output, &[self.bus.rv64_devices.reset_generators.len() as u64])?;
+            for reset in &self.bus.rv64_devices.reset_generators {
+                reset.save_snapshot(output)?;
+            }
             self.bus.save_uart_testers(output)?;
             self.bus.save_rv64_memory_snapshot(output)
         };
@@ -1726,13 +1730,22 @@ impl Machine {
             }
             let ethernet = self.bus.rv64_devices.ethernet.iter()
                 .map(|device| device.read_snapshot(input)).collect::<std::io::Result<Vec<_>>>()?;
+            let reset_count = if version >= 10 { read_words::<1>(input)?[0] } else { 0 };
+            let mut reset_generators = self.bus.rv64_devices.reset_generators.clone();
+            if reset_count != reset_generators.len() as u64 {
+                return Err(invalid("reset generator snapshot layout differs from the platform"));
+            }
+            for reset in &mut reset_generators {
+                reset.load_snapshot(input)?;
+            }
             let testers = (version >= 8).then(|| self.bus.read_uart_testers_snapshot(input, 4096))
                 .transpose()?;
-            self.bus.load_rv64_memory_snapshot(input)?;
+            self.bus.load_rv64_memory_snapshot(input, version)?;
             if let Some(testers) = testers {
                 self.bus.restore_uart_testers_snapshot(testers);
             }
             self.bus.rv64_devices.ethernet = ethernet;
+            self.bus.rv64_devices.reset_generators = reset_generators;
             self.bus.rv64_devices.starlight_reset_pin = reset_pin;
             self.bus.clint = clint;
             self.bus.rv64_devices.plic = plic;

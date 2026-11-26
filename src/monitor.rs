@@ -293,13 +293,21 @@ enum SnapshotPlatform {
     File(PathBuf),
 }
 
+fn skip_multi_snapshot_frame_header(input: &mut impl BufRead) -> Result<(), String> {
+    if input.fill_buf().map_err(|error| error.to_string())?.starts_with(MULTI_SNAPSHOT) {
+        input.consume(MULTI_SNAPSHOT.len());
+        let [length] = crate::snapshot::read_words(input).map_err(|error| error.to_string())?;
+        if length < crate::snapshot::RV64_MAGIC.len() as u64 {
+            return Err("invalid multi-machine snapshot frame".into());
+        }
+    }
+    Ok(())
+}
+
 fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<SnapshotPlatform>), String> {
     let mut input = open_snapshot_input(path)?;
     let metadata = read_snapshot_metadata(&mut input)?;
-    if input.fill_buf().map_err(|error| error.to_string())?.starts_with(MULTI_SNAPSHOT) {
-        input.consume(MULTI_SNAPSHOT.len());
-        crate::snapshot::read_words::<1>(&mut input).map_err(|error| error.to_string())?;
-    }
+    skip_multi_snapshot_frame_header(&mut input)?;
     let header = input.fill_buf().map_err(|error| error.to_string())?;
     if header.starts_with(crate::snapshot::CORTEX_MAGIC) {
         let metadata = metadata.ok_or("Cortex-M snapshot requires monitor metadata")?;
@@ -4604,7 +4612,8 @@ fn inspect_snapshot_input(path: &Path) -> Option<String> {
     }
     let mut input = io::BufReader::new(file);
     read_snapshot_metadata(&mut input)
-        .and_then(|_| Machine::validate_boot_snapshot_header(&mut input))
+        .and_then(|_| skip_multi_snapshot_frame_header(&mut input))
+        .and_then(|()| Machine::validate_boot_snapshot_header(&mut input))
         .err()
         .map(|reason| format!(
             "This snapshot is incompatible or the emulation's state is corrupted: {}: {reason}",
@@ -7653,6 +7662,43 @@ emulation GetTimeSourceInfo
                 "Elapsed Virtual Time: 00:00:00.001000000\nQuantum: 00:00:00.001000000\n",
             ).as_bytes());
         }
+    }
+
+    #[test]
+    fn rv64_multi_snapshot_restores_machine_order_and_isolated_ram() {
+        let directory = std::env::temp_dir().join(format!("penv-rv64-multi-snapshot-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let dir = GeneratedRepl(directory);
+        let snapshot = dir.0.join("state.save");
+        let platform = dir.0.join("board.repl");
+        fs::write(&platform, concat!(
+            "cpu: CPU.RiscV64 @ sysbus { cpuType: \"rv64gc\"; timeProvider: empty }\n",
+            "ram: Memory.MappedMemory @ sysbus 0x80000000 { size: 0x1000 }\n",
+        )).unwrap();
+
+        let fresh = || {
+            let mut machine = crate::platform::load_monitor_configuration(&platform, &dir.0, None).unwrap();
+            machine.monitor_platform = Some(platform.clone());
+            machine.set_monitor_cpu_rate(100).unwrap();
+            machine
+        };
+        let mut active = fresh();
+        let mut other = fresh();
+        active.bus.memory64(0x8000_0000, 1).unwrap()[0] = 19;
+        other.bus.memory64(0x8000_0000, 1).unwrap()[0] = 42;
+        let mut session = Session { machine: Some("two".into()), ..Session::default() };
+        session.named_machines.order = vec!["one".into(), "two".into()];
+        session.named_machines.detached.insert("one".into(), other);
+        session.save(&active, &snapshot).unwrap();
+        assert_eq!(inspect_snapshot_input(&snapshot), None);
+
+        let mut restored = fresh();
+        let mut session = Session { machine: Some("two".into()), ..Session::default() };
+        session.load(&mut restored, &snapshot).unwrap();
+        assert_eq!(session.named_machines.order, ["one", "two"]);
+        assert_eq!(restored.bus.memory64(0x8000_0000, 1).unwrap(), [19]);
+        session.select_named_machine(&mut restored, "0").unwrap();
+        assert_eq!(restored.bus.memory64(0x8000_0000, 1).unwrap(), [42]);
     }
 
     #[test]

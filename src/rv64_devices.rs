@@ -56,7 +56,7 @@ pub(crate) struct DeviceSnapshot {
 impl Devices {
     pub(crate) fn supports_snapshot(&self) -> bool {
         self.ethernet.iter().all(Ethernet::supports_snapshot) && self.gems.is_empty()
-            && self.reset_generators.is_empty() && self.mpfs_i2c.is_empty() && self.mpfs_qspi.is_empty()
+            && self.mpfs_i2c.is_empty() && self.mpfs_qspi.is_empty()
             && self.mpfs_gpio.is_empty() && self.mpfs_usb.is_empty() && self.fire_ihc.is_none()
             && self.mpfs_sd.is_empty() && self.mpfs_watchdogs.is_empty() && self.mpfs_spi.is_empty()
             && self.mpfs_ddr.is_empty() && self.mpfs_sysreg.is_none() && self.mpfs_cache_way_enable.is_none()
