@@ -30,6 +30,7 @@ pub struct Rv64 {
     pub(crate) trace_amo: bool,
     pub(crate) atomic_trace: Option<AtomicTrace>,
     pub(crate) stack_access_trace_name: Option<String>,
+    renode_packw: bool,
     pub pc: u64,
     reset_vector: u64,
     reset_vector_configured: bool,
@@ -230,6 +231,7 @@ impl Rv64 {
             trace_amo: false,
             atomic_trace: None,
             stack_access_trace_name: None,
+            renode_packw: false,
             pc: u64::from(RAM_BASE),
             reset_vector: u64::from(RAM_BASE),
             reset_vector_configured: false,
@@ -259,6 +261,7 @@ impl Rv64 {
     }
 
     pub(crate) fn initialize_monitor_reset_pc(&mut self) {
+        self.renode_packw = true;
         self.privilege.initialize_renode_reset_status(self.isa.single || self.isa.double);
         // Renode's vector configuration and memory helpers check the ISA
         // extensions directly. Its vector CSR handlers still check mstatus.VS.
@@ -668,7 +671,7 @@ impl Rv64 {
             ),
             0x33 | 0x3b => Some(
                 register_alu(fields, lhs, rhs, self.isa.multiply)
-                    .or_else(|| bitmanip::register(self.isa, fields, lhs, rhs))
+                    .or_else(|| bitmanip::register(self.isa, fields, lhs, rhs, self.renode_packw))
                     .ok_or(illegal)?,
             ),
             opcode @ (0x0b | 0x2b) if self.isa.xandesperf => {

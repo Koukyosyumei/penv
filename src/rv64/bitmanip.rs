@@ -91,7 +91,7 @@ pub(super) fn immediate(isa: Isa, fields: Instruction, lhs: u64) -> Option<u64> 
     None
 }
 
-pub(super) fn register(isa: Isa, fields: Instruction, lhs: u64, rhs: u64) -> Option<u64> {
+pub(super) fn register(isa: Isa, fields: Instruction, lhs: u64, rhs: u64, renode_packw: bool) -> Option<u64> {
     let ext = isa.bitmanip;
     let word = fields.opcode() == 0x3b;
     let funct3 = fields.funct3();
@@ -110,10 +110,9 @@ pub(super) fn register(isa: Isa, fields: Instruction, lhs: u64, rhs: u64) -> Opt
             (false, 4, 0x04) => return Some((rhs << 32) | u64::from(lhs as u32)),
             (false, 7, 0x04) => return Some((u64::from(rhs as u8) << 8) | u64::from(lhs as u8)),
             (true, 4, 0x04) => {
-                return Some(sign(
-                    (u64::from(rhs as u16) << 16) | u64::from(lhs as u16),
-                    32,
-                ));
+                let packed = (u64::from(rhs as u16) << 16) | u64::from(lhs as u16);
+                // The pinned Renode translator zero-extends PACKW.
+                return Some(if renode_packw { packed } else { sign(packed, 32) });
             }
             _ => {}
         }
