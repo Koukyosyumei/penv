@@ -387,6 +387,7 @@ pub struct Bus {
     unimplemented_register_peripherals: Vec<(u32, String)>,
     pub monitor_user_state: String,
     pub(crate) csr_hooks: BTreeMap<(usize, u32), crate::cpu_python_hook::Hook>,
+    pub(crate) thumb_block_hooks: [Option<crate::cpu_python_hook::Hook>; 2],
     pub(crate) stack_access_hooks: BTreeMap<usize, crate::cpu_python_hook::Hook>,
     traceable_memory: Vec<(String, Vec<u32>, u32)>,
     traced_memory: Vec<(u32, u32, String)>,
@@ -3953,7 +3954,7 @@ impl Bus {
         }
     }
 
-    fn validate_nvic_name(&self, target: &str) -> Result<(), String> {
+    pub(crate) fn validate_nvic_name(&self, target: &str) -> Result<(), String> {
         let name = target.strip_prefix("sysbus.").unwrap_or(target);
         if self.nvic.is_none() || self.nvic_name.as_deref() != Some(name) {
             return Err(format!("unknown Cortex-M NVIC {target:?}"));
@@ -7187,6 +7188,14 @@ impl Bus {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) fn execute_thumb_block_hook(&mut self, end: bool, pc: u32, it: u8) -> Result<(), String> {
+        let index = usize::from(end);
+        let Some(mut hook) = self.thumb_block_hooks[index].take() else { return Ok(()) };
+        let result = hook.execute_thumb_block(self, pc, it);
+        self.thumb_block_hooks[index] = Some(hook);
+        result
     }
 
     pub fn apply_cpu_hooks(&mut self, pc: u32, output: &mut impl Write) -> Result<bool, BusError> {

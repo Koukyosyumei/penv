@@ -588,6 +588,10 @@ enum Action {
     AddCsrHook(String, u32, String),
     VectorRegisterLength(String, u64),
     CpuCondition(String, u32),
+    CpuBlockSize(String, u32),
+    CpuBlockHook(String, bool, String),
+    CpuWillExecuteIt(String, u8),
+    NvicPriorityBoost(String, bool),
     CpuXpsr(String),
     CpuWait(String, bool),
     CpuPaused(String, Option<bool>),
@@ -847,6 +851,8 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
                     | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..) | Action::BusScalar(_)
+                    | Action::LoadScopedHex(..) | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
+                    | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
@@ -1269,7 +1275,7 @@ fn run_commands<'a>(
                 machine.monitor_quantum = *duration;
                 Ok(None)
             }
-            Action::CpuStep(cpu, count) if machine.is_cortex_m55() => {
+            Action::CpuStep(cpu, count) if machine.has_thumb2_cpu() => {
                 machine.prepare_monitor_cortex_step(cpu)?;
                 let before = machine.cortex_m_cpu(cpu)?.executed_instructions();
                 let start = machine.elapsed_steps();
@@ -1338,6 +1344,33 @@ fn run_commands<'a>(
                     })
                 })
             }
+            Action::CpuBlockSize(cpu, count) => {
+                if *count == 0 {
+                    return Err("MaximumBlockSize requires a positive instruction count".into());
+                }
+                machine.cortex_m_cpu(cpu)?;
+                Ok(None)
+            }
+            Action::CpuBlockHook(cpu, end, source) => {
+                machine.cortex_m_cpu(cpu)?;
+                let hook = crate::cpu_python_hook::Hook::with_cpu(
+                    source, machine.monitor_firmware.clone(), Some(cpu.clone()), cpu,
+                )?;
+                machine.bus.thumb_block_hooks[usize::from(*end)] = Some(hook);
+                Ok(None)
+            }
+            Action::CpuWillExecuteIt(cpu, it) => {
+                let thumb = machine.cortex_m_cpu(cpu)?;
+                let execute = it & 15 == 0 || thumb.condition(u32::from(it >> 4));
+                writeln!(output.reply(), "{}", if execute { "True" } else { "False" })
+                    .map_err(|error| error.to_string())?;
+                Ok(None)
+            }
+            Action::NvicPriorityBoost(target, ignore_primask) => {
+                let boost = machine.monitor_nvic_priority_boost(target, *ignore_primask)?;
+                writeln!(output.reply(), "{boost}").map_err(|error| error.to_string())?;
+                Ok(None)
+            }
             Action::CpuCondition(cpu, condition) => machine.cortex_m_cpu(cpu).and_then(|thumb| {
                 let result = if thumb.condition(*condition) {
                     "True"
@@ -1395,6 +1428,10 @@ fn run_commands<'a>(
                         .push((address.unwrap_or(hart.pc), hook.clone()));
                     None
                 })
+            }
+            Action::ClicGpio(name, id, asserted) if machine.is_cortex_m() => {
+                let line = u8::try_from(*id).ok().filter(|&line| line < 32).ok_or("expected NVIC IRQ line 0 through 31")?;
+                machine.bus.drive_nvic_line(name, line, *asserted).map(|()| None)
             }
             Action::ClicGpio(name, id, asserted) => machine.bus.clic.as_mut()
                 .filter(|clic| clic.name == *name)
@@ -5162,6 +5199,23 @@ fn execute(
                 .transpose()?.unwrap_or(1);
             Some(Action::CpuStep(cpu.trim_start_matches("sysbus.").into(), count))
         }
+        [target, "MaximumBlockSize", count] => Some(Action::CpuBlockSize(
+            resolve(target)?.trim_start_matches("sysbus.").into(), crate::parse_address(resolve(count)?)?,
+        )),
+        [target, property @ ("SetHookAtBlockBegin" | "SetHookAtBlockEnd"), source] => {
+            let source = monitor_string(resolve(source)?).ok_or("expected quoted block hook")?;
+            Some(Action::CpuBlockHook(
+                resolve(target)?.trim_start_matches("sysbus.").into(),
+                *property == "SetHookAtBlockEnd", source,
+            ))
+        }
+        [target, "WillNextItInstructionExecute", state] => Some(Action::CpuWillExecuteIt(
+            resolve(target)?.trim_start_matches("sysbus.").into(), u8::try_from(crate::parse_address(resolve(state)?)?)
+                .map_err(|_| "ITSTATE exceeds eight bits")?,
+        )),
+        [target, "GetPriorityBoost", ignore_primask] => Some(Action::NvicPriorityBoost(
+            resolve(target)?.into(), parse_tester_bool(resolve(ignore_primask)?)?,
+        )),
         [target, "EvaluateConditionCode", condition] => {
             let cpu = resolve(target)?;
             let condition = crate::parse_address(resolve(condition)?)?;
@@ -5461,7 +5515,9 @@ fn execute(
                         | Action::ReadCpuPc(_)
                         | Action::ExecutionMode(..)
                         | Action::CpuPc(..)
-                        | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuMips(..) | Action::ReadCpuMips(..)
+                        | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuMips(..)
+                        | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
+                        | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)

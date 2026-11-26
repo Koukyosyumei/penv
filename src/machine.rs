@@ -1176,9 +1176,15 @@ impl Machine {
         self.primary.thumb.is_some()
     }
 
-    pub(crate) fn is_cortex_m55(&self) -> bool {
-        self.primary.thumb.as_ref().is_some_and(|thumb| thumb.cortex_m55)
+    pub(crate) fn has_thumb2_cpu(&self) -> bool {
+        self.primary.thumb.as_ref().is_some_and(|thumb| thumb.thumb2)
     }
+
+    pub(crate) fn monitor_nvic_priority_boost(&self, target: &str, ignore_primask: bool) -> Result<i16, String> {
+        self.bus.validate_nvic_name(target)?;
+        Ok(self.primary.thumb.as_ref().ok_or("NVIC requires a Cortex-M CPU")?.priority_boost(ignore_primask))
+    }
+
 
     pub(crate) fn cortex_m_sleeping(&self) -> bool {
         self.primary.thumb.as_ref().is_some_and(Thumb::sleeping)
@@ -2029,7 +2035,7 @@ impl Machine {
                         missed = 0;
                     }
                     (Stop::Limit, 0) => {
-                        if self.is_cortex_m55() && (self.cortex_m_locked_up() || self.cortex_m_sleeping()) {
+                        if self.has_thumb2_cpu() && (self.cortex_m_locked_up() || self.cortex_m_sleeping()) {
                             break;
                         }
                         missed += 1;

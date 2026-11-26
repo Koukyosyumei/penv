@@ -594,7 +594,9 @@ fn load_platform(
             )
         })?;
     }
-    if !require_ram && scoped_nvic::matches(&entries) {
+    if scoped_nvic::matches(&entries) && (!require_ram || entries.iter().any(|entry| {
+        matches!(entry.model.as_str(), "Memory.MappedMemory" | "Memory.ArrayMemory")
+    })) {
         return scoped_nvic::construct(&entries);
     }
     apply_repl_overrides(&mut entries)?;
@@ -1382,7 +1384,7 @@ fn load_platform(
             }
         }
         let cortex_m55 = cpu_type == Some(r#""cortex-m55""#);
-        let cortex_m4f = cpu_type == Some(r#""cortex-m4f""#) || cortex_m55;
+        let cortex_m4f = matches!(cpu_type, Some(r#""cortex-m4""# | r#""cortex-m4f""#)) || cortex_m55;
         if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) && !cortex_m4f {
             return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4F or Cortex-M55 cpuType"));
         }

@@ -65,9 +65,21 @@ class Machine:
             raise TypeError('UserState must be a string')
         rpc('set ' + value.encode().hex())
 
+class HexValue(int):
+    def __str__(self):
+        return hex(self)
+
 class CPU(Credential):
     Bus = Machine.SystemBus
     Machine = Machine()
+    @property
+    def PC(self):
+        return HexValue(scope['pc'])
+    def GetItState(self):
+        state = scope.get('itstate', 0)
+        if state == 0:
+            self.DebugLog('Checking IT_STATE, while not in IT block')
+        return state
     def DebugLog(self, message, *args):
         self.Log(0, message, *args)
     def Log(self, level, message, *args):
@@ -93,6 +105,8 @@ for line in sys.stdin:
         if request.IsWrite:
             request.Value = int(fields[3])
         scope['request'] = request
+    elif fields[0] == 'thumb-block':
+        scope.update(pc=int(fields[1]), itstate=int(fields[2]))
     elif not is_monitor:
         scope['pc'] = int(fields[0])
         if len(fields) == 4:
@@ -192,6 +206,10 @@ impl Hook {
     pub(crate) fn execute_monitor(&mut self, bus: &mut Bus) -> Result<String, String> {
         self.invoke(bus, format_args!("monitor"))?;
         Ok(std::mem::take(&mut self.monitor_output))
+    }
+
+    pub(crate) fn execute_thumb_block(&mut self, bus: &mut Bus, pc: u32, it: u8) -> Result<(), String> {
+        self.invoke(bus, format_args!("thumb-block {pc} {it}")).map(|_| ())
     }
 
     pub(crate) fn execute_stack(&mut self, bus: &mut Bus, pc: u64, address: u64, width: usize, write: bool) -> Result<(), String> {

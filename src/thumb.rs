@@ -769,7 +769,7 @@ impl Thumb {
         }
     }
 
-    fn priority_boost(&self, ignore_primask: bool) -> i16 {
+    pub(crate) fn priority_boost(&self, ignore_primask: bool) -> i16 {
         if self.faultmask {
             -1
         } else if self.interrupts_masked && !ignore_primask {
@@ -1460,6 +1460,7 @@ impl Thumb {
             let fault_pc = *pc;
             let fault_itstate = self.itstate;
             bus.thumb_negative_priority = self.faultmask || matches!(self.active_exception, NMI | HARDFAULT);
+            bus.execute_thumb_block_hook(false, *pc, self.itstate)?;
             let step = bus.thumb_fetch(*pc).map_err(InstructionError::Host)
                 .and_then(|instruction| self.step_fetched(instruction, pc, r, bus, output));
             if let Some(address) = bus.take_thumb_data_fault() {
@@ -1487,6 +1488,7 @@ impl Thumb {
             return match step {
                 Ok(true) => {
                     self.retired_instructions = self.retired_instructions.wrapping_add(1);
+                    bus.execute_thumb_block_hook(true, *pc, self.itstate)?;
                     Ok(ThumbStep::Retired)
                 }
                 Ok(false) => Ok(ThumbStep::Breakpoint),
@@ -1498,6 +1500,9 @@ impl Thumb {
                 _ => Err("Thumb instruction fault".into()),
             };
         }
+        if !self.invalid_thumb_state {
+            bus.execute_thumb_block_hook(false, *pc, self.itstate)?;
+        }
         let result = if self.invalid_thumb_state {
             Err(InstructionError::GuestFault)
         } else {
@@ -1508,6 +1513,7 @@ impl Thumb {
         match result {
             Ok(true) => {
                 self.retired_instructions = self.retired_instructions.wrapping_add(1);
+                bus.execute_thumb_block_hook(true, *pc, self.itstate)?;
                 Ok(ThumbStep::Retired)
             }
             Ok(false) => Ok(ThumbStep::Breakpoint),
