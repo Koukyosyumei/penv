@@ -448,6 +448,11 @@ pub struct Uart {
 }
 
 impl Uart {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+
     pub fn new(
         name: String,
         base: u32,

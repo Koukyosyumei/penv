@@ -542,6 +542,8 @@ enum Action {
     FindBytes(FindBytes),
     BusScalar(BusScalar),
     ContextBusScalar(BusScalar, String),
+    DisassembleBlock(String, u64, usize),
+    BusWhatIsAt(u64, Option<String>),
     RecordTo(PathBuf),
     PlayFrom(PathBuf),
     RtcMode(RtcMode),
@@ -686,6 +688,34 @@ impl BusScalar {
             _ => bus.thumb_read::<4>(address),
         }?;
         self.number_mode.print(u64::from(value), self.width, output)
+    }
+
+    fn apply_rv64_context(
+        &self, bus: &mut crate::bus::Bus, hart: usize, output: &mut impl Write,
+    ) -> Result<(), String> {
+        let address = self.address;
+        let width = self.width;
+        let value = if let Some(value) = self.value {
+            if let Some(memory) = bus.cpu_memory64(hart, address, width) {
+                memory.copy_from_slice(&value.to_le_bytes()[..width]);
+                bus.observe_memory_store(address, width, value);
+            } else if let Ok(address) = u32::try_from(address)
+                && width <= 4
+                && let Some(result) = bus.write_rv64_peripheral(hart, address, width, value as u32, output)
+            {
+                result.map_err(|error| error.to_string())?;
+            }
+            return Ok(());
+        } else if let Some(memory) = bus.cpu_ram64(hart, address, width) {
+            let mut bytes = [0; 8];
+            bytes[..width].copy_from_slice(memory);
+            u64::from_le_bytes(bytes)
+        } else if let Ok(address) = u32::try_from(address) && width <= 4 {
+            u64::from(bus.rv64_devices.read_for_hart(hart, address, width).unwrap_or(0))
+        } else {
+            0
+        };
+        self.number_mode.print(value, width, output)
     }
 
     fn apply(&self, bus: &mut crate::bus::Bus, output: &mut impl Write) -> Result<(), String> {
@@ -935,13 +965,53 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::ContextBusScalar(access, context) => {
-                machine.validate_monitor_bus_context(context)?;
                 let readback = if machine.is_cortex_m() {
+                    machine.validate_monitor_bus_context(context)?;
                     access.apply_cortex_context(&mut machine.bus, &mut output.reply())
+                } else if let Ok(hart) = machine.monitor_bus_hart(context) {
+                    access.apply_rv64_context(&mut machine.bus, hart, &mut output.reply())
                 } else {
+                    machine.validate_monitor_bus_context(context)?;
                     access.apply(&mut machine.bus, &mut output.reply())
                 };
                 readback.map(|()| None)
+            }
+            Action::DisassembleBlock(cpu, address, length) => {
+                let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
+                let bytes = match hart {
+                    Some(hart) => machine.bus.cpu_ram64(hart, *address, *length),
+                    None => machine.bus.ram64(*address, *length),
+                }.ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
+                use std::fmt::Write as _;
+                let mut input = String::with_capacity(5 * bytes.len());
+                for byte in bytes {
+                    write!(input, "0x{byte:02x} ").unwrap();
+                }
+                input.push('\n');
+                let result = crate::llvm_mc_for(triple, &features, "--disassemble", &input)?;
+                if !result.status.success() {
+                    return Err(String::from_utf8_lossy(&result.stderr).trim().to_owned());
+                }
+                output.reply().write_all(&result.stdout).map_err(|error| error.to_string())?;
+                Ok(None)
+            }
+            Action::BusWhatIsAt(address, context) => {
+                let registration = if let Some(context) = context {
+                    let hart = machine.monitor_bus_hart(context)?;
+                    if let Ok(address) = u32::try_from(*address)
+                        && let Some(index) = machine.bus.rv64_devices.uart_for_hart(hart, address)
+                    {
+                        Some(machine.bus.rv64_devices.uarts[index].name())
+                    } else {
+                        machine.bus.cpu_ram64(hart, *address, 1).map(|_| "Memory")
+                    }
+                } else {
+                    machine.bus.ram64(*address, 1).map(|_| "Memory")
+                };
+                if let Some(registration) = registration {
+                    writeln!(output.reply(), "{registration}").map_err(|error| error.to_string())?;
+                }
+                Ok(None)
             }
             Action::CpuStatus(cpu, property) => {
                 let thumb = machine.cortex_m_cpu(cpu)?;
@@ -4331,6 +4401,22 @@ fn execute(
             Some(Action::UserState(value))
         }
         ["Clear"] => Some(Action::ClearMemory),
+        [target, "DisassembleBlock", address, length] => {
+            let length = crate::parse_address(resolve(length)?)? as usize;
+            if !(1..=65536).contains(&length) {
+                return Err("DisassembleBlock requires a length of 1 to 65536 bytes".into());
+            }
+            Some(Action::DisassembleBlock(
+                resolve(target)?.trim_start_matches("sysbus.").into(),
+                crate::parse_address64(resolve(address)?)?, length,
+            ))
+        }
+        ["sysbus", "WhatIsAt", address, context @ ..] if context.len() <= 1 => {
+            Some(Action::BusWhatIsAt(
+                crate::parse_address64(resolve(address)?)?,
+                context.first().map(|name| resolve(name).map(|name| unquote(name).to_owned())).transpose()?,
+            ))
+        }
         ["sysbus", method, address, rest @ ..]
             if matches!(
                 *method,
@@ -4357,6 +4443,9 @@ fn execute(
             let (rest, context) = match rest.split_last() {
                 Some((last, before)) if last.starts_with("context=") => {
                     (before, Some(unquote(resolve(&last["context=".len()..])?).to_owned()))
+                }
+                Some((last, before)) if rest.len() == 1 + usize::from(method.starts_with("Write")) => {
+                    (before, Some(unquote(resolve(last)?).to_owned()))
                 }
                 _ => (rest, None),
             };
@@ -5214,6 +5303,7 @@ fn execute(
                 && !matches!(
                     action,
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
+                        | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)

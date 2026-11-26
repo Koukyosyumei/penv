@@ -1194,7 +1194,11 @@ fn map_memory(machine: &mut Machine, entry: &Entry, entries: &[Entry]) -> Result
         .position(|&(_, _, offset, harts, _)| harts == 0 && offset == 0);
     let backing = if let Some(primary) = primary {
         let (base, length, _, _, _) = windows.remove(primary);
-        machine.bus.map_ram_backing64(base, len, length as usize)
+        let backing = machine.bus.map_ram_backing64(base, len, length as usize)?;
+        if let (Ok(base), Ok(length)) = (u32::try_from(base), u32::try_from(length)) {
+            machine.bus.register_traceable_memory(&entry.name, &[base], length);
+        }
+        Ok(backing)
     } else {
         machine.bus.allocate_ram_backing(len)
     }

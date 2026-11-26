@@ -1201,6 +1201,10 @@ impl Machine {
         Ok(())
     }
 
+    pub(crate) fn monitor_bus_hart(&self, context: &str) -> Result<usize, String> {
+        self.rv64_hart_by_name(context.rsplit('.').next().unwrap_or(context))
+    }
+
     pub(crate) fn validate_monitor_bus_context(&self, name: &str) -> Result<(), String> {
         let name = name.strip_prefix("sysbus.").unwrap_or(name);
         if self.cpu_less || self.hart_count() != 1 || self.primary.name.as_deref() != Some(name) {
@@ -2283,13 +2287,16 @@ impl Machine {
                     .expect("trace targets a named RV64 CPU")
                     .pc
             });
-            match hart.execute_step(
+            self.bus.guest_access = Some((index, hart.pc));
+            let step = hart.execute_step(
                 &mut self.bus,
                 self.elapsed_steps,
                 self.cpu_halted,
                 output,
                 self.function_symbols.as_ref(),
-            )? {
+            );
+            self.bus.guest_access = None;
+            match step? {
                 Step::Retired => {
                     retired += 1;
                     if index == 0
@@ -2355,16 +2362,13 @@ impl Machine {
         self.bus
             .tick_litex_uart(self.elapsed_steps, output)
             .map_err(|error| format!("UART: {error}"))?;
-        self.bus.guest_access = Some((index, hart.pc));
-        let step = hart.execute_step(
+        hart.execute_step(
             &mut self.bus,
             self.elapsed_steps,
             self.cpu_halted,
             output,
             self.function_symbols.as_ref(),
-        );
-        self.bus.guest_access = None;
-        step
+        )
     }
 }
 

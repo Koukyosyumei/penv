@@ -6520,7 +6520,7 @@ impl Bus {
         Ok(())
     }
 
-    fn observe_memory_store(&mut self, address: u64, width: usize, value: u64) {
+    pub(crate) fn observe_memory_store(&mut self, address: u64, width: usize, value: u64) {
         if let Some(watch) = &mut self.memory_watch {
             watch.store(address, width, value);
         }

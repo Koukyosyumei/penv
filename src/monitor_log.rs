@@ -232,18 +232,24 @@ pub(crate) fn handle(
                 _ => return Err("expected log wait options: start|no-start|buffered pause|continue".into()),
             };
             let absent = *operation == "AssertAbsentMonitorLog";
-            let ms = if let Some(seconds) = steps.strip_suffix('s') {
+            let (ms, positive_sub_ms) = if let Some(seconds) = steps.strip_suffix('s') {
                 let seconds: f32 = seconds.parse().map_err(|_| "invalid log timeout seconds")?;
                 let milliseconds = seconds * 1000.0;
                 if !seconds.is_finite() || seconds < 0.0 || f64::from(milliseconds) >= u64::MAX as f64 {
                     return Err("invalid log timeout seconds".into());
                 }
                 // Renode receives a float in seconds and schedules an integer millisecond deadline.
-                milliseconds as u64
+                (milliseconds as u64, seconds > 0.0 && milliseconds < 1.0)
             } else {
-                steps.parse::<u64>().map_err(|_| "invalid timeout milliseconds")?
+                (steps.parse::<u64>().map_err(|_| "invalid timeout milliseconds")?, false)
             };
-            let steps = crate::monitor::duration_cycles(ms, 1000, machine.bus.monitor_step_hz())?;
+            let steps = if positive_sub_ms {
+                // A positive delay uses the emulation scheduler even if the
+                // integer-millisecond deadline rounds down to the current time.
+                1
+            } else {
+                crate::monitor::duration_cycles(ms, 1000, machine.bus.monitor_step_hz())?
+            };
             let keep = absent
                 || match *keep {
                     "keep" => true,
