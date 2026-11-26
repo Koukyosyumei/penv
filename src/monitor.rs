@@ -577,6 +577,8 @@ enum Action {
     CpuSymbolPc(String, String),
     SymbolAddress(String),
     I2cSensorProperty(String, String, String),
+    I2cAcceleration(String, usize, i32, bool),
+    I2cAccelerationFeed(String, PathBuf),
     MachineReset(Vec<ResetHook>),
     ReadScalar(u64, ScalarWidth),
     WriteScalar(u64, ScalarWidth, u32),
@@ -1284,6 +1286,15 @@ fn run_commands<'a>(
             Action::SynchroniseQuantum => Ok(None),
             Action::CpuWait(cpu, asserted) => {
                 machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
+            }
+            Action::I2cAcceleration(target, axis, value, default) => machine.bus.lis2dw12(target).map(|sensor| {
+                sensor.set_axis(*axis, *value, *default);
+                None
+            }),
+            Action::I2cAccelerationFeed(target, path) => {
+                let now_ns = machine.monitor_elapsed_ns().min(u128::from(u64::MAX)) as u64;
+                machine.bus.lis2dw12(target).and_then(|sensor| sensor.feed(path, now_ns))
+                    .map(|()| None)
             }
             Action::I2cSensorProperty(target, property, value) =>
                 machine.bus.set_i2c_sensor_property(target, property, value).map(|()| None),
@@ -3880,6 +3891,21 @@ fn execute(
         [target, "VendorSpecific1", value] if boot.started => Some(Action::PhyRegister(
             (*target).to_owned(), u16::try_from(crate::parse_address(resolve(value)?)?)
                 .map_err(|_| "PHY register exceeds 16 bits")?)),
+        [target, axis @ ("AccelerationX" | "AccelerationY" | "AccelerationZ"
+            | "DefaultAccelerationX" | "DefaultAccelerationY" | "DefaultAccelerationZ"), value]
+            if target.trim_start_matches("sysbus.").contains('.') =>
+        {
+            let value = resolve(value)?.parse::<f64>().map_err(|_| "invalid acceleration")?;
+            if !(-200.0..=200.0).contains(&value) {
+                return Err("acceleration must be within ±200 g".into());
+            }
+            let index = match axis.as_bytes().last() { Some(b'X') => 0, Some(b'Y') => 1, _ => 2 };
+            Some(Action::I2cAcceleration(resolve(target)?.into(), index, (value * 1_000_000.0).round() as i32, axis.starts_with("Default")))
+        }
+        [target, "FeedAccelerationSamplesFromRESD", file] => {
+            let path = resolve(file)?.strip_prefix('@').ok_or("expected @RESD-path")?;
+            Some(Action::I2cAccelerationFeed(resolve(target)?.into(), PathBuf::from(path_value(path))))
+        }
         [target, axis @ ("AccelerationX" | "AccelerationY" | "AccelerationZ"), value] if boot.started => {
             let value = resolve(value)?.parse::<f64>().map_err(|_| "invalid acceleration")?;
             if !(-200.0..=200.0).contains(&value) {

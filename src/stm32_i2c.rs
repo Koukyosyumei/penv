@@ -89,6 +89,7 @@ enum Target {
     Fram(Rc<RefCell<Fram>>, bool),
     Sht45(String, Sht45),
     Bme280(String, Box<Bme280>),
+    Lis2dw12(String, Box<crate::lis2dw12::Lis2dw12>),
 }
 
 pub(crate) struct Fram(Eeprom);
@@ -168,15 +169,17 @@ impl Target {
             }
             Self::Sht45(..) => {}
             Self::Bme280(_, sensor) => sensor.start_write(),
+            Self::Lis2dw12(_, sensor) => sensor.start_write(),
         }
     }
 
-    fn read(&mut self) -> u8 {
+    fn read(&mut self, now_ns: u64) -> u8 {
         match self {
             Self::Eeprom(memory) => memory.read(),
             Self::Fram(memory, _) => memory.borrow_mut().0.read(),
             Self::Sht45(_, sensor) => sensor.response.pop_front().unwrap_or(0),
             Self::Bme280(_, sensor) => sensor.read(),
+            Self::Lis2dw12(name, sensor) => sensor.read(name, now_ns),
         }
     }
 
@@ -186,6 +189,7 @@ impl Target {
             Self::Fram(memory, _) => memory.borrow_mut().0.write(value),
             Self::Sht45(_, sensor) => sensor.write(value),
             Self::Bme280(_, sensor) => sensor.write(value),
+            Self::Lis2dw12(_, sensor) => sensor.write(value),
         }
     }
 }
@@ -221,9 +225,17 @@ impl Stm32I2c {
         let target = match model {
             "I2C.SHT45" => Target::Sht45(name, Sht45::default()),
             "I2C.BME280" => Target::Bme280(name, Box::default()),
+            "Sensors.LIS2DW12" => Target::Lis2dw12(format!("{}.{}", self.name.as_deref().unwrap_or_default(), name), Box::default()),
             _ => return Err(format!("unsupported STM32 I²C sensor {model:?}")),
         };
         self.attach_target(address, target)
+    }
+
+    pub(crate) fn lis2dw12(&mut self, path: &str) -> Option<&mut crate::lis2dw12::Lis2dw12> {
+        self.targets.iter_mut().find_map(|(_, target)| match target {
+            Target::Lis2dw12(name, sensor) if name == path => Some(sensor.as_mut()),
+            _ => None,
+        })
     }
 
     pub(crate) fn set_sensor_property(&mut self, name: &str, property: &str, value: &str) -> Result<(), String> {
@@ -280,7 +292,7 @@ impl Stm32I2c {
         rx | tx
     }
 
-    pub fn read(&mut self, address: u32) -> u32 {
+    pub fn read(&mut self, address: u32, now_ns: u64) -> u32 {
         let offset = address - self.base;
         match offset {
             0x18 => self.status | 1,
@@ -288,7 +300,7 @@ impl Stm32I2c {
             0x24 if self.status & RX_READY != 0 => {
                 let value = self
                     .addressed
-                    .map_or(0, |target| self.targets[target].1.read());
+                    .map_or(0, |target| self.targets[target].1.read(now_ns));
                 self.advance_byte();
                 value.into()
             }
@@ -415,14 +427,14 @@ mod tests {
         for byte in [0xff, 0xff] {
             low.write(byte);
         }
-        assert_eq!(low.read(), 0xab);
-        assert_eq!(high.read(), 0xcd);
+        assert_eq!(low.read(0), 0xab);
+        assert_eq!(high.read(0), 0xcd);
 
         memory.borrow_mut().set_write_protected(true);
         high.start_write();
         for byte in [0, 0, 0xef] {
             high.write(byte);
         }
-        assert_eq!(high.read(), 0xcd);
+        assert_eq!(high.read(0), 0xcd);
     }
 }

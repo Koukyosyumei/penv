@@ -943,7 +943,7 @@ fn load_platform(
             }
             "I2C.MB85RC1MTLo" | "I2C.MB85RC1MTHi" => i2c_fram_relays.push(entry),
             "Memory.GenericI2cEeprom" => i2c_eeproms.push(entry),
-            "I2C.SHT45" | "I2C.BME280" => i2c_sensors.push(entry),
+            "I2C.SHT45" | "I2C.BME280" | "Sensors.LIS2DW12" => i2c_sensors.push(entry),
             "Timers.STM32F4_RTC" => {
                 if stm32_rtc.replace(entry).is_some() {
                     return Err(entry.error("only one STM32 RTC is supported"));

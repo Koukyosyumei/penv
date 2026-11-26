@@ -80,6 +80,7 @@ mod litex_sd;
 mod litex_tftp;
 mod litex_video;
 mod lps25hb;
+mod lis2dw12;
 mod lsm6dso;
 mod machine;
 mod memory_setup;

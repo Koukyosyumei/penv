@@ -3798,6 +3798,9 @@ impl Bus {
         {
             crate::monitor_log::set_target_level(name, level);
             Ok(())
+        } else if self.stm32_i2cs.iter_mut().any(|i2c| i2c.lis2dw12(name).is_some()) {
+            crate::monitor_log::set_target_level(name, level);
+            Ok(())
         } else if level == -1 {
             self.enable_nvic_log(target)
         } else {
@@ -4952,6 +4955,12 @@ impl Bus {
             }
         }
         self.refresh_gpio_wiring();
+    }
+
+    pub(crate) fn lis2dw12(&mut self, target: &str) -> Result<&mut crate::lis2dw12::Lis2dw12, String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        self.stm32_i2cs.iter_mut().find_map(|i2c| i2c.lis2dw12(name))
+            .ok_or_else(|| format!("unknown LIS2DW12 sensor {target:?}"))
     }
 
     pub(crate) fn set_i2c_sensor_property(&mut self, target: &str, property: &str, value: &str) -> Result<(), String> {
@@ -7317,10 +7326,11 @@ impl Bus {
             return Ok(can.read(address));
         }
         if address & 3 == 0
-            && let Some(i2c) = self.stm32_i2cs.iter_mut().find(|i2c| i2c.contains(address))
+            && let Some(index) = self.stm32_i2cs.iter().position(|i2c| i2c.contains(address))
         {
             let mask = u32::MAX >> (32 - N * 8);
-            return Ok(i2c.read(address) & mask);
+            let now_ns = self.monitor_time_ns(self.h7_step).min(u128::from(u64::MAX)) as u64;
+            return Ok(self.stm32_i2cs[index].read(address, now_ns) & mask);
         }
         if address as usize & (N - 1) == 0
             && let Some(spi) = self.stm32_spis.iter_mut().find(|spi| spi.contains(address))
