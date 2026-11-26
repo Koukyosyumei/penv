@@ -729,7 +729,7 @@ impl Csr {
                 return self
                     .andes
                     .as_ref()
-                    .and_then(|andes| andes.read(address))
+                    .and_then(|andes| andes.read(address, self.d_extension))
                     .or_else(|| self.pmp.as_ref()?.read(address));
             }
         })

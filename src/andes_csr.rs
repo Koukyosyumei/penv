@@ -32,7 +32,7 @@ impl AndesCsrs {
         self.misc_control & (1 << 6) != 0
     }
 
-    pub fn read(&self, address: u32) -> Option<u32> {
+    pub fn read(&self, address: u32, double_precision: bool) -> Option<u32> {
         Some(match address {
             MMISC_CTL => self.misc_control,
             0x7c6 => self.stack_control,
@@ -43,7 +43,7 @@ impl AndesCsrs {
             0xfc3 => u32::from(self.bfloat16 || self.vector_bfloat16)
                 | (u32::from(self.vector_bfloat16) << 4)
                 | if self.quad_mac { 0x1010_0000 } else { 0 },
-            0xfc7 if self.vector_bfloat16 => 3 << 16,
+            0xfc7 if self.vector_bfloat16 => (1 + 2 * u32::from(double_precision)) << 16,
             0xfcb if self.quad_mac => 8,
             0x7c4 | 0xfc0 | 0xfc1 | 0xfc7..=0xfcb | 0xfcf => 0,
             _ => {
