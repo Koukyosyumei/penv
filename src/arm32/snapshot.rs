@@ -41,7 +41,7 @@ impl Cpu {
         Ok(())
     }
 
-    pub(crate) fn load_snapshot(&mut self, input: &mut impl Read) -> io::Result<()> {
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl Read, version: u8) -> io::Result<()> {
         let [affinity, sleep] = read_words(input)?;
         if affinity != u64::from(self.affinity) {
             return Err(invalid("snapshot AArch32 CPU affinity differs from the platform"));
@@ -63,7 +63,12 @@ impl Cpu {
         self.shared_high = read_u32s(input)?;
         self.fiq_high = read_u32s(input)?;
         self.vfp_high_words = read_u32s(input)?;
-        self.thread_ids = read_u32s(input)?;
+        if version >= 3 {
+            self.thread_ids = read_u32s(input)?;
+        } else {
+            let [first, second, third] = read_u32s(input)?;
+            self.thread_ids = [first, second, third, 0];
+        }
         for (flag, value) in self.interrupt_inputs.iter_mut().zip(read_words::<2>(input)?) {
             *flag = read_bool(value)?;
         }
