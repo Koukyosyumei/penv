@@ -192,6 +192,53 @@ impl VectorState {
         let length = (bytes << multiplier.max(0)) >> (-multiplier).max(0);
         Some(start..start + length)
     }
+
+    pub(crate) fn convert_bfloat16(
+        &mut self,
+        destination_register: usize,
+        source_register: usize,
+        narrow: bool,
+        fcsr: u8,
+    ) -> Option<u8> {
+        if self.kind == VILL || self.sew_log_bytes() != 1 {
+            return None;
+        }
+        let lmul = self.log_multiplier();
+        let (source, destination, rounding) = if narrow {
+            (
+                Format::Single,
+                Format::BFloat16,
+                Rounding::decode(7, fcsr)?,
+            )
+        } else {
+            (Format::BFloat16, Format::Single, Rounding::NearestEven)
+        };
+        let src = self
+            .group(source_register, lmul + i32::from(narrow))
+            ?;
+        let dst = self
+            .group(destination_register, lmul + i32::from(!narrow))
+            ?;
+        if src.start < dst.end
+            && dst.start < src.end
+            && !(if narrow {
+                src.start == dst.start
+            } else {
+                lmul >= 0 && src.end == dst.end
+            })
+        {
+            return None;
+        }
+        let mut flags = 0;
+        for lane in self.start as usize..self.length as usize {
+            let bits = self.element(source_register, lane, source.width()) as u64;
+            let converted = destination.convert(source.decode(source.boxed(bits)), rounding);
+            flags |= converted.flags;
+            self.set_element(destination_register, lane, destination.width(), converted.bits);
+        }
+        self.start = 0;
+        Some(flags)
+    }
 }
 
 impl Rv64 {
@@ -205,43 +252,8 @@ impl Rv64 {
             return Err(illegal());
         }
         let vector = self.privilege.vector.as_mut().ok_or_else(illegal)?;
-        if vector.kind == VILL || vector.sew_log_bytes() != 1 {
-            return Err(illegal());
-        }
-        let lmul = vector.log_multiplier();
-        let (source, destination, rounding) = if narrow {
-            (
-                Format::Single,
-                Format::BFloat16,
-                Rounding::decode(7, self.privilege.fcsr).ok_or_else(illegal)?,
-            )
-        } else {
-            (Format::BFloat16, Format::Single, Rounding::NearestEven)
-        };
-        let src = vector
-            .group(inst.rs2(), lmul + i32::from(narrow))
+        let flags = vector.convert_bfloat16(inst.rd(), inst.rs2(), narrow, self.privilege.fcsr)
             .ok_or_else(illegal)?;
-        let dst = vector
-            .group(inst.rd(), lmul + i32::from(!narrow))
-            .ok_or_else(illegal)?;
-        if src.start < dst.end
-            && dst.start < src.end
-            && !(if narrow {
-                src.start == dst.start
-            } else {
-                lmul >= 0 && src.end == dst.end
-            })
-        {
-            return Err(illegal());
-        }
-        let mut flags = 0;
-        for lane in vector.start as usize..vector.length as usize {
-            let bits = vector.element(inst.rs2(), lane, source.width()) as u64;
-            let converted = destination.convert(source.decode(source.boxed(bits)), rounding);
-            flags |= converted.flags;
-            vector.set_element(inst.rd(), lane, destination.width(), converted.bits);
-        }
-        vector.start = 0;
         self.privilege.fcsr |= flags;
         self.privilege.status |= VS | FS;
         Ok(())
