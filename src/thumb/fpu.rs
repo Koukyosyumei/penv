@@ -146,6 +146,61 @@ impl Thumb {
         }
     }
 
+    fn fp_convert_kind(high: u32, low: u32) -> Option<u32> {
+        if !matches!(low & 0xf50, 0xa40 | 0xb40) {
+            return None;
+        }
+        match high & !0x40 {
+            0xfebc => Some(4),
+            0xfebd => Some(0),
+            0xfebe => Some(1),
+            0xfebf => Some(2),
+            _ => None,
+        }
+    }
+
+    fn round_fp_value(value: f64, mode: u32) -> f64 {
+        match mode {
+            0 => value.round_ties_even(),
+            1 => value.ceil(),
+            2 => value.floor(),
+            3 => value.trunc(),
+            _ => value.round(),
+        }
+    }
+
+    fn convert_fp_to_integer(&mut self, high: u32, low: u32, kind: u32) -> bool {
+        let destination = ((low >> 12) * 2 + ((high >> 6) & 1)) as usize;
+        let input = if low & 0x100 == 0 {
+            let source = ((low & 15) * 2 + ((low >> 5) & 1)) as usize;
+            f64::from(f32::from_bits(self.fp[source]))
+        } else {
+            let source = (low & 15) as usize * 2 + (((low >> 5) & 1) as usize * 32);
+            if source >= self.fp.len() {
+                return false;
+            }
+            f64::from_bits(u64::from(self.fp[source]) | (u64::from(self.fp[source + 1]) << 32))
+        };
+        let value = Self::round_fp_value(input, kind);
+        let signed = low & 0x80 != 0;
+        let (min, max) = if signed {
+            (f64::from(i32::MIN), f64::from(i32::MAX))
+        } else {
+            (0.0, f64::from(u32::MAX))
+        };
+        if value.is_nan() || value < min || value > max {
+            self.fpscr |= 1;
+        } else if input != value {
+            self.fpscr |= 1 << 4;
+        }
+        self.fp[destination] = if signed {
+            value as i32 as u32
+        } else {
+            value as u32
+        };
+        true
+    }
+
     fn round_to_integral(&mut self, high: u32, low: u32, kind: u32, exact: bool) -> bool {
         let double = low & 0x100 != 0;
         let (destination, source) = if double {
@@ -192,13 +247,7 @@ impl Thumb {
             } else {
                 kind
             };
-            let rounded = match mode {
-                0 => value.round_ties_even(),
-                1 => value.ceil(),
-                2 => value.floor(),
-                3 => value.trunc(),
-                _ => value.round(),
-            };
+            let rounded = Self::round_fp_value(value, mode);
             if exact && rounded != value {
                 self.fpscr |= 1 << 4;
             }
@@ -217,6 +266,7 @@ impl Thumb {
 
     pub(crate) fn is_fpu_instruction(high: u32, low: u32) -> bool {
         Self::fp_round_kind(high, low).is_some()
+            || Self::fp_convert_kind(high, low).is_some()
             || matches!(high & 0xff00, 0xec00 | 0xed00 | 0xee00)
                 && matches!(low & 0xf00, 0xa00 | 0xb00)
     }
@@ -240,6 +290,10 @@ impl Thumb {
         if let Some((kind, exact)) = Self::fp_round_kind(high, low) {
             if !(self.armv81m || self.cortex_m33) || !self.round_to_integral(high, low, kind, exact)
             {
+                return Ok(false);
+            }
+        } else if let Some(kind) = Self::fp_convert_kind(high, low) {
+            if !(self.armv81m || self.cortex_m33) || !self.convert_fp_to_integer(high, low, kind) {
                 return Ok(false);
             }
         } else if high & 0xffe0 == 0xec40 && low & 0xd0 == 0x10 {
