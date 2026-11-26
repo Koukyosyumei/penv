@@ -127,7 +127,7 @@ pub(crate) fn assemble_source(
                 line.to_owned()
             };
             let line = normalize_vector_memory_operand(&line);
-            let line = if features.iter().any(|feature| feature == "+zicond") {
+            let line = if features.split(',').any(|feature| feature == "+zicond") {
                 lower_zicond_instruction(&line)
             } else {
                 line
