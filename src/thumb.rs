@@ -76,6 +76,7 @@ pub struct Thumb {
     fp: [u32; 32],
     fpscr: u32,
     pub(crate) arm_interworking: bool,
+    pub(crate) arm_unaligned_slot: Option<usize>,
     pub(crate) arm_branch_taken: bool,
     fp_active: bool,
     active_exception: u8,
@@ -2313,6 +2314,14 @@ impl Thumb {
         bus: &mut Bus,
         address: u32,
     ) -> Result<u32, InstructionError> {
+        if !address.is_multiple_of(N as u32)
+            && let Some(slot) = self.arm_unaligned_slot
+            && let Some(memory) = bus.cpu_ram64(slot, u64::from(address), N)
+        {
+            let mut word = [0; 4];
+            word[..N].copy_from_slice(memory);
+            return Ok(u32::from_le_bytes(word));
+        }
         if self.thumb2 {
             Ok(bus.thumb_read::<N>(address)?)
         } else {
@@ -2328,6 +2337,14 @@ impl Thumb {
         value: u32,
         output: &mut impl Write,
     ) -> Result<(), InstructionError> {
+        if !address.is_multiple_of(width as u32)
+            && let Some(slot) = self.arm_unaligned_slot
+            && let Some(memory) = bus.cpu_memory64(slot, u64::from(address), width)
+        {
+            memory.copy_from_slice(&value.to_le_bytes()[..width]);
+            bus.observe_memory_store(u64::from(address), width, u64::from(value));
+            return Ok(());
+        }
         if self.thumb2 {
             Ok(bus.thumb_write(address, width, value, output)?)
         } else {

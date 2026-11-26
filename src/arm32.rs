@@ -1223,6 +1223,8 @@ impl Cpu {
             }
             self.thumb.set_apsr(self.cpsr);
             self.thumb.arm_branch_taken = false;
+            let control = if self.cpsr & 31 == 0x1a { self.hsctlr } else { self.sctlr };
+            self.thumb.arm_unaligned_slot = (control & 2 == 0).then_some(slot);
             let retired = self.thumb.step(pc, registers, bus, output)?;
             self.cpsr = (self.cpsr & !FLAGS) | (self.thumb.apsr() & FLAGS);
             if self.thumb.arm_branch_taken {
