@@ -224,6 +224,18 @@ enum BinaryOperation {
     Not,
     SaturatingAbsolute,
     SaturatingNegate,
+    RoundFloat {
+        mode: u32,
+        exact: bool,
+    },
+    FloatToInteger {
+        mode: u32,
+    },
+    NarrowShift {
+        shift: u32,
+        rounding: bool,
+        top: bool,
+    },
     Sum {
         accumulator: usize,
         accumulate: bool,
@@ -306,6 +318,69 @@ impl VectorArithmetic {
                 scalar: false,
                 unsigned: high & 0x1000 != 0,
                 bits: 8 << size,
+            });
+        }
+        if instruction & 0xefa0_0fd1 == 0xee80_0fc1 {
+            let immediate = high & 31;
+            let width = match immediate {
+                8..=15 => 8,
+                16..=31 => 16,
+                _ => return None,
+            };
+            if high & 0x40 != 0 || low & 0x20 != 0 {
+                return None;
+            }
+            return Some(Self {
+                operation: NarrowShift {
+                    shift: 2 * width - immediate,
+                    rounding: high & 0x1000 != 0,
+                    top: low & 0x1000 != 0,
+                },
+                destination: (low >> 13) as usize,
+                left: ((low >> 1) & 7) as usize,
+                right: 0,
+                scalar: false,
+                unsigned: true,
+                bits: 2 * width,
+            });
+        }
+        let float_op = match instruction & 0xffb3_1c51 {
+            0xffb2_0440 => {
+                let op = (low >> 7) & 7;
+                let mode = match op {
+                    0 | 1 => 0,
+                    2 => 4,
+                    3 => 3,
+                    5 => 2,
+                    7 => 1,
+                    _ => return None,
+                };
+                Some((
+                    RoundFloat {
+                        mode,
+                        exact: op == 1,
+                    },
+                    false,
+                ))
+            }
+            0xffb3_0040 => {
+                let mode = [4, 0, 1, 2][((low >> 8) & 3) as usize];
+                Some((FloatToInteger { mode }, low & 0x80 != 0))
+            }
+            _ => None,
+        };
+        if let Some((operation, unsigned)) = float_op {
+            if (high >> 2) & 3 != 2 || high & 0x40 != 0 || low & 0x20 != 0 {
+                return None;
+            }
+            return Some(Self {
+                operation,
+                destination: (low >> 13) as usize,
+                left: ((low >> 1) & 7) as usize,
+                right: 0,
+                scalar: false,
+                unsigned,
+                bits: 32,
             });
         }
         let unary = match instruction & 0xffb3_1fd1 {
@@ -484,6 +559,27 @@ impl Thumb {
             return;
         }
         let mut result = 0u128;
+        if let NarrowShift {
+            shift,
+            rounding,
+            top,
+        } = inst.operation
+        {
+            let lane_width = inst.bits / 2;
+            let lane_mask = (1u128 << lane_width) - 1;
+            let mut write = 0;
+            for source in (0..128).step_by(inst.bits as usize) {
+                let bias = if rounding { 1 << (shift - 1) } else { 0 };
+                let value = ((left >> source) & mask) + bias;
+                let destination = source + u32::from(top) * lane_width;
+                result |= ((value >> shift) & lane_mask) << destination;
+                write |= ((1 << (lane_width / 8)) - 1) << (destination / 8);
+            }
+            self.write_vector(inst.destination, result, predicate & write);
+            self.advance_vector_predicate();
+            self.fp_active = true;
+            return;
+        }
         let mut saturated = false;
         for shift in (0..128).step_by(inst.bits as usize) {
             let lane_active = predicate & (1 << (shift / 8)) != 0;
@@ -503,6 +599,37 @@ impl Thumb {
                 OrNot => a | !b,
                 ExclusiveOr => a ^ b,
                 Not => !a,
+                NarrowShift { .. } => unreachable!(),
+                RoundFloat { mode, exact } => {
+                    let input = f32::from_bits(a as u32);
+                    let mode = if exact { (self.fpscr >> 22) & 3 } else { mode };
+                    let output = Self::round_fp_value(f64::from(input), mode) as f32;
+                    if lane_active && exact && input.is_finite() && input != output {
+                        self.fpscr |= 1 << 4;
+                    }
+                    i64::from(output.to_bits())
+                }
+                FloatToInteger { mode } => {
+                    let input = f64::from(f32::from_bits(a as u32));
+                    let rounded = Self::round_fp_value(input, mode);
+                    let (lower, upper) = if inst.unsigned {
+                        (0.0, f64::from(u32::MAX))
+                    } else {
+                        (f64::from(i32::MIN), f64::from(i32::MAX))
+                    };
+                    if lane_active {
+                        if rounded.is_nan() || rounded < lower || rounded > upper {
+                            self.fpscr |= 1;
+                        } else if input != rounded {
+                            self.fpscr |= 1 << 4;
+                        }
+                    }
+                    if inst.unsigned {
+                        i64::from(rounded as u32)
+                    } else {
+                        i64::from(rounded as i32)
+                    }
+                }
                 Sum { .. } | AbsoluteDifferenceAccumulate { .. } | ShiftLeftCarry { .. } => {
                     unreachable!()
                 }

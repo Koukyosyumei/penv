@@ -225,7 +225,7 @@ impl Thumb {
         }
     }
 
-    fn round_fp_value(value: f64, mode: u32) -> f64 {
+    pub(super) fn round_fp_value(value: f64, mode: u32) -> f64 {
         match mode {
             0 => value.round_ties_even(),
             1 => value.ceil(),
