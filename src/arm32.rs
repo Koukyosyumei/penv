@@ -372,6 +372,7 @@ pub(crate) struct Cpu {
     sleep: Sleep,
     fault_status: [u32; 3],
     fault_address: [u32; 4],
+    hpfar: u32,
     debug_status: u32,
     pub(crate) timer: Option<GenericTimer>,
 }
@@ -414,6 +415,7 @@ impl Cpu {
             sleep: Sleep::Awake,
             fault_status: [0; 3],
             fault_address: [0; 4],
+            hpfar: 0,
             debug_status: 0,
             timer: None,
         }
@@ -606,6 +608,7 @@ impl Cpu {
             "ifar" => 0x0006_0040,
             "hdfar" => 0x0086_0000,
             "hifar" => 0x0086_0040,
+            "hpfar" => 0x0086_0080,
             "rvbar" if self.is_v8r() => {
                 return if value.is_none() {
                     Ok(Some(0))
@@ -696,6 +699,7 @@ impl Cpu {
             0x0006_0040 if v8r => (&mut self.fault_address[1], u32::MAX),
             0x0086_0000 if v8r => (&mut self.fault_address[2], u32::MAX),
             0x0086_0040 if v8r => (&mut self.fault_address[3], u32::MAX),
+            0x0086_0080 if v8r => (&mut self.hpfar, u32::MAX),
             _ => return None,
         };
         if let Some(value) = value {

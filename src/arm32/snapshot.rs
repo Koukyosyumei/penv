@@ -27,6 +27,7 @@ impl Cpu {
         write_words(output, &self.interrupt_inputs.map(u64::from))?;
         write_words(output, &self.fault_status.map(u64::from))?;
         write_words(output, &self.fault_address.map(u64::from))?;
+        write_words(output, &[u64::from(self.hpfar)])?;
         self.thumb.save_snapshot(output)?;
         if let Some(pmsa) = &self.pmsa {
             for bank in pmsa {
@@ -78,6 +79,9 @@ impl Cpu {
         }
         self.fault_status = read_u32s(input)?;
         self.fault_address = read_u32s(input)?;
+        if version >= 5 {
+            [self.hpfar] = read_u32s(input)?;
+        }
         self.thumb.load_snapshot(input)?;
         if let Some(pmsa) = &mut self.pmsa {
             for bank in pmsa {
