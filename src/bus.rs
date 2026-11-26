@@ -520,6 +520,7 @@ pub struct Bus {
     pub(crate) default_uart_pause: bool,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
+    renesas_ra_icu: Option<crate::renesas_ra_icu::Icu>,
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
@@ -1862,6 +1863,9 @@ impl Bus {
             device.reset();
         }
         if let Some(device) = &mut self.dwt {
+            device.reset();
+        }
+        if let Some(device) = &mut self.renesas_ra_icu {
             device.reset();
         }
         if let Some(device) = &mut self.exti {
@@ -3675,6 +3679,10 @@ impl Bus {
                 let other = u64::from(rcc.base);
                 start < other + u64::from(Stm32F4Rcc::SIZE) && other < end
             })
+            || self.renesas_ra_icu.as_ref().is_some_and(|icu| {
+                start < u64::from(icu.base) + u64::from(crate::renesas_ra_icu::Icu::SIZE)
+                    && end > u64::from(icu.base)
+            })
             || self.exti.as_ref().is_some_and(|exti| {
                 let other = u64::from(exti.base);
                 start < other + u64::from(Exti::SIZE) && other < end
@@ -4556,6 +4564,25 @@ impl Bus {
         }
     }
 
+    pub(crate) fn map_renesas_ra_icu(&mut self, icu: crate::renesas_ra_icu::Icu) -> Result<(), String> {
+        let start = u64::from(icu.base);
+        let end = start + u64::from(crate::renesas_ra_icu::Icu::SIZE);
+        if self.renesas_ra_icu.is_some() || icu.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err("invalid or overlapping Renesas RA ICU registration".into());
+        }
+        self.renesas_ra_icu = Some(icu);
+        Ok(())
+    }
+
+    pub(crate) fn drive_renesas_ra_event(&mut self, target: &str, event: usize, asserted: bool) -> bool {
+        if let Some(icu) = self.renesas_ra_icu.as_mut().filter(|icu| icu.name == target) {
+            icu.set_event(event, asserted);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn sample_nvic(&mut self, active: &ActiveExceptions, sleeping: bool) {
         if let Some((index, ports)) = self
             .nrf_peripherals
@@ -4570,6 +4597,9 @@ impl Bus {
         let (timer_irqs, timer_dma) = self.tick_stm32_timers();
         let adc_step_rate = self.step_hz();
         if let Some(nvic) = self.nvic.as_mut() {
+            if let Some(icu) = &self.renesas_ra_icu {
+                icu.sample(nvic, active);
+            }
             nvic.set_uart_level(
                 self.litex_uart
                     .as_ref()
@@ -8322,6 +8352,12 @@ impl Bus {
         {
             return Ok(exti.read(address));
         }
+        if matches!(N, 1 | 2 | 4) && address as usize & (N - 1) == 0
+            && let Some(icu) = self.renesas_ra_icu.as_ref()
+            && icu.contains(address)
+        {
+            return Ok(icu.read(address, N));
+        }
         if N == 4
             && address & 3 == 0
             && let Some(exti) = self.exti.as_ref()
@@ -9394,6 +9430,13 @@ impl Bus {
             && exti.contains(address)
         {
             exti.write(address, value);
+            return Ok(());
+        }
+        if matches!(width, 1 | 2 | 4) && address as usize & (width - 1) == 0
+            && let Some(icu) = self.renesas_ra_icu.as_mut()
+            && icu.contains(address)
+        {
+            icu.write(address, width, value);
             return Ok(());
         }
         if width == 4

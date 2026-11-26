@@ -1029,6 +1029,38 @@ fn load_platform(
                     return Err(entry.error("only one UART is currently supported"));
                 }
             }
+            "IRQControllers.RenesasRA_ICU" => {
+                let mut external = 16;
+                let mut highest_event = 0x1da;
+                let mut outputs = 96;
+                let mut nvic_reference = None;
+                for (key, value) in keys(entry, &[
+                    "nvic", "eventToInterruptLink", "numberOfExternalInterrupts",
+                    "highestEventNumber", "numberOfNVICOutputs",
+                ])? {
+                    match key {
+                        "nvic" => nvic_reference = Some(value),
+                        "eventToInterruptLink" => {
+                            if !matches!(value.rsplit('.').next(), Some("RA8" | "RA4")) {
+                                return Err(entry.error("unsupported Renesas ICU event mapping"));
+                            }
+                        }
+                        "numberOfExternalInterrupts" => external = number(value).map_err(|e| entry.error(&e))?,
+                        "highestEventNumber" => highest_event = number(value).map_err(|e| entry.error(&e))?,
+                        "numberOfNVICOutputs" => outputs = number(value).map_err(|e| entry.error(&e))?,
+                        _ => unreachable!(),
+                    }
+                }
+                if !entries.iter().any(|device| Some(device.name.as_str()) == nvic_reference
+                    && device.model == "IRQControllers.NVIC")
+                {
+                    return Err(entry.error("Renesas ICU requires a valid NVIC reference"));
+                }
+                let icu = crate::renesas_ra_icu::Icu::new(
+                    entry.address()?, entry.name.clone(), external as usize, highest_event as usize, outputs as usize,
+                ).map_err(|e| entry.error(&e))?;
+                machine.bus.map_renesas_ra_icu(icu).map_err(|e| entry.error(&e))?;
+            }
             "IRQControllers.STM32F4_EXTI" => {
                 if exti.replace(entry).is_some() {
                     return Err(entry.error("only one STM32 EXTI is supported"));

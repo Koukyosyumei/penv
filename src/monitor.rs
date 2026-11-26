@@ -2036,8 +2036,12 @@ fn run_commands<'a>(
                 machine.add_monitor_cpu_hook(cpu, *address, hook.clone()).map(|()| None)
             }
             Action::ClicGpio(name, id, asserted) if machine.is_cortex_m() => {
-                let line = u8::try_from(*id).ok().filter(|&line| line < 32).ok_or("expected NVIC IRQ line 0 through 31")?;
-                machine.bus.drive_nvic_line(name, line, *asserted).map(|()| None)
+                if machine.bus.drive_renesas_ra_event(name, *id as usize, *asserted) {
+                    Ok(None)
+                } else {
+                    let line = u8::try_from(*id).ok().filter(|&line| line < 32).ok_or("expected NVIC IRQ line 0 through 31")?;
+                    machine.bus.drive_nvic_line(name, line, *asserted).map(|()| None)
+                }
             }
             Action::ClicGpio(name, id, asserted) => {
                 if let Some(result) = machine.drive_arm_cpu_interrupt(name, *id, *asserted) {
