@@ -72,7 +72,7 @@ pub(crate) fn assemble_source(
         .into_iter()
         .map(|line| {
             let line = normalize_vector_memory_operand(line);
-            lower_andes_branch(&line, triple)
+            lower_andes_instruction(&line, triple)
         })
         .collect::<Result<Vec<_>, _>>()?
         .join(
@@ -105,13 +105,51 @@ pub(crate) fn assemble_source(
     Ok(image.len())
 }
 
-fn lower_andes_branch(line: &str, triple: &str) -> Result<String, String> {
+fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
     let (label, instruction) = line.split_once(':').map_or(("", line), |(label, rest)| {
         (&line[..label.len() + 1], rest.trim_start())
     });
     let Some((name, args)) = instruction.split_once(char::is_whitespace) else {
         return Ok(line.into());
     };
+    let funct7 = match name {
+        "nds.lea.h" => Some(5),
+        "nds.lea.w" => Some(6),
+        "nds.lea.d" => Some(7),
+        "nds.lea.b.ze" if triple == "riscv64" => Some(8),
+        "nds.lea.h.ze" if triple == "riscv64" => Some(9),
+        "nds.lea.w.ze" if triple == "riscv64" => Some(10),
+        "nds.lea.d.ze" if triple == "riscv64" => Some(11),
+        "nds.ffb" => Some(16),
+        "nds.ffzmism" => Some(17),
+        "nds.ffmism" => Some(18),
+        "nds.flmism" => Some(19),
+        _ => None,
+    };
+    if let Some(funct7) = funct7 {
+        let args: Vec<_> = args.split(',').map(str::trim).collect();
+        let [rd, rs1, rs2] = args.as_slice() else {
+            return Err(format!("{name} requires three registers"));
+        };
+        let encoding = (funct7 << 25) | (andes_register(rs2)? << 20)
+            | (andes_register(rs1)? << 15) | (andes_register(rd)? << 7) | 0x5b;
+        return Ok(format!("{label} .4byte {encoding:#010x}"));
+    }
+    if let kind @ ("nds.bfoz" | "nds.bfos") = name {
+        let args: Vec<_> = args.split(',').map(str::trim).collect();
+        let [rd, rs1, msb, lsb] = args.as_slice() else {
+            return Err(format!("{name} requires two registers and two bit indices"));
+        };
+        let (msb, lsb) = (crate::parse_address(msb)?, crate::parse_address(lsb)?);
+        let width = if triple == "riscv32" { 32 } else { 64 };
+        if msb >= width || lsb >= width {
+            return Err(format!("{name} bit index must be below {width}"));
+        }
+        let funct3 = if kind == "nds.bfoz" { 2 } else { 3 };
+        let encoding = (msb << 26) | (lsb << 20) | (andes_register(rs1)? << 15)
+            | (funct3 << 12) | (andes_register(rd)? << 7) | 0x5b;
+        return Ok(format!("{label} .4byte {encoding:#010x}"));
+    }
     let (kind, test) = match name {
         "nds.bbc" => (7, false),
         "nds.bbs" => (7, true),
@@ -123,16 +161,7 @@ fn lower_andes_branch(line: &str, triple: &str) -> Result<String, String> {
     let [register, immediate, offset] = operands.as_slice() else {
         return Err(format!("{name} requires a register, an immediate and a byte displacement"));
     };
-    let registers = [
-        "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1",
-        "a2", "a3", "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
-        "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6",
-    ];
-    let register = registers.iter().position(|name| name == register)
-        .or_else(|| register.strip_prefix('x')?.parse::<usize>().ok())
-        .or_else(|| (*register == "fp").then_some(8))
-        .filter(|register| *register < 32)
-        .ok_or_else(|| format!("invalid Andes branch register {register}"))? as u32;
+    let register = andes_register(register)?;
     let immediate = crate::parse_address(immediate)?;
     let limit = match (kind, triple) { (7, "riscv32") => 32, (7, _) => 64, _ => 128 };
     if immediate >= limit {
@@ -152,6 +181,20 @@ fn lower_andes_branch(line: &str, triple: &str) -> Result<String, String> {
         | ((immediate & 31) << 20) | (bit30 << 30)
         | ((offset & 0x400) << 21) | ((offset & 0x3e0) << 20) | ((offset & 0x1e) << 7);
     Ok(format!("{label} .4byte {encoding:#010x}"))
+}
+
+fn andes_register(register: &str) -> Result<u32, String> {
+    let registers = [
+        "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1",
+        "a2", "a3", "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
+        "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6",
+    ];
+    registers.iter().position(|name| *name == register)
+        .or_else(|| register.strip_prefix('x')?.parse::<usize>().ok())
+        .or_else(|| (register == "fp").then_some(8))
+        .filter(|register| *register < 32)
+        .map(|index| index as u32)
+        .ok_or_else(|| format!("invalid Andes register {register}"))
 }
 
 // The Renode assembler accepts explicit zero displacement on RVV memory
