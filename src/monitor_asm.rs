@@ -103,6 +103,9 @@ pub(crate) fn assemble_source(
         let instruction = line.split_once(':').map_or(*line, |(_, text)| text.trim_start());
         matches!(instruction.split_ascii_whitespace().next(), Some(".word" | ".short" | ".byte" | ".asciz" | ".align" | ".balign"))
     });
+    let labels: std::collections::HashSet<_> = instructions.iter()
+        .filter_map(|line| line.split_once(':').map(|(label, _)| label))
+        .collect();
     // A mode directive at a label applies to the instructions at that
     // address. Mark Thumb entry labels so ARM BLX relocations interwork.
     let mut normalized = Vec::with_capacity(instructions.len());
@@ -118,7 +121,12 @@ pub(crate) fn assemble_source(
     let instructions = normalized
         .into_iter()
         .map(|line| {
-            let line = normalize_vector_memory_operand(line);
+            let line = if arm {
+                lower_arm_symbol_move(line, &labels)
+            } else {
+                line.to_owned()
+            };
+            let line = normalize_vector_memory_operand(&line);
             lower_andes_instruction(&line, triple)
         })
         .collect::<Result<Vec<_>, _>>()?
@@ -150,6 +158,20 @@ pub(crate) fn assemble_source(
     .ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
     target.copy_from_slice(&image);
     Ok(image.len())
+}
+
+fn lower_arm_symbol_move(line: &str, labels: &std::collections::HashSet<&str>) -> String {
+    let (label, instruction) = line.split_once(':').map_or(("", line), |(label, instruction)| {
+        (&line[..label.len() + 1], instruction.trim_start())
+    });
+    if let Some((opcode, operands)) = instruction.split_once(char::is_whitespace)
+        && matches!(opcode, "mov" | "mov.w")
+        && let Some((register, symbol)) = operands.split_once(',')
+        && labels.contains(symbol.trim())
+    {
+        return format!("{label} ldr {}, ={}", register.trim(), symbol.trim());
+    }
+    line.to_owned()
 }
 
 fn unsupported_assembly_directive(instruction: &str, thumb: bool) -> bool {
