@@ -174,7 +174,7 @@ impl Gic {
     }
 
     fn routed(&self, cpu: usize, interrupt: &Interrupt) -> bool {
-        if self.version == Version::V3 && self.distributor & 0x30 != 0 {
+        if self.version == Version::V3 && self.distributor & 0x10 != 0 {
             !self.cpus[cpu].processor_sleep
                 && (interrupt.route & (1 << 31) != 0
                     || (interrupt.route & 0x00ff_ffff) as u32
@@ -492,7 +492,7 @@ impl Gic {
 
     pub(crate) fn read_distributor(&self, cpu: usize, offset: u32) -> u32 {
         match offset {
-            0 => self.distributor,
+            0 => self.distributor | if self.version == Version::V3 { 1 << 6 } else { 0 },
             4 => {
                 (self.shared.len().div_ceil(32).min(31) as u32)
                     | (self.cpus.len().saturating_sub(1) as u32) << 5
@@ -512,7 +512,7 @@ impl Gic {
 
     pub(crate) fn write_distributor(&mut self, cpu: usize, offset: u32, value: u32) {
         match offset {
-            0 => self.distributor = value & if self.version == Version::V3 { 0x37 } else { 3 },
+            0 => self.distributor = value & if self.version == Version::V3 { 0x13 } else { 3 },
             0xf00 if self.version == Version::V2 => {
                 let id = (value & 15) as usize;
                 let filter = (value >> 24) & 3;
