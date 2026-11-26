@@ -82,6 +82,7 @@ pub struct Stm32Usart {
     complete: bool,
     layout: UsartLayout,
     pub legacy_layout: bool,
+    pub(crate) mapped_size: Option<u32>,
     legacy_rxne_cleared: bool,
 }
 
@@ -114,6 +115,7 @@ impl Stm32Usart {
             complete: true,
             layout,
             legacy_layout: false,
+            mapped_size: None,
             legacy_rxne_cleared: false,
         }
     }
@@ -132,7 +134,7 @@ impl Stm32Usart {
     }
 
     pub fn size(&self) -> u32 {
-        self.layout.size()
+        self.mapped_size.unwrap_or_else(|| self.layout.size())
     }
 
     fn enable_bit(&self) -> u32 {

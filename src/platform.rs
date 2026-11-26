@@ -1274,11 +1274,13 @@ fn load_platform(
             }
             let layout = crate::stm32_uart::UsartLayout::F7 { low_power };
             let (base, size) = sysbus_range(uart, layout.size())?;
-            if size < layout.size() {
-                return Err(uart.error("registered range is too small for STM32 USART"));
+            let legacy = uart.model == "UART.STM32_UART";
+            if size < if legacy { 0x1c } else { 0x30 } {
+                return Err(uart.error("registered range is too small for STM32 USART registers"));
             }
             let mut device = Stm32Usart::with_layout(uart.name.clone(), base, None, layout);
-            device.legacy_layout = uart.model == "UART.STM32_UART";
+            device.legacy_layout = legacy;
+            device.mapped_size = Some(size);
             device.frequency = frequency;
             machine.bus.map_stm32_usart(device).map_err(|error| uart.error(&error))?;
         }
