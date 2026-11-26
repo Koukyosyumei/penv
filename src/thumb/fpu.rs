@@ -312,7 +312,7 @@ impl Thumb {
     }
 
     fn select_or_minmax(&mut self, high: u32, low: u32, kind: u32) -> bool {
-        let double = low & 0x100 != 0;
+        let double = low & 0xf00 == 0xb00;
         let index = |position: u32, extension: u32| {
             if double {
                 (2 * position + 32 * extension) as usize
