@@ -1,4 +1,8 @@
-use std::net::{Ipv4Addr, UdpSocket};
+use std::{
+    collections::VecDeque,
+    net::{Ipv4Addr, UdpSocket},
+    sync::{Arc, Mutex},
+};
 
 use crate::bus::Bus;
 
@@ -45,12 +49,59 @@ const RX_DESCRIPTOR_ERROR: u32 = (1 << 15) | (1 << 14);
 const MAX_FRAME: usize = 16_383;
 const MAX_DESCRIPTORS_PER_POLL: usize = 4096;
 
+#[derive(Default)]
+pub(crate) struct LocalSwitch {
+    ports: Arc<Mutex<Vec<Option<VecDeque<Vec<u8>>>>>>,
+}
+
+struct LocalPort {
+    ports: Arc<Mutex<Vec<Option<VecDeque<Vec<u8>>>>>>,
+    index: usize,
+}
+
+impl LocalSwitch {
+    fn connect(&self) -> LocalPort {
+        let mut ports = self.ports.lock().expect("Ethernet switch lock");
+        let index = ports.iter().position(Option::is_none).unwrap_or(ports.len());
+        if index == ports.len() {
+            ports.push(Some(VecDeque::new()));
+        } else {
+            ports[index] = Some(VecDeque::new());
+        }
+        LocalPort { ports: self.ports.clone(), index }
+    }
+}
+
+impl LocalPort {
+    fn send(&self, frame: &[u8]) {
+        let mut ports = self.ports.lock().expect("Ethernet switch lock");
+        for (index, queue) in ports.iter_mut().enumerate() {
+            if index != self.index && let Some(queue) = queue && queue.len() < 128 {
+                queue.push_back(frame.to_vec());
+            }
+        }
+    }
+
+    fn recv(&self, buffer: &mut [u8]) -> Option<usize> {
+        let frame = self.ports.lock().expect("Ethernet switch lock")[self.index].as_mut()?.pop_front()?;
+        buffer[..frame.len()].copy_from_slice(&frame);
+        Some(frame.len())
+    }
+}
+
+impl Drop for LocalPort {
+    fn drop(&mut self) {
+        self.ports.lock().expect("Ethernet switch lock")[self.index] = None;
+    }
+}
+
 pub struct Ethernet {
     pub base: u32,
     pub irq: usize,
     phys: [Option<Phy>; 32],
     registers: Registers,
     link: Option<UdpSocket>,
+    local: Option<LocalPort>,
     tx_frame: Vec<u8>,
     tx_dropping: bool,
 }
@@ -120,13 +171,14 @@ impl Ethernet {
             phys: [None; 32],
             registers: Registers::default(),
             link: None,
+            local: None,
             tx_frame: Vec::new(),
             tx_dropping: false,
         }
     }
 
     pub(crate) fn supports_snapshot(&self) -> bool {
-        self.link.is_none()
+        !self.has_link()
     }
 
     pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
@@ -224,8 +276,20 @@ impl Ethernet {
         }
         let mut tx_frame = vec![0; length as usize];
         input.read_exact(&mut tx_frame)?;
-        Ok(Self { base: self.base, irq: self.irq, registers, phys, link: None, tx_frame,
+        Ok(Self { base: self.base, irq: self.irq, registers, phys, link: None, local: None, tx_frame,
             tx_dropping: read_bool(dropping)? })
+    }
+
+    fn has_link(&self) -> bool {
+        self.link.is_some() || self.local.is_some()
+    }
+
+    fn recv_frame(&self, buffer: &mut [u8]) -> Option<usize> {
+        if let Some(local) = &self.local {
+            local.recv(buffer)
+        } else {
+            self.link.as_ref()?.recv(buffer).ok()
+        }
     }
 
     pub fn attach(&mut self, address: usize, phy: Phy) -> bool {
@@ -274,11 +338,10 @@ impl Ethernet {
             self.tx_dropping = false;
             // The MAC's receive FIFO is reset along with its descriptor state.
             // Discard queued link frames while the receiver is disabled.
-            if let Some(link) = &self.link {
+            if self.has_link() {
                 let mut frame = [0; MAX_FRAME + 1];
-                // Bound the drain even if a peer continues to transmit.
                 for _ in 0..4096 {
-                    if link.recv(&mut frame).is_err() {
+                    if self.recv_frame(&mut frame).is_none() {
                         break;
                     }
                 }
@@ -390,7 +453,7 @@ impl Ethernet {
                     unmapped = true;
                     break;
                 };
-                if self.link.is_some() && !self.tx_dropping {
+                if (self.link.is_some() || self.local.is_some()) && !self.tx_dropping {
                     if self.tx_frame.len() + size <= MAX_FRAME - 4 {
                         self.tx_frame.extend_from_slice(bytes);
                     } else {
@@ -418,13 +481,17 @@ impl Ethernet {
             registers.current_tx = next;
             registers.tx_state = 7; // Closing descriptor.
             if control & LAST_SEGMENT != 0 {
-                if let Some(link) = &self.link
+                if (self.link.is_some() || self.local.is_some())
                     && !self.tx_dropping
                     && self.tx_frame.len() >= 14
                 {
                     // The loopback transport carries frames without the wire FCS.
                     self.tx_frame.resize(self.tx_frame.len().max(60), 0);
-                    let _ = link.send(&self.tx_frame);
+                    if let Some(local) = &self.local {
+                        local.send(&self.tx_frame);
+                    } else if let Some(link) = &self.link {
+                        let _ = link.send(&self.tx_frame);
+                    }
                 }
                 self.tx_frame.clear();
                 self.tx_dropping = false;
@@ -436,11 +503,13 @@ impl Ethernet {
     }
 
     fn poll_link(&mut self, bus: &mut Bus) {
-        let Some(link) = &self.link else { return };
+        if !self.has_link() {
+            return;
+        }
         let mut bytes = [0; MAX_FRAME + 1];
         // Bound host input per poll, including when the guest receiver is disabled.
         for _ in 0..32 {
-            let Ok(length) = link.recv(&mut bytes) else {
+            let Some(length) = self.recv_frame(&mut bytes) else {
                 break;
             };
             if self.registers.config & MAC_RX_ENABLE == 0
@@ -610,7 +679,18 @@ impl Bus {
         self.rv64_devices
             .ethernet
             .iter()
-            .any(|mac| mac.link.is_some())
+            .any(Ethernet::has_link)
+    }
+
+    pub(crate) fn connect_local_rv64_ethernet(&mut self, switch: &LocalSwitch) -> Result<(), String> {
+        let [mac] = self.rv64_devices.ethernet.as_mut_slice() else {
+            return Err("local Ethernet switch requires exactly one DesignWare MAC".into());
+        };
+        if mac.has_link() {
+            return Err("Ethernet is already connected".into());
+        }
+        mac.local = Some(switch.connect());
+        Ok(())
     }
 
     pub fn connect_rv64_ethernet(&mut self, local: u16, peer: u16) -> Result<(), String> {

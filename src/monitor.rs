@@ -87,6 +87,7 @@ pub struct Session {
     python: Option<crate::cpu_python_hook::Hook>,
     led_testers: Vec<(Option<String>, String, u64)>,
     uart_testers: Vec<(Option<String>, usize)>,
+    rv64_switches: HashMap<String, crate::rv64_ethernet::LocalSwitch>,
     led_timeout: u64,
 }
 
@@ -432,6 +433,7 @@ impl Session {
         let path = boot.platform.as_deref().expect("materialized REPL");
         let mut next = crate::platform::load_monitor_configuration(path, root, machine.monitor_asset_dir.as_deref())?;
         next.monitor_platform = boot.platform;
+        next.monitor_platform_root = Some(root.to_owned());
         next.monitor_asset_dir.clone_from(&machine.monitor_asset_dir);
         next.bus.use_renode_unmapped_data();
         next.initialize_monitor_reset_pcs();
@@ -716,6 +718,7 @@ impl Session {
             let path = boot.platform.as_ref().expect("materialized snapshot platform");
             let mut machine = crate::platform::load_monitor_configuration(path, root, active.monitor_asset_dir.as_deref())?;
             machine.monitor_platform = boot.platform;
+            machine.monitor_platform_root = Some(root.to_owned());
             machine.monitor_asset_dir.clone_from(&active.monitor_asset_dir);
             machine.bus.use_renode_unmapped_data();
             read_machine(&mut machine, input)?;
@@ -774,7 +777,10 @@ impl Session {
             }
             if input.fill_buf().map_err(|error| error.to_string())?.starts_with(MULTI_SNAPSHOT) {
                 input.consume(MULTI_SNAPSHOT.len());
-                self.load_named_machines(machine, &mut input, &selected, path.parent().unwrap_or(Path::new(".")))?;
+                let root = machine.monitor_platform_root.clone().unwrap_or_else(|| {
+                    path.parent().unwrap_or(Path::new(".")).to_owned()
+                });
+                self.load_named_machines(machine, &mut input, &selected, &root)?;
             } else {
                 machine.read_boot_snapshot(&mut input)?;
             }
@@ -879,6 +885,8 @@ enum Action {
     GpioOverlay(Vec<(String, u8, String, u8)>),
     RamOverlay(String, Option<String>, u64, u32),
     ExternalPmpOverlay(String, String, usize),
+    CreateRv64Switch(String),
+    ConnectRv64Switch(String, String, Option<String>),
     PeripheralList,
     ExportPeripherals(PathBuf, PathBuf),
     SubobjectTester(String, u32),
@@ -1941,6 +1949,27 @@ fn run_commands<'a>(
                         .ok_or_else(|| format!("unknown GPIO target {name:?}"))
                         .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None)
                 }
+            }
+            Action::CreateRv64Switch(name) => {
+                if session.rv64_switches.contains_key(name) {
+                    return Err(format!("Ethernet switch {name:?} already exists"));
+                }
+                session.rv64_switches.insert(name.clone(), crate::rv64_ethernet::LocalSwitch::default());
+                Ok(None)
+            }
+            Action::ConnectRv64Switch(device, switch, owner) => {
+                if !matches!(device.as_str(), "ethernet" | "sysbus.ethernet") {
+                    return Err(format!("unsupported local Ethernet device {device:?}"));
+                }
+                let switch = session.rv64_switches.get(switch)
+                    .ok_or_else(|| format!("Ethernet switch {switch:?} not found"))?;
+                let target = match owner.as_deref() {
+                    Some(name) if Some(name) != session.machine.as_deref() =>
+                        session.named_machines.detached.get_mut(name)
+                            .ok_or_else(|| format!("Ethernet machine {name:?} not found"))?,
+                    _ => machine,
+                };
+                target.bus.connect_local_rv64_ethernet(switch).map(|()| None)
             }
             Action::ExternalPmpOverlay(cpu, name, entries) =>
                 session.attach_external_pmp(machine, cpu, name, *entries).map(|()| None),
@@ -5317,6 +5346,20 @@ fn execute(
         ["emulation", "SingleStepBlocking", value @ ..] if value.len() <= 1 => {
             Some(Action::SingleStepBlocking(value.first()
                 .map(|value| resolve(value).and_then(parse_tester_bool)).transpose()?))
+        }
+        ["emulation", "CreateSwitch", name] if boot.started => {
+            Some(Action::CreateRv64Switch(unquote(resolve(name)?).to_owned()))
+        }
+        ["connector", "Connect", device, switch, options @ ..]
+            if boot.started && options.len() <= 1 =>
+        {
+            let owner = options.first().map(|option| {
+                let value = option.strip_prefix("machine=").ok_or("unknown Ethernet connector option")?;
+                resolve(value).map(|value| unquote(value).to_owned())
+            }).transpose()?;
+            Some(Action::ConnectRv64Switch(
+                unquote(resolve(device)?).to_owned(), unquote(resolve(switch)?).to_owned(), owner,
+            ))
         }
         ["emulation", "SetSeed", value] => Some(Action::EmulationSeed(Some(crate::parse_address(resolve(value)?)?))),
         ["emulation", "GetSeed"] => Some(Action::EmulationSeed(None)),
