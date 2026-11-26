@@ -594,6 +594,7 @@ fn load_platform(
     let mut uart = None;
     let mut stm32_uarts = Vec::new();
     let mut sifive_uarts = Vec::new();
+    let mut sifive_gpios = Vec::new();
     let mut stm32_timers = Vec::new();
     let mut stm32_spis = Vec::new();
     let mut spi_shifts = Vec::new();
@@ -852,6 +853,7 @@ fn load_platform(
             }
             "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
             "UART.SiFive_UART" => sifive_uarts.push(entry),
+            "GPIOPort.SiFive_GPIO" => sifive_gpios.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
@@ -2616,6 +2618,28 @@ fn load_platform(
             irq = index as usize;
         }
         machine.bus.map_sifive_uart(&entry.name, entry.address()?, irq).map_err(|error| entry.error(&error))?;
+    }
+    for entry in sifive_gpios {
+        let mut routes = [None; 32];
+        for (_, wire) in &entry.body {
+            let (pins, destination) = wire.split_once("->")
+                .ok_or_else(|| entry.error("expected SiFive GPIO IRQ wiring"))?;
+            let (target, sources) = destination.split_once('@')
+                .ok_or_else(|| entry.error("expected PLIC destination"))?;
+            let (_, count) = plic_config.filter(|(controller, _)| controller.name == target.trim())
+                .ok_or_else(|| entry.error("unknown SiFive GPIO PLIC destination"))?;
+            let pins = irq_list(pins, 32).map_err(|error| entry.error(&error))?;
+            let sources = irq_list(sources, count + 1).map_err(|error| entry.error(&error))?;
+            if pins.len() != sources.len() {
+                return Err(entry.error("SiFive GPIO and PLIC IRQ ranges have different lengths"));
+            }
+            for (pin, source) in pins.into_iter().zip(sources) {
+                if source == 0 || routes[usize::from(pin)].replace(source).is_some() {
+                    return Err(entry.error("invalid SiFive GPIO PLIC source"));
+                }
+            }
+        }
+        machine.bus.map_sifive_gpio(entry.address()?, routes).map_err(|error| entry.error(&error))?;
     }
     for entry in litex_i2s {
         map_litex_i2s(entry, &configs, &mut machine.bus)?;

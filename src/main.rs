@@ -103,6 +103,7 @@ mod resd;
 mod rtc_clock;
 mod rv64;
 mod rv64_devices;
+mod sifive_gpio;
 mod rv64_ethernet;
 mod rv64_float;
 mod rv64_gem;

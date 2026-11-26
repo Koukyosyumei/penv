@@ -549,6 +549,7 @@ pub struct Bus {
     f4_gpio_leds: Vec<(String, u32, u8)>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
+    sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
     pub nvic: Option<Nvic>,
@@ -4145,6 +4146,25 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn map_sifive_gpio(
+        &mut self,
+        base: u32,
+        routes: [Option<u8>; 32],
+    ) -> Result<(), String> {
+        use crate::sifive_gpio::SiFiveGpio;
+        self.check_litex_ranges(&[base], SiFiveGpio::SIZE)?;
+        if self.sifive_gpios.iter().any(|gpio| gpio.base.abs_diff(base) < SiFiveGpio::SIZE)
+            || self.rv64_devices.uarts.iter().any(|uart| {
+                u64::from(base) < u64::from(uart.base) + uart.size()
+                    && u64::from(uart.base) < u64::from(base) + u64::from(SiFiveGpio::SIZE)
+            })
+        {
+            return Err(format!("overlapping SiFive GPIO at {base:#010x}"));
+        }
+        self.sifive_gpios.push(SiFiveGpio::new(base, routes));
+        Ok(())
+    }
+
     pub(crate) fn map_sifive_uart(&mut self, name: &str, base: u32, irq: usize) -> Result<(), String> {
         let uart = crate::rv64_devices::Uart::new(name.to_owned(), base, irq, Vec::new(), true, false);
         self.check_litex_ranges(&[base], uart.size() as u32)?;
@@ -5648,6 +5668,13 @@ impl Bus {
             plic.set_line(source, uart.interrupt_pending());
         }
         if let Some(plic) = &mut self.plic {
+            for gpio in &self.sifive_gpios {
+                for (pin, source) in gpio.routes.iter().enumerate() {
+                    if let Some(source) = source {
+                        plic.set_line(u32::from(*source), gpio.line(pin));
+                    }
+                }
+            }
             for uart in &self.rv64_devices.uarts {
                 if uart.source != 0 {
                     plic.set_line(uart.source as u32, uart.pending());
@@ -6483,6 +6510,9 @@ impl Bus {
     }
 
     fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if let Some(gpio) = self.sifive_gpios.iter().find(|gpio| gpio.contains(address)) {
+            return Ok(gpio.read(address, N));
+        }
         if !self.rv64_devices.uarts.is_empty() && self.rv64_devices.uart_for_hart(0, address).is_some()
             && let Some(value) = self.rv64_devices.read_for_hart(0, address, N)
         {
@@ -7308,6 +7338,10 @@ impl Bus {
         uart: &mut impl Write,
         writer: Option<usize>,
     ) -> Result<(), BusError> {
+        if let Some(gpio) = self.sifive_gpios.iter_mut().find(|gpio| gpio.contains(address)) {
+            gpio.write(address, width, value);
+            return Ok(());
+        }
         let hart = writer.unwrap_or(0);
         if !self.rv64_devices.uarts.is_empty() && self.rv64_devices.uart_for_hart(hart, address).is_some()
             && let Some(result) = self.write_rv64_peripheral(hart, address, width, value, uart)
