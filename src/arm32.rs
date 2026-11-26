@@ -434,6 +434,8 @@ pub(crate) struct Cpu {
     vbar: u32,
     hsctlr: u32,
     actlr: u32,
+    vpidr: u32,
+    vmpidr: u32,
     hactlr: u32,
     hvbar: u32,
     hcr: u32,
@@ -477,6 +479,8 @@ impl Cpu {
             vbar: 0,
             hsctlr: 0,
             actlr: 0,
+            vpidr: 0x411f_d132,
+            vmpidr: 0x8000_0000,
             hactlr: 0,
             hvbar: 0,
             hcr: if matches!(profile, Profile::RealTimeV8) { 2 } else { 0 },
@@ -710,6 +714,9 @@ impl Cpu {
             "id_isar4" => 0x0000_0082,
             "id_isar6" => 0x0000_00e2,
             "id_isar5" => 0x0000_00a2,
+            "midr" => 0x0000_0000,
+            "vpidr" => 0x0080_0000,
+            "vmpidr" => 0x0080_00a0,
             "mpidr" => 0x0000_00a0,
             "tpidrurw" => 0x000d_0040,
             "tpidruro" => 0x000d_0060,
@@ -780,7 +787,10 @@ impl Cpu {
                 0x0000_0062 => Some(0x0111_2131),
                 0x0000_0082 => Some(0x0001_0142),
                 0x0000_00a2 => Some(0x0001_0001),
-                0x0000_00a0 => Some(0x8000_0000 | self.affinity),
+                0x0000_00a0 => {
+                    let mpidr = if self.cpsr & 31 == 0x1a { 0x8000_0000 } else { self.vmpidr };
+                    Some(mpidr | self.affinity)
+                }
                 _ => None,
             };
             if let Some(reply) = read_only {
@@ -796,6 +806,8 @@ impl Cpu {
             0x000d_0080 => (&mut self.thread_ids[2], u32::MAX),
             0x008d_0040 if v8r => (&mut self.thread_ids[3], u32::MAX),
             0x0001_0040 => (&mut self.cpacr, 0xf0_0000),
+            0x0080_0000 if v8r => (&mut self.vpidr, u32::MAX),
+            0x0080_00a0 if v8r => (&mut self.vmpidr, u32::MAX),
             0x0081_0000 if v8r => (&mut self.hsctlr, u32::MAX),
             0x0081_0020 if v8r => (&mut self.hactlr, u32::MAX),
             // Renode retains word-aligned values in its AArch32 HVBAR model.

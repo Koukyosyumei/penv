@@ -16,7 +16,7 @@ impl Cpu {
             self.hcr, self.cpacr, self.fpexc, self.elr_hyp, self.debug_status,
         ];
         write_words(output, &control.map(u64::from))?;
-        write_words(output, &[self.hdcr, self.hcptr, self.hstr, self.actlr].map(u64::from))?;
+        write_words(output, &[self.hdcr, self.hcptr, self.hstr, self.actlr, self.vpidr, self.vmpidr].map(u64::from))?;
         for bank in self.banks {
             write_words(output, &[bank.sp, bank.lr, bank.spsr].map(u64::from))?;
         }
@@ -62,6 +62,9 @@ impl Cpu {
         }
         if version >= 9 {
             [self.actlr] = read_u32s(input)?;
+        }
+        if version >= 10 {
+            [self.vpidr, self.vmpidr] = read_u32s(input)?;
         }
         if Self::bank_for(self.cpsr).is_none() {
             return Err(invalid("invalid snapshot AArch32 CPU mode"));
