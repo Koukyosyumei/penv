@@ -46,6 +46,25 @@ def robot_result(value):
     return value
 
 
+SVD_ASSET_ROOT = "https://dl.antmicro.com/projects/renode/svd/"
+SVD_PINS = {
+    "ATSAME70Q21.svd": (6211467, "2906bec73828b9e7eeb6d66d23b612bc07529cfc985242d0fb2effcfa33e26bb"),
+    "FE310.svd.gz": (5786, "a7d96f7f152eeb9f078c00909160d5902527e67aa54313da2895b8f9780fc333"),
+    "MAX32650.svd.gz": (72918, "8e7a8c936b9d67ac3943dd49fa2bbc4e4551b9bcd32841f489ceda6dd3dab8f3"),
+    "MK64F12.svd.gz": (193508, "081039ece2b33e25669cff2872d3513b18fd705348d67d019e6d819927250c01"),
+    "NRF52840.svd.gz": (99060, "e5249c6a4a4bc66adbf644b97cff3b497cfdb9727eac0b3f77be576d2edd7db4"),
+    "STM32F103.svd.gz": (47847, "c8f03172f4dee4c233b450a7ac49d7e44e75fb4097e8c462b0d028489a39b5ec"),
+    "STM32F40x.svd.gz": (74195, "d71b3e11c870ec83346eb994e98a57c5eacdf0082d2949ed495d7a3828bf41ec"),
+    "STM32F429x.svd.gz": (80817, "d0a24f24db3b0f8a5918f034b18bbf696d8a48dec6755f16dfdf748cff3781fc"),
+    "STM32F7x6.svd.gz": (98356, "4e7103fe3543ba690fb2a99436d7464442dee9a4edc4bf9274f1807dc60214d8"),
+    "STM32L0x1.svd": (588308, "34080feee6ba2ea5f4b66a5148e76b48f76be2cdb7b5f84748dd195ad2018b28"),
+    "STM32L1xx.svd.gz": (35312, "a0efa57cc3efa18746e5f1c0d10e36add6efbf6f8fdf04e0d575167db9a00b31"),
+    "STM32L552.svd": (2964972, "5974f84507f310518d636bb8eacfcad04bd329dba5e9642cf71a12ccfe47e4d5"),
+    "STM32MP157x.svd.gz": (241382, "90347bfc95866175329d280f40e1d13748670c7478209ad006b6b1a16961b3b7"),
+    "STM32W108.svd.gz": (11469, "2363c5a7d9b749c09048b8b7a2914b2b46bb8343374bfafa3235e1279baf226d"),
+}
+
+
 class Endpoint:
     keywords = {
         "Set Default Uart Timeout": "set_timeout",
@@ -147,15 +166,10 @@ class Endpoint:
     def fetch(self, url):
         filename = url.rsplit("/", 1)[1]
         pin = re.search(r"-s_(\d+)-([0-9a-f]{40})$", filename)
-        svd_pins = {
-            "https://dl.antmicro.com/projects/renode/svd/FE310.svd.gz": (
-                5786, "a7d96f7f152eeb9f078c00909160d5902527e67aa54313da2895b8f9780fc333",
-            ),
-        }
         if pin:
             size, digest, hash_data = int(pin[1]), pin[2], hashlib.sha1
-        elif url in svd_pins:
-            size, digest = svd_pins[url]
+        elif url == SVD_ASSET_ROOT + filename and filename in SVD_PINS:
+            size, digest = SVD_PINS[filename]
             hash_data = hashlib.sha256
         else:
             raise Unsupported(f"unversioned upstream asset: {url}")
