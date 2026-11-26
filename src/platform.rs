@@ -1029,6 +1029,7 @@ fn load_platform(
                     return Err(entry.error("only one UART is currently supported"));
                 }
             }
+            "Timers.RenesasRA_AGT" => map_renesas_ra_agt(entry, &entries, &mut machine.bus)?,
             "Timers.RenesasRA_GPT" => map_renesas_ra_gpt(entry, &entries, &mut machine.bus)?,
             "IRQControllers.RenesasRA_ICU" => {
                 let mut external = 16;
@@ -4302,6 +4303,43 @@ fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
         }
     }
     Ok(indices)
+}
+
+fn map_renesas_ra_agt(entry: &Entry, entries: &[Entry], bus: &mut crate::bus::Bus) -> Result<(), String> {
+    let mut routes = [None; 3];
+    let mut properties = Vec::new();
+    for item in &entry.body {
+        if let Some((pin, target)) = item.1.split_once("->") {
+            let output = match pin.trim() {
+                "IRQ" => 0,
+                "CompareMatchA" => 1,
+                "CompareMatchB" => 2,
+                _ => return Err(entry.error("unrecognized AGT output")),
+            };
+            let (target, event) = target.trim().split_once('@')
+                .ok_or_else(|| entry.error("AGT output requires an ICU event"))?;
+            if !entries.iter().any(|device| device.name == target.trim() && device.model == "IRQControllers.RenesasRA_ICU") {
+                return Err(entry.error("AGT output must target a Renesas ICU"));
+            }
+            let event = number(event.trim()).map_err(|error| entry.error(&error))?;
+            if event >= 512 || routes[output].replace(event as usize).is_some() {
+                return Err(entry.error("invalid or duplicate AGT IRQ route"));
+            }
+        } else {
+            properties.push(item.clone());
+        }
+    }
+    let clock_names = ["peripheralClockBFrequency", "lowSpeedOnChipOscillatorFrequency", "subClockOscillatorFrequency"];
+    let mut clocks = [0; 3];
+    for (name, value) in keys_in(entry, &properties, &clock_names)? {
+        let index = clock_names.iter().position(|clock| *clock == name).unwrap();
+        clocks[index] = number(value).map_err(|error| entry.error(&error))?;
+    }
+    if clocks.contains(&0) {
+        return Err(entry.error("AGT requires all three clock frequencies"));
+    }
+    let timer = crate::renesas_ra_agt::Agt::new(entry.address()?, clocks, routes);
+    bus.map_renesas_ra_agt(timer).map_err(|error| entry.error(&error))
 }
 
 fn map_renesas_ra_gpt(entry: &Entry, entries: &[Entry], bus: &mut crate::bus::Bus) -> Result<(), String> {
