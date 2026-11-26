@@ -602,6 +602,7 @@ fn load_platform(
     let mut combiners = Vec::new();
     let mut ram = false;
     let mut memory_bases = HashMap::new();
+    let mut stm32l0_flash = None;
     let mut flash_controller = None;
     let mut flash_chip = None;
     let mut uart = None;
@@ -903,6 +904,11 @@ fn load_platform(
                     return Err(entry.error("only one STM32 DMA controller is supported"));
                 }
             }
+            "MTD.STM32L0_FlashController" => {
+                if stm32l0_flash.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32L0 flash controller is supported"));
+                }
+            }
             "Analog.STM32_ADC" => stm32_regular_adcs.push(entry),
             "Analog.STM32F0_ADC" => {
                 if stm32_adc.replace(entry).is_some() {
@@ -944,6 +950,29 @@ fn load_platform(
     let extended_nvic = stm32_uarts
         .iter()
         .any(|uart| uart.model == "UART.STM32_UART");
+    if let Some(entry) = stm32l0_flash {
+        let registrations = entry.registration_list().ok_or_else(|| entry.error("missing flash controller registrations"))?;
+        let mut registers = None;
+        let mut signature = None;
+        for registration in registrations {
+            if let Some((base, size, region)) = multi_registration(entry, registration)? {
+                if region != "signature" || signature.replace((base, size)).is_some() {
+                    return Err(entry.error("invalid flash signature registration"));
+                }
+            } else if registers.replace(entry.registration_address(registration)?).is_some() {
+                return Err(entry.error("duplicate flash control registers"));
+            }
+        }
+        let properties = keys(entry, &["flash", "eeprom"])?;
+        let memory = |key| properties.iter().find_map(|&(name, value)| (name == key).then_some(value))
+            .and_then(|name| memory_bases.get(name)).copied()
+            .ok_or_else(|| entry.error("expected mapped flash and EEPROM backing"));
+        machine.bus.map_stm32l0_flash(crate::stm32l0_flash::Stm32l0Flash::new(
+            registers.ok_or_else(|| entry.error("missing flash registers"))?,
+            signature.ok_or_else(|| entry.error("missing flash signature"))?,
+            memory("flash")?, memory("eeprom")?,
+        )).map_err(|error| entry.error(&error))?;
+    }
     let irq_lines = if extended_nvic { 48 } else { 32 };
     for entry in stm32_regular_adcs {
         let irq = match entry.body.as_slice() {

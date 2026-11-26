@@ -507,6 +507,7 @@ pub struct Bus {
     stm32_rcc: Option<Stm32F0Rcc>,
     stm32f4_rcc: Option<Stm32F4Rcc>,
     stm32_flash: Option<Stm32F0Flash>,
+    stm32l0_flash: Option<crate::stm32l0_flash::Stm32l0Flash>,
     stm32_rtc: Option<Stm32Rtc>,
     iwdgs: Vec<Iwdg>,
     h7_exti: Option<H7Exti>,
@@ -2980,6 +2981,12 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.stm32l0_flash.as_ref().is_some_and(|flash| {
+            overlaps_range(start, end, flash.base, crate::stm32l0_flash::Stm32l0Flash::SIZE)
+                || overlaps_range(start, end, flash.signature.0, flash.signature.1)
+        }) {
+            return true;
+        }
         if self.stm32_regular_adcs.iter().any(|adc| {
             overlaps_range(start, end, adc.base, crate::stm32_adc::Stm32Adc::SIZE)
         }) {
@@ -3961,6 +3968,9 @@ impl Bus {
         }
         if let Some(uart) = self.litex_uart.as_mut() {
             *uart = LiteXUart::new(uart.bases.clone(), None);
+        }
+        if let Some(flash) = self.stm32l0_flash.as_mut() {
+            flash.reset();
         }
         if let Some(flash) = self.stm32_flash.as_mut() {
             flash.reset(reload);
@@ -5069,6 +5079,21 @@ impl Bus {
         self.stm32_regular_adcs.iter_mut().find(|adc| adc.name == name)
             .ok_or_else(|| format!("unknown STM32 ADC {name:?}"))?
             .feed_sample(value, channel, repeat)
+    }
+
+    pub(crate) fn map_stm32l0_flash(&mut self, flash: crate::stm32l0_flash::Stm32l0Flash) -> Result<(), String> {
+        let start = u64::from(flash.base);
+        let end = start + u64::from(crate::stm32l0_flash::Stm32l0Flash::SIZE);
+        let sig = u64::from(flash.signature.0);
+        let sig_end = sig + u64::from(flash.signature.1);
+        if flash.base & 3 != 0 || flash.signature.0 & 3 != 0 || flash.signature.1 == 0
+            || end > 1 << 32 || sig_end > 1 << 32 || (start < sig_end && sig < end)
+            || self.stm32l0_flash.is_some() || self.overlaps(start, end) || self.overlaps(sig, sig_end)
+        {
+            return Err("invalid or overlapping STM32L0 flash controller".into());
+        }
+        self.stm32l0_flash = Some(flash);
+        Ok(())
     }
 
     pub fn map_stm32f0_adc(&mut self, name: String, adc: Stm32F0Adc) -> Result<(), String> {
@@ -6929,6 +6954,9 @@ impl Bus {
         {
             return Ok(value as u32);
         }
+        if N == 4 && let Some(flash) = self.stm32l0_flash.as_ref().filter(|flash| flash.contains(address)) {
+            return Ok(flash.read(address));
+        }
         if N == 4 && let Some(adc) = self.stm32_regular_adcs.iter_mut().find(|adc| adc.contains(address)) {
             return Ok(adc.read(address));
         }
@@ -7809,6 +7837,16 @@ impl Bus {
                 .access(address.into(), width as u32, Some(value.into()))
                 .map(|_| ())
                 .map_err(BusError::Python);
+        }
+        if let Some(flash) = self.stm32l0_flash.as_mut() {
+            if width == 4 && flash.contains(address) {
+                flash.write(address, value);
+                return Ok(());
+            }
+            if let Some((base, length)) = flash.erase_range(address) {
+                self.memory64(u64::from(base), length).ok_or(BusError::Unmapped(base, length))?.fill(0);
+                return Ok(());
+            }
         }
         if width == 4 && let Some(adc) = self.stm32_regular_adcs.iter_mut().find(|adc| adc.contains(address)) {
             adc.write(address, value);
