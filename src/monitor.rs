@@ -1169,6 +1169,19 @@ fn run_commands<'a>(
                 let words = command_tokens(text, Some(&mut separators))?;
                 let allow_snapshots = !separators.is_empty() || matches!(words.first(), Some(&("include" | "i" | "ExecuteScript")));
                 validate_deferred_commands(&state.boot, depth, allow_snapshots)?;
+                // The host may fetch a missing asset and retry the command.
+                // Resolve inputs before a script can create or modify a machine.
+                for command in &state.boot.runtime {
+                    match &command.action {
+                        Action::LoadMonitorElf(asset, _, root)
+                        | Action::LoadMonitorBinary(asset, _, root)
+                        | Action::LoadMonitorSymbols(asset, root)
+                        | Action::LoadScopedHex(asset, _, root) => {
+                            asset.input_path(root, machine.monitor_asset_dir.as_deref())?;
+                        }
+                        _ => {}
+                    }
+                }
                 let boot = apply_deferred_state(session, state);
                 let (stop, count) = run_deferred_commands(machine, boot, budget, &mut output, session, depth)?;
                 retired += count;
