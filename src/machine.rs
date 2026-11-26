@@ -671,6 +671,28 @@ impl Machine {
         Ok(())
     }
 
+    pub(crate) fn attach_monitor_external_pmp(
+        &mut self, cpu: &str, name: &str, entries: usize,
+    ) -> Result<(), String> {
+        let cpu = cpu.trim_start_matches("sysbus.");
+        let hart = self.named_hart(cpu)?;
+        let target = hart.rv64.as_mut().ok_or("live external PMP requires an RV64 CPU")?;
+        if target.isa().smepmp {
+            return Err("Smepmp requires internal PMP entries".into());
+        }
+        let current = target.privilege.pmp.as_ref();
+        if current.is_some_and(|pmp| pmp.external_path.is_some()) {
+            return Err(format!("CPU {cpu:?} already has an external PMP"));
+        }
+        let address_bits = current.map_or(54, crate::rv64_priv::Pmp::address_bits);
+        let mut pmp = crate::rv64_priv::Pmp::external(entries, address_bits);
+        pmp.external_path = Some(format!("{cpu}.{name}"));
+        target.privilege.pmp = Some(pmp);
+        target.clear_translation_cache();
+        crate::monitor_log::record(1, &format!("{cpu}: Enabling External PMP"));
+        Ok(())
+    }
+
     pub(crate) fn set_riscv_wfi_as_nop(&mut self, name: &str, enabled: bool) -> Result<(), String> {
         let hart = self.named_hart(name)?;
         if let Some(cpu) = &mut hart.rv64 {

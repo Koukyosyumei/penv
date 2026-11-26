@@ -685,6 +685,10 @@ impl Pmp {
         }
     }
 
+    pub(crate) fn address_bits(&self) -> u32 {
+        self.address_mask.count_ones()
+    }
+
     pub fn external(entries: usize, address_bits: u32) -> Self {
         let mut pmp = Self::new(entries, address_bits);
         pmp.allow_when_inactive = true;

@@ -397,7 +397,13 @@ impl Session {
     fn attach_platform_fragment(
         &mut self, machine: &mut Machine, source: &str, origin: &Path, root: &Path,
     ) -> Result<(), String> {
-        let draft = self.named_machines.draft.as_mut().ok_or("inline platform requires a new machine")?;
+        let Some(draft) = self.named_machines.draft.as_mut() else {
+            return match parse_live_overlay(source, root)? {
+                Action::ExternalPmpOverlay(cpu, name, entries) =>
+                    machine.attach_monitor_external_pmp(&cpu, &name, entries),
+                _ => Err("inline platform requires a new machine".into()),
+            };
+        };
         let mut boot = Boot::default();
         boot.inline_repl.clone_from(draft);
         boot.inline_repl.push((origin.to_owned(), source.to_owned()));
@@ -716,6 +722,7 @@ enum Action {
     GpioWire(String, u8, String, u8),
     GpioOverlay(Vec<(String, u8, String, u8)>),
     RamOverlay(String, Option<String>, u64, u32),
+    ExternalPmpOverlay(String, String, usize),
     PeripheralList,
     ExportPeripherals(PathBuf, PathBuf),
     SubobjectTester(String, u32),
@@ -1779,6 +1786,8 @@ fn run_commands<'a>(
                         .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None)
                 }
             }
+            Action::ExternalPmpOverlay(cpu, name, entries) =>
+                machine.attach_monitor_external_pmp(cpu, name, *entries).map(|()| None),
             Action::RamOverlay(name, cpu, address, size) => {
                 let hart = cpu.as_deref().map(|cpu| machine.monitor_bus_hart(cpu)).transpose()?;
                 machine.bus.map_named_monitor_ram(name, hart, *address, *size)
@@ -4745,6 +4754,23 @@ fn parse_reset_hooks(mut commands: &str, hooks: &mut Vec<ResetHook>) -> Result<(
 
 fn parse_live_overlay(source: &str, root: &Path) -> Result<Action, String> {
     let entries = crate::repl_parser::parse_inline(source, root)?;
+    if let [entry] = entries.as_slice()
+        && entry.model == "Miscellaneous.RiscVExternalPMP"
+    {
+        let cpu = entry.registration.as_ref().ok_or("external PMP requires a target CPU")?;
+        let count = match entry.body.as_slice() {
+            [] => 64,
+            [(_, property)] => crate::parse_address(
+                property.strip_prefix("numberOfPMPEntries:")
+                    .ok_or("unsupported external PMP property")?.trim(),
+            )?,
+            _ => return Err("unsupported external PMP properties".into()),
+        };
+        if !(1..=64).contains(&count) {
+            return Err("unsupported RV64 external PMP entry count".into());
+        }
+        return Ok(Action::ExternalPmpOverlay(cpu.clone(), entry.name.clone(), count as usize));
+    }
     if let [entry] = entries.as_slice()
         && entry.model == "Dynamic.SubobjectTester" && entry.body.is_empty()
     {
