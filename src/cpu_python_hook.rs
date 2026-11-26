@@ -9,8 +9,9 @@ use std::{
 
 const WORKER: &str = r#"
 import contextlib
+import io
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 def rpc(request):
     print(request, file=sys.__stdout__, flush=True)
@@ -19,7 +20,33 @@ def rpc(request):
         raise RuntimeError(bytes.fromhex(value).decode())
     return value
 
+class Credential:
+    def __init__(self, path):
+        self.path = path
+    @property
+    def Size(self):
+        return int(rpc('size ' + self.path.encode().hex()))
+
+class BusRangeRegistration:
+    def __init__(self, address, size, cpu=None):
+        self.address = address
+        self.size = size
+        self.cpu = cpu
+
+for name in ('Antmicro', 'Antmicro.Renode', 'Antmicro.Renode.Peripherals',
+             'Antmicro.Renode.Peripherals.Bus'):
+    module = sys.modules.setdefault(name, ModuleType(name))
+    module.__path__ = []
+sys.modules['Antmicro.Renode.Peripherals.Bus'].BusRangeRegistration = BusRangeRegistration
+
 class Bus:
+    def WhatIsAt(self, address, cpu):
+        name = bytes.fromhex(rpc(f'lookup {address} {cpu.path.encode().hex()}')).decode()
+        return SimpleNamespace(Peripheral=Credential(name)) if name else None
+    def MoveRegistrationWithinContext(self, peripheral, registration, cpu):
+        if registration.cpu.path != cpu.path:
+            raise ValueError('registration CPU does not match the context')
+        rpc(f'move {peripheral.path.encode().hex()} {cpu.path.encode().hex()} {registration.address} {registration.size}')
     def GetSymbolAddress(self, name):
         return int(rpc('symbol ' + name.encode().hex()))
     def ReadByte(self, address):
@@ -27,6 +54,8 @@ class Bus:
 
 class Machine:
     SystemBus = Bus()
+    def __getitem__(self, path):
+        return Credential(path)
     @property
     def UserState(self):
         return bytes.fromhex(rpc('get')).decode()
@@ -36,8 +65,9 @@ class Machine:
             raise TypeError('UserState must be a string')
         rpc('set ' + value.encode().hex())
 
-class CPU:
+class CPU(Credential):
     Bus = Machine.SystemBus
+    Machine = Machine()
     def DebugLog(self, message, *args):
         self.Log(0, message, *args)
     def Log(self, level, message, *args):
@@ -46,14 +76,15 @@ class CPU:
         rpc('log ' + str(level) + ' ' + message.encode().hex())
 
 level = SimpleNamespace(Noisy=-1, Debug=0, Info=1, Warning=2, Error=3)
-cpu = CPU()
-scope = dict(machine=Machine(), cpu=cpu, self=cpu, LogLevel=level)
+cpu = CPU(sys.argv[2])
+scope = dict(machine=cpu.Machine, cpu=cpu, self=cpu, LogLevel=level)
 request = SimpleNamespace(Value=0)
 program = compile(sys.argv[1], '<CPU hook>', 'exec')
 print('ready', flush=True)
 for line in sys.stdin:
     fields = line.split()
     is_csr = fields[0] == 'csr'
+    is_monitor = fields[0] == 'monitor'
     if is_csr:
         request.Csr = int(fields[1])
         request.IsRead = fields[2] == 'read'
@@ -62,18 +93,22 @@ for line in sys.stdin:
         if request.IsWrite:
             request.Value = int(fields[3])
         scope['request'] = request
-    else:
+    elif not is_monitor:
         scope['pc'] = int(fields[0])
         if len(fields) == 4:
             scope.update(address=int(fields[1]), width=int(fields[2]), is_write=fields[3] == 'true')
+    capture = io.StringIO() if is_monitor else sys.stderr
     try:
-        with contextlib.redirect_stdout(sys.stderr):
-            # RPCs must use the original stdout while ordinary prints go to stderr.
+        with contextlib.redirect_stdout(capture):
+            # RPCs use the original stdout even when script output is redirected.
             exec(program, scope)
     except Exception as error:
-        print('exception ' + str(error).encode().hex(), flush=True)
+        marker = 'monitor-exception' if is_monitor else 'exception'
+        print(marker + ' ' + str(error).encode().hex(), flush=True)
     else:
-        if is_csr:
+        if is_monitor:
+            print('monitor-result ' + capture.getvalue().encode().hex(), flush=True)
+        elif is_csr:
             print('csr-result ' + str(request.Value), flush=True)
         else:
             print('done', flush=True)
@@ -85,6 +120,7 @@ pub(crate) struct Hook {
     output: BufReader<ChildStdout>,
     symbols: Option<PathBuf>,
     logger: Option<String>,
+    monitor_output: String,
 }
 
 pub(crate) fn symbol(file: &Path, name: &str) -> Result<u64, String> {
@@ -108,8 +144,14 @@ pub(crate) fn symbol(file: &Path, name: &str) -> Result<u64, String> {
 
 impl Hook {
     pub(crate) fn new(source: &str, symbols: Option<PathBuf>, logger: Option<String>) -> Result<Self, String> {
+        Self::with_cpu(source, symbols, logger, "")
+    }
+
+    pub(crate) fn with_cpu(
+        source: &str, symbols: Option<PathBuf>, logger: Option<String>, cpu: &str,
+    ) -> Result<Self, String> {
         let mut child = Command::new("python3")
-            .args(["-u", "-c", WORKER, source])
+            .args(["-u", "-c", WORKER, source, cpu])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -122,6 +164,7 @@ impl Hook {
             output,
             symbols,
             logger,
+            monitor_output: String::new(),
         };
         if hook.reply()? != "ready" {
             return Err("CPU Python hook failed to initialize".into());
@@ -146,6 +189,11 @@ impl Hook {
         self.invoke(bus, format_args!("{pc}")).map(|_| ())
     }
 
+    pub(crate) fn execute_monitor(&mut self, bus: &mut Bus) -> Result<String, String> {
+        self.invoke(bus, format_args!("monitor"))?;
+        Ok(std::mem::take(&mut self.monitor_output))
+    }
+
     pub(crate) fn execute_stack(&mut self, bus: &mut Bus, pc: u64, address: u64, width: usize, write: bool) -> Result<(), String> {
         self.invoke(bus, format_args!("{pc} {address} {width} {write}")).map(|_| ())
     }
@@ -165,6 +213,29 @@ impl Hook {
             let result = match kind {
                 "done" => return Ok(None),
                 "csr-result" => return argument.parse::<u64>().map(Some).map_err(|e| e.to_string()),
+                "monitor-result" => {
+                    self.monitor_output = decode(argument)?;
+                    return Ok(None);
+                }
+                "monitor-exception" => return Err(decode(argument)?),
+                "size" => decode(argument).and_then(|name| bus.scoped_peripheral_size(&name))
+                    .map(|size| size.to_string()),
+                "lookup" => (|| {
+                    let (address, context) = argument.split_once(' ').ok_or("invalid bus lookup")?;
+                    let address = address.parse::<u32>().map_err(|e| e.to_string())?;
+                    let hart = bus.scoped_cpu_index(&decode(context)?)?;
+                    Ok(encode(bus.scoped_peripheral_at(hart, address).unwrap_or_default()))
+                })(),
+                "move" => (|| {
+                    let mut fields = argument.split_ascii_whitespace();
+                    let peripheral = decode(fields.next().ok_or("missing peripheral")?)?;
+                    let context = decode(fields.next().ok_or("missing CPU")?)?;
+                    let address = fields.next().and_then(|value| value.parse().ok()).ok_or("invalid destination address")?;
+                    let size = fields.next().and_then(|value| value.parse().ok()).ok_or("invalid registration size")?;
+                    let hart = bus.scoped_cpu_index(&context)?;
+                    bus.move_named_scoped_registration(&peripheral, hart, address, size)?;
+                    Ok(String::new())
+                })(),
                 "exception" => {
                     emit(
                         bus,

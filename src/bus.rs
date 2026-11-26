@@ -1031,6 +1031,68 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn map_named_cpu_ram(&mut self, name: &str, hart: usize, address: u64, size: u32) -> Result<(), String> {
+        if self.traceable_memory.iter().any(|(candidate, ..)| candidate == name) {
+            return Err(format!("name {name} conflicts with peripheral"));
+        }
+        let backing = self.allocate_ram_backing(size as usize)?;
+        if let Err(error) = self.map_alias64(backing, address, size as usize, 0, 1 << hart, false) {
+            self.regions.pop();
+            return Err(format!("memory at {address:#x} conflicts with peripheral: {error}"));
+        }
+        self.register_traceable_memory(name, &[], size);
+        Ok(())
+    }
+
+    pub(crate) fn monitor_bus_device_names(&self) -> impl Iterator<Item = &str> {
+        self.guest_cpu_names.iter().map(String::as_str)
+            .chain(self.traceable_memory.iter().map(|(name, ..)| name.as_str()))
+            .chain(self.rv64_devices.uarts.iter().map(|uart| uart.name()))
+    }
+
+    pub(crate) fn scoped_cpu_index(&self, path: &str) -> Result<usize, String> {
+        let name = path.rsplit('.').next().unwrap_or(path);
+        self.guest_cpu_names.iter().position(|cpu| cpu == name).ok_or_else(|| format!("unknown CPU {path:?}"))
+    }
+
+    pub(crate) fn scoped_peripheral_size(&self, path: &str) -> Result<u64, String> {
+        let name = path.strip_prefix("sysbus.").unwrap_or(path);
+        if let Some(uart) = self.rv64_devices.uarts.iter().find(|uart| uart.name() == name) {
+            return Ok(uart.size());
+        }
+        self.traceable_memory.iter().find(|(candidate, ..)| candidate == name)
+            .map(|(_, _, size)| u64::from(*size))
+            .ok_or_else(|| format!("unknown peripheral {path:?}"))
+    }
+
+    pub(crate) fn scoped_peripheral_at(&self, hart: usize, address: u32) -> Option<&str> {
+        let index = self.rv64_devices.uart_for_hart(hart, address)?;
+        Some(self.rv64_devices.uarts[index].name())
+    }
+
+    pub(crate) fn move_named_scoped_registration(
+        &mut self, name: &str, hart: usize, new: u64, size: u64,
+    ) -> Result<(), String> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        if size != self.scoped_peripheral_size(name)? {
+            return Err("registration size must match the peripheral".into());
+        }
+        if self.rv64_devices.uart_index(name).is_some() {
+            let address = u32::try_from(new).map_err(|_| "UART address exceeds the 32-bit bus")?;
+            self.rv64_devices.move_scoped_uart(name, hart, address)?;
+            return Ok(());
+        }
+        let global = self.traceable_memory.iter().find(|(candidate, ..)| candidate == name)
+            .and_then(|(_, addresses, _)| addresses.first().copied());
+        let backing = global.and_then(|address| self.ram_location64(u64::from(address), 1))
+            .map(|(backing, _)| backing);
+        let old = self.aliases.iter().find(|alias| {
+            Some(alias.backing) == backing && alias.harts == 1 << hart && !alias.cluster
+        }).map(|alias| alias.base)
+            .ok_or("Attempted to move a peripheral that isn't registered within current context")?;
+        self.move_cpu_ram_alias(hart, old, new)
+    }
+
     pub(crate) fn move_cpu_ram_alias(
         &mut self,
         hart: usize,

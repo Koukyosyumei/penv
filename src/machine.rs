@@ -605,7 +605,24 @@ impl Machine {
         let index = std::iter::once(&self.primary).chain(&self.secondary)
             .position(|hart| hart.name.as_deref() == Some(name))
             .ok_or_else(|| format!("unknown hook CPU {name:?}"))?;
-        self.python_hooks.push((index, pc, crate::cpu_python_hook::Hook::new(source, Some(file), None)?));
+        self.python_hooks.push((index, pc, crate::cpu_python_hook::Hook::with_cpu(source, Some(file), None, name)?));
+        Ok(())
+    }
+
+    pub(crate) fn install_monitor_python_hook(&mut self, cpu: &str, pc: u64, source: &str) -> Result<(), String> {
+        let index = std::iter::once(&self.primary).chain(&self.secondary)
+            .position(|hart| hart.name.as_deref() == Some(cpu))
+            .ok_or_else(|| format!("unknown hook CPU {cpu:?}"))?;
+        let hook = crate::cpu_python_hook::Hook::with_cpu(source, self.monitor_firmware.clone(), None, cpu)?;
+        self.python_hooks.push((index, pc, hook));
+        Ok(())
+    }
+
+    pub(crate) fn remove_monitor_hooks(&mut self, cpu: &str, pc: u64) -> Result<(), String> {
+        let index = std::iter::once(&self.primary).chain(&self.secondary)
+            .position(|hart| hart.name.as_deref() == Some(cpu))
+            .ok_or_else(|| format!("unknown hook CPU {cpu:?}"))?;
+        self.python_hooks.retain(|(hart, address, _)| (*hart, *address) != (index, pc));
         Ok(())
     }
 

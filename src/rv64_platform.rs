@@ -122,6 +122,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         }
     }
     machine.configure_harts(cpus.len());
+    machine.bus.guest_cpu_names = cpus.iter().map(|(_, entry)| entry.name.clone()).collect();
     // Each scheduler slot runs one hart. Scale the slot rate so adding harts
     // does not take virtual execution time away from the existing CPUs.
     machine.bus.set_step_hz(crate::machine::VIRTUAL_STEPS_PER_SECOND * cpus.len() as u32);

@@ -868,6 +868,7 @@ impl Rv64 {
                 return Ok(u64::from(value));
             }
             let result = match width {
+                _ if bus.rv64_devices.scoped_uart_covers(low) => Err(BusError::Unmapped(low, width)),
                 1 => bus.read::<1>(low).map(u64::from),
                 2 => bus.read::<2>(low).map(u64::from),
                 4 => bus.read::<4>(low).map(u64::from),
@@ -961,7 +962,13 @@ impl Rv64 {
             } else {
                 bus.write_rv64_peripheral(self.hart_id, low, width, value as u32, output)
                     .map_or_else(
-                        || bus.write(low, width, value as u32, output),
+                        || {
+                            if bus.rv64_devices.scoped_uart_covers(low) {
+                                Err(BusError::Unmapped(low, width))
+                            } else {
+                                bus.write(low, width, value as u32, output)
+                            }
+                        },
                         |result| result.map_err(BusError::Output),
                     )
             };

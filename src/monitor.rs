@@ -516,6 +516,8 @@ enum Action {
     LogUart(String),
     GpioWire(String, u8, String, u8),
     GpioOverlay(Vec<(String, u8, String, u8)>),
+    ScopedRamOverlay(String, String, u64, u32),
+    PeripheralList,
     IlluminanceFeed(String, PathBuf),
     RunRemaining,
     TimeSourceInfo,
@@ -544,6 +546,8 @@ enum Action {
     ContextBusScalar(BusScalar, String),
     DisassembleBlock(String, u64, usize),
     BusWhatIsAt(u64, Option<String>),
+    ExecutePython(String),
+    PythonHook(String, String, Option<String>),
     RecordTo(PathBuf),
     PlayFrom(PathBuf),
     RtcMode(RtcMode),
@@ -1013,6 +1017,22 @@ fn run_commands<'a>(
                 }
                 Ok(None)
             }
+            Action::ExecutePython(source) => {
+                let mut handler = crate::cpu_python_hook::Hook::new(source, machine.monitor_firmware.clone(), None)?;
+                let result = handler.execute_monitor(&mut machine.bus)
+                    .map_err(|error| format!("KeywordException: {error}"))?;
+                output.reply().write_all(result.as_bytes()).map_err(|error| error.to_string())?;
+                Ok(None)
+            }
+            Action::PythonHook(cpu, symbol, source) => {
+                let address = machine.monitor_symbol_address(symbol)?;
+                if let Some(source) = source {
+                    machine.install_monitor_python_hook(cpu, address, source)?;
+                } else {
+                    machine.remove_monitor_hooks(cpu, address)?;
+                }
+                Ok(None)
+            }
             Action::CpuStatus(cpu, property) => {
                 let thumb = machine.cortex_m_cpu(cpu)?;
                 match property.as_str() {
@@ -1348,6 +1368,18 @@ fn run_commands<'a>(
                 .filter(|clic| clic.name == *name)
                 .ok_or_else(|| format!("unsupported CLIC target {name:?}"))
                 .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None),
+            Action::ScopedRamOverlay(name, cpu, address, size) => {
+                let hart = machine.monitor_bus_hart(cpu)?;
+                machine.bus.map_named_cpu_ram(name, hart, *address, *size)
+                    .map_err(|error| format!("KeywordException: Error E39: Exception was thrown during registration: {error}"))?;
+                Ok(None)
+            }
+            Action::PeripheralList => {
+                for name in machine.bus.monitor_bus_device_names() {
+                    writeln!(output.reply(), "{name}").map_err(|error| error.to_string())?;
+                }
+                Ok(None)
+            }
             Action::GpioOverlay(links) => machine.bus.connect_stm32_gpios(
                 links.iter().map(|(from, output, to, input)| (from.as_str(), *output, to.as_str(), *input)),
             ).map(|()| None),
@@ -2410,6 +2442,10 @@ pub fn serve(
                     {
                         frame(&mut output, "REJECTED", error.as_bytes())
                     }
+                    Err(error) if error.starts_with("<monitor>:1: KeywordException: ") => {
+                        let message = error.strip_prefix("<monitor>:1: ").unwrap();
+                        frame(&mut output, "REJECTED", message.as_bytes())
+                    }
                     Err(error) if error.starts_with("<monitor>:1: memory assertion did not match") => {
                         frame(&mut output, "FAIL", error.as_bytes())
                     }
@@ -3382,9 +3418,9 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                 inner.replace("\\\"", "\"")
             };
             if state.boot.started || !state.boot.runtime.is_empty() {
-                let links = parse_gpio_overlay(&source, root).map_err(|message| error(&message))?;
+                let action = parse_live_overlay(&source, root).map_err(|message| error(&message))?;
                 state.boot.runtime.push(RuntimeCommand {
-                    line: line + 1, source: path.to_owned(), action: Action::GpioOverlay(links),
+                    line: line + 1, source: path.to_owned(), action,
                 });
             } else {
                 state.boot.inline_repl.push((origin.to_owned(), source));
@@ -3979,6 +4015,35 @@ fn parse_reset_hooks(mut commands: &str, hooks: &mut Vec<ResetHook>) -> Result<(
     Ok(())
 }
 
+fn parse_live_overlay(source: &str, root: &Path) -> Result<Action, String> {
+    let entries = crate::repl_parser::parse_inline(source, root)?;
+    if let [entry] = entries.as_slice()
+        && matches!(entry.model.as_str(), "Memory.ArrayMemory" | "Memory.MappedMemory")
+        && let Some(registration) = entry.registration.as_deref()
+        && let Some(fields) = registration.strip_prefix("sysbus new Bus.BusPointRegistration")
+            .and_then(|fields| fields.trim().strip_prefix('{'))
+            .and_then(|fields| fields.strip_suffix('}'))
+    {
+        let mut address = None;
+        let mut cpu = None;
+        for field in fields.split(';') {
+            let (name, value) = field.trim().split_once(':').ok_or("invalid scoped memory registration")?;
+            match name.trim() {
+                "address" if address.is_none() => address = Some(crate::parse_address64(value.trim())?),
+                "cpu" if cpu.is_none() => cpu = Some(value.trim().to_owned()),
+                _ => return Err("unknown or duplicate scoped memory registration field".into()),
+            }
+        }
+        let [(_, property)] = entry.body.as_slice() else {
+            return Err("scoped memory overlay requires a size".into());
+        };
+        let size = crate::parse_address(property.strip_prefix("size:").ok_or("expected memory size")?.trim())?;
+        return Ok(Action::ScopedRamOverlay(entry.name.clone(),
+            cpu.ok_or("scoped memory overlay requires a CPU")?, address.ok_or("missing memory address")?, size));
+    }
+    parse_gpio_overlay(source, root).map(Action::GpioOverlay)
+}
+
 fn parse_gpio_overlay(source: &str, root: &Path) -> Result<Vec<(String, u8, String, u8)>, String> {
     let unsupported = || "unsupported live REPL overlay: expected GPIO pin connections on existing devices".to_string();
     let entries = crate::repl_parser::parse_inline(source, root)?;
@@ -4351,9 +4416,9 @@ fn execute(
             crate::parse_address(resolve(offset)?)?, crate::parse_address(resolve(value)?)?)),
 
         ["machine", "LoadPlatformDescriptionFromString", value] if boot.started => {
-            let source = crate::repl_parser::quoted_value(resolve(value)?)
-                .map_err(|_| "expected quoted inline REPL")?;
-            Some(Action::GpioOverlay(parse_gpio_overlay(&source, root)?))
+            let source = monitor_string(resolve(value)?)
+                .ok_or("expected quoted inline REPL")?;
+            Some(parse_live_overlay(&source, root)?)
         }
         ["ConnectMonitorGpio", source, output, target, input] if boot.started => Some(Action::GpioWire(
             (*source).to_owned(), output.parse().map_err(|_| "invalid source GPIO pin")?,
@@ -4401,6 +4466,34 @@ fn execute(
             Some(Action::UserState(value))
         }
         ["Clear"] => Some(Action::ClearMemory),
+        ["peripherals"] => Some(Action::PeripheralList),
+        ["py" | "python", source] => {
+            let source = monitor_string(resolve(source)?).ok_or("Variable type has to be a string.")?;
+            Some(Action::ExecutePython(source))
+        }
+        [target, method @ ("AddHook" | "RemoveHooksAt"), ..]
+            if text.contains("`sysbus GetSymbolAddress ")
+                && (*method == "RemoveHooksAt" || text.rsplit_once('`').is_some_and(|(_, body)| body.trim_start().starts_with('"'))) =>
+        {
+            let cpu = resolve(target)?.trim_start_matches("sysbus.").to_owned();
+            let args = text[target.len()..].trim_start()[method.len()..].trim_start();
+            let (expression, code) = args.strip_prefix('`').and_then(|args| args.split_once('`'))
+                .ok_or("expected a hook symbol address")?;
+            let words = command_words(expression)?;
+            let ["sysbus", "GetSymbolAddress", symbol] = words.as_slice() else {
+                return Err("expected a hook symbol address".into());
+            };
+            let symbol = monitor_string(resolve(symbol)?).ok_or("expected a quoted hook symbol")?;
+            let source = if *method == "AddHook" {
+                Some(monitor_string(resolve(code.trim())?).ok_or("expected quoted Python source")?)
+            } else {
+                if !code.trim().is_empty() {
+                    return Err("unexpected RemoveHooksAt argument".into());
+                }
+                None
+            };
+            Some(Action::PythonHook(cpu, symbol, source))
+        }
         [target, "DisassembleBlock", address, length] => {
             let length = crate::parse_address(resolve(length)?)? as usize;
             if !(1..=65536).contains(&length) {
@@ -5303,7 +5396,8 @@ fn execute(
                 && !matches!(
                     action,
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
-                        | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..)
+                        | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
+                        | Action::ScopedRamOverlay(..) | Action::PeripheralList
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)

@@ -119,8 +119,31 @@ impl Devices {
 
     pub(crate) fn uart_for_hart(&self, hart: usize, address: u32) -> Option<usize> {
         self.uarts.iter().position(|uart| {
-            uart.contains(address) && (uart.harts == 0 || uart.harts & (1 << hart) != 0)
+            uart.translated_address(hart, address).is_some()
         })
+    }
+
+    pub(crate) fn scoped_uart_covers(&self, address: u32) -> bool {
+        self.uarts.iter().any(|uart| uart.harts != 0 && (uart.contains(address)
+            || uart.scoped_bases.iter().flatten().any(|base| u64::from(address.wrapping_sub(*base)) < uart.size())))
+    }
+
+    pub(crate) fn move_scoped_uart(&mut self, name: &str, hart: usize, new: u32) -> Result<bool, String> {
+        let Some(index) = self.uart_index(name) else { return Ok(false) };
+        let size = self.uarts[index].size();
+        let end = u64::from(new) + size;
+        if self.uarts[index].harts & (1 << hart) == 0 {
+            return Err("Attempted to move a peripheral that isn't registered within current context".into());
+        }
+        if end > 1 << 32 || self.uarts.iter().enumerate().any(|(other, uart)| {
+            other != index && uart.base_for_hart(hart).is_some_and(|base| {
+                u64::from(base) < end && u64::from(new) < u64::from(base) + uart.size()
+            })
+        }) {
+            return Err("destination overlaps a UART registration".into());
+        }
+        self.uarts[index].scoped_bases[hart] = Some(new);
+        Ok(true)
     }
 
     pub fn select_uart(&mut self, name: &str) -> Result<(), String> {
@@ -207,8 +230,8 @@ impl Devices {
         {
             return Some(value);
         }
-        if let Some(uart) = self.uarts.iter_mut().find(|uart| {
-            uart.contains(address) && (uart.harts == 0 || uart.harts & (1 << hart) != 0)
+        if let Some((uart, address)) = self.uarts.iter_mut().find_map(|uart| {
+            uart.translated_address(hart, address).map(|translated| (uart, translated))
         }) {
             return uart.read(address, width);
         }
@@ -332,8 +355,8 @@ impl Devices {
             self.reset_requested |= reset;
             return Some(Ok(()));
         }
-        if let Some(uart) = self.uarts.iter_mut().find(|uart| {
-            uart.contains(address) && (uart.harts == 0 || uart.harts & (1 << hart) != 0)
+        if let Some((uart, address)) = self.uarts.iter_mut().find_map(|uart| {
+            uart.translated_address(hart, address).map(|translated| (uart, translated))
         }) {
             return uart.write(address, width, value, output);
         }
@@ -440,6 +463,7 @@ enum UartKind {
 
 pub struct Uart {
     pub(crate) harts: u64,
+    scoped_bases: [Option<u32>; crate::machine::MAX_HARTS],
     name: String,
     pub base: u32,
     pub(crate) source: usize,
@@ -474,6 +498,7 @@ impl Uart {
         };
         Self {
             harts: 0,
+            scoped_bases: [None; crate::machine::MAX_HARTS],
             name,
             base,
             source,
@@ -484,6 +509,16 @@ impl Uart {
 
     pub fn size(&self) -> u64 {
         0x100
+    }
+
+    fn base_for_hart(&self, hart: usize) -> Option<u32> {
+        (self.harts == 0 || self.harts & (1 << hart) != 0)
+            .then(|| self.scoped_bases[hart].unwrap_or(self.base))
+    }
+
+    fn translated_address(&self, hart: usize, address: u32) -> Option<u32> {
+        let offset = address.checked_sub(self.base_for_hart(hart)?)?;
+        (u64::from(offset) < self.size()).then(|| self.base.wrapping_add(offset))
     }
 
     fn contains(&self, address: u32) -> bool {
