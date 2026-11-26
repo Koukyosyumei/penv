@@ -3348,6 +3348,11 @@ pub fn serve(
                     {
                         frame(&mut output, "REJECTED", error.as_bytes())
                     }
+                    Err(error) if matches!(commands, [RuntimeCommand { action: Action::AssembleBlock(..), .. }])
+                        && error.lines().any(|line| line.contains(": error:")) =>
+                    {
+                        frame(&mut output, "REJECTED", error.as_bytes())
+                    }
                     Err(error) if matches!(commands, [RuntimeCommand { action: Action::ResolveMemorySymbols(..), .. }])
                         && (error.contains("Expected a single symbol") || (error.starts_with("Symbol ") && error.ends_with(" not found"))) =>
                     {

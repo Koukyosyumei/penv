@@ -514,7 +514,9 @@ pub(crate) fn disassemble_source(
                 write!(text, "{byte:02x}").unwrap();
             }
         }
-        writeln!(text, "\t{}", mnemonic.trim_end()).unwrap();
+        let mnemonic = mnemonic.trim();
+        let separator = if mnemonic.contains(char::is_whitespace) { "" } else { "\t" };
+        writeln!(text, "\t{mnemonic}{separator}").unwrap();
         offset += opcode.len();
     }
     if offset < bytes.len() {
