@@ -2542,6 +2542,7 @@ fn load_platform(
         }
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors, cortex_m4f);
+        machine.bus.guest_cpu_names = vec![entry.name.clone()];
         if armv81m {
             machine.primary.configure_armv81m(trustzone)?;
             if cortex_m85 {

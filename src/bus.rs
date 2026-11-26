@@ -465,6 +465,8 @@ pub struct Bus {
     pub thumb_trace: Option<crate::thumb::trace::Trace>,
     pub thumb_opcodes: crate::thumb::opcode_counter::OpcodeCounters,
     pub thumb_opcode_hooks: crate::thumb::opcode_counter::OpcodeLogHooks,
+    pub(crate) thumb_python_opcodes: Vec<(usize, crate::thumb::opcode_counter::HookPhase, u32, u32, usize)>,
+    pub(crate) thumb_opcode_worker: Option<crate::cpu_python_hook::SharedHook>,
     pub semihosting: Option<crate::semihosting::Semihosting>,
     ram_io_pages: BTreeSet<u32>,
     ram_io_logs: Vec<RamIoRead>,
@@ -2795,7 +2797,7 @@ impl Bus {
 
     pub(crate) fn can_batch_thumb_polling(&self) -> bool {
         self.f4_rcc.is_some() && self.cpu_hooks.is_empty()
-            && self.thumb_block_hooks.iter().all(Option::is_none)
+            && self.thumb_python_opcodes.is_empty() && self.thumb_block_hooks.iter().all(Option::is_none)
             && self.thumb_read_watchpoints.is_empty() && self.traced_memory.is_empty()
             && self.ram_io_logs.is_empty()
     }
@@ -7244,7 +7246,7 @@ impl Bus {
         self.nvic.as_ref().is_some_and(Nvic::supports_snapshot) && self.systick.is_some()
             && !self.peripheral_overlaps(0, scs) && !self.peripheral_overlaps(scs + 0x1000, 1 << 32)
             && self.pydevs.is_empty() && self.policy_tags.is_empty()
-            && self.thumb_block_hooks.iter().all(Option::is_none) && self.cpu_hooks.is_empty()
+            && self.thumb_python_opcodes.is_empty() && self.thumb_block_hooks.iter().all(Option::is_none) && self.cpu_hooks.is_empty()
             && self.aliases.is_empty() && self.clint.is_none()
             && self.regions.iter().all(|region| region.flash_pages.is_none())
     }
@@ -8117,6 +8119,28 @@ impl Bus {
             return Err(format!(
                 "Cortex-M bus registration denied access at {address:#010x}"
             ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn execute_thumb_opcode_hook(
+        &mut self,
+        phase: crate::thumb::opcode_counter::HookPhase,
+        pc: u32,
+        opcode: u32,
+    ) -> Result<(), String> {
+        let Some(worker) = self.thumb_opcode_worker.clone() else { return Ok(()) };
+        let hart = self.guest_access.map_or(0, |(index, _)| index);
+        let callbacks: Vec<_> = self.thumb_python_opcodes.iter()
+            .filter_map(|&(cpu, when, mask, pattern, callback)| {
+                (cpu == hart && when == phase && opcode & mask == pattern).then_some(callback)
+            })
+            .collect();
+        if !callbacks.is_empty() {
+            let mut worker = worker.lock().map_err(|_| "CPU opcode callback worker is unavailable")?;
+            for callback in callbacks {
+                worker.execute_opcode_callback(self, pc, opcode, callback)?;
+            }
         }
         Ok(())
     }

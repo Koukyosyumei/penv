@@ -85,7 +85,7 @@ pub struct Session {
     seed: u32,
     memory_symbols: HashMap<String, std::collections::BTreeSet<(u64, u64)>>,
     named_machines: NamedMachines,
-    python: Option<crate::cpu_python_hook::Hook>,
+    python: Option<crate::cpu_python_hook::SharedHook>,
     led_testers: Vec<(Option<String>, String, u64)>,
     uart_testers: Vec<(Option<String>, usize)>,
     rv64_switches: HashMap<String, crate::rv64_ethernet::LocalSwitch>,
@@ -547,11 +547,20 @@ impl Session {
         Ok(())
     }
 
-    fn execute_python(&mut self, machine: &mut Machine, source: &str) -> Result<String, String> {
+    fn python_worker(&mut self, bus: &mut Bus) -> Result<&crate::cpu_python_hook::SharedHook, String> {
         if self.python.is_none() {
-            self.python = Some(crate::cpu_python_hook::Hook::new("", None, None)?);
+            let worker = crate::cpu_python_hook::Hook::new("", None, None)?;
+            self.python = Some(std::sync::Arc::new(std::sync::Mutex::new(worker)));
         }
-        self.python.as_mut().unwrap().execute_monitor(&mut machine.bus, source, machine.monitor_firmware.clone())
+        let worker = self.python.as_ref().unwrap();
+        bus.thumb_opcode_worker = Some(worker.clone());
+        Ok(worker)
+    }
+
+    fn execute_python(&mut self, machine: &mut Machine, source: &str) -> Result<String, String> {
+        self.python_worker(&mut machine.bus)?
+            .lock().map_err(|_| "monitor Python worker is unavailable")?
+            .execute_monitor(&mut machine.bus, source, machine.monitor_firmware.clone())
             .map_err(|error| format!("KeywordException: {error}"))
     }
 
@@ -3188,12 +3197,9 @@ pub fn serve(
                 if !rest.is_empty() {
                     return Err("ExecutePythonValue expects one source argument".into());
                 }
-                if session.python.is_none() {
-                    session.python = Some(crate::cpu_python_hook::Hook::new("", None, None)?);
-                }
-                session.python.as_mut().unwrap().execute_monitor_value(
-                    &mut machine.bus, &source, machine.monitor_firmware.clone(),
-                )
+                session.python_worker(&mut machine.bus)?
+                    .lock().map_err(|_| "monitor Python worker is unavailable")?
+                    .execute_monitor_value(&mut machine.bus, &source, machine.monitor_firmware.clone())
             })();
             match result {
                 Ok(Ok(value)) => frame(&mut output, "OK", value.as_bytes()),

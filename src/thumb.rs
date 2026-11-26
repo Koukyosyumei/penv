@@ -1818,7 +1818,7 @@ impl Thumb {
         output: &mut impl Write,
     ) -> Result<bool, InstructionError> {
         use opcode_counter::HookPhase;
-        if !bus.thumb_opcodes.enabled && bus.thumb_opcode_hooks.is_empty() {
+        if !bus.thumb_opcodes.enabled && bus.thumb_opcode_hooks.is_empty() && bus.thumb_python_opcodes.is_empty() {
             return self.execute_fetched(inst, pc, r, bus, output);
         }
         let address = *pc;
@@ -1831,9 +1831,11 @@ impl Thumb {
             bus.thumb_opcodes.record(opcode);
         }
         bus.thumb_opcode_hooks.emit(HookPhase::Pre, address, opcode, output)?;
+        bus.execute_thumb_opcode_hook(HookPhase::Pre, address, opcode)?;
         let retired = self.execute_fetched(inst, pc, r, bus, output)?;
         if retired {
             bus.thumb_opcode_hooks.emit(HookPhase::Post, address, opcode, output)?;
+            bus.execute_thumb_opcode_hook(HookPhase::Post, address, opcode)?;
         }
         Ok(retired)
     }

@@ -22,7 +22,19 @@ def rpc(request):
         raise RuntimeError(bytes.fromhex(value).decode())
     return value
 
+opcode_callbacks = []
+
 class Credential:
+    def _register_opcode_hook(self, phase, mask, opcode, callback):
+        if not callable(callback):
+            raise TypeError('opcode hook requires a callable')
+        index = len(opcode_callbacks)
+        rpc(f'add-opcode-hook {self.path.encode().hex()} {phase} {int(mask)} {int(opcode)} {index}')
+        opcode_callbacks.append(callback)
+    def AddPreOpcodeExecutionHook(self, mask, opcode, callback):
+        self._register_opcode_hook('pre', mask, opcode, callback)
+    def AddPostOpcodeExecutionHook(self, mask, opcode, callback):
+        self._register_opcode_hook('post', mask, opcode, callback)
     def __init__(self, path):
         self.path = path
     @property
@@ -100,6 +112,10 @@ class Bus:
 
 class Machine:
     SystemBus = Bus()
+    def InfoLog(self, message, *args):
+        if args:
+            message = message.format(*args)
+        rpc('log 1 ' + message.encode().hex())
     def __getitem__(self, path):
         if path == 'sysbus':
             return self.SystemBus
@@ -151,7 +167,8 @@ for line in sys.stdin:
     is_csr = fields[0] == 'csr'
     is_value = fields[0] == 'monitor-value'
     is_monitor = fields[0] == 'monitor' or is_value
-    is_instruction = fields[0] == 'instruction'
+    is_opcode = fields[0] == 'opcode-callback'
+    is_instruction = fields[0] == 'instruction' or is_opcode
     if is_csr:
         request.Csr = int(fields[1])
         request.IsRead = fields[2] == 'read'
@@ -186,6 +203,8 @@ for line in sys.stdin:
                     capture = json.dumps(value, allow_nan=False)
                 else:
                     exec(compile(code, '<monitor>', 'exec'), scope)
+            elif is_opcode:
+                opcode_callbacks[int(fields[3])](scope['pc'], scope['instruction'])
             else:
                 exec(program, scope)
     except Exception as error:
@@ -200,6 +219,8 @@ for line in sys.stdin:
         else:
             print('done', flush=True)
 "#;
+
+pub(crate) type SharedHook = std::sync::Arc<std::sync::Mutex<Hook>>;
 
 pub(crate) struct Hook {
     child: Child,
@@ -317,6 +338,12 @@ impl Hook {
 
     pub(crate) fn execute_instruction(&mut self, bus: &mut Bus, pc: u32, instruction: u32) -> Result<(), String> {
         self.invoke(bus, format_args!("instruction {pc} {instruction}")).map(|_| ())
+    }
+
+    pub(crate) fn execute_opcode_callback(
+        &mut self, bus: &mut Bus, pc: u32, opcode: u32, index: usize,
+    ) -> Result<(), String> {
+        self.invoke(bus, format_args!("opcode-callback {pc} {opcode} {index}")).map(|_| ())
     }
 
     pub(crate) fn execute_monitor(
@@ -448,6 +475,21 @@ impl Hook {
                     let offset = offset.parse().map_err(|_| "invalid peripheral register offset")?;
                     let address = bus.named_word_register(&path, offset).ok_or("unknown peripheral register")?;
                     bus.read_scalar::<4>(address, true).map(|word| word.to_string()).map_err(|error| error.to_string())
+                })(),
+                "add-opcode-hook" => (|| {
+                    let mut fields = argument.split_ascii_whitespace();
+                    let path = decode(fields.next().ok_or("missing opcode hook CPU")?)?;
+                    let cpu = bus.scoped_cpu_index(&path)?;
+                    let phase = match fields.next() {
+                        Some("pre") => crate::thumb::opcode_counter::HookPhase::Pre,
+                        Some("post") => crate::thumb::opcode_counter::HookPhase::Post,
+                        _ => return Err("invalid opcode callback phase".into()),
+                    };
+                    let mask = fields.next().and_then(|field| field.parse().ok()).ok_or("invalid opcode hook mask")?;
+                    let opcode = fields.next().and_then(|field| field.parse().ok()).ok_or("invalid opcode hook pattern")?;
+                    let index = fields.next().and_then(|field| field.parse().ok()).ok_or("invalid opcode callback index")?;
+                    bus.thumb_python_opcodes.push((cpu, phase, mask, opcode, index));
+                    Ok(String::new())
                 })(),
                 "remove-hooks" => (|| {
                     let address = argument.parse::<u64>().map_err(|error| error.to_string())?;
