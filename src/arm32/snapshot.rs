@@ -36,6 +36,7 @@ impl Cpu {
         }
         if let Some(timer) = &self.timer {
             write_words(output, &[u64::from(timer.counter_frequency_register), timer.virtual_offset])?;
+            write_words(output, &[u64::from(timer.hyp_counter_control)])?;
             for channel in timer.channels {
                 write_words(output, &[channel.compare, u64::from(channel.control)])?;
             }
@@ -92,6 +93,9 @@ impl Cpu {
             let [frequency, offset] = read_words(input)?;
             timer.counter_frequency_register = u32::try_from(frequency).map_err(io::Error::other)?;
             timer.virtual_offset = offset;
+            if version >= 8 {
+                [timer.hyp_counter_control] = read_u32s(input)?;
+            }
             for channel in &mut timer.channels {
                 let [compare, control] = read_words(input)?;
                 if control > 3 {

@@ -257,6 +257,7 @@ pub(crate) struct GenericTimer {
     frequency: u32,
     counter_frequency_register: u32,
     virtual_offset: u64,
+    hyp_counter_control: u32,
     channels: [TimerChannel; 3],
 }
 
@@ -270,6 +271,7 @@ impl GenericTimer {
             frequency,
             counter_frequency_register,
             virtual_offset: 0,
+            hyp_counter_control: 0,
             channels: interrupts.map(|interrupt| TimerChannel {
                 interrupt,
                 ..TimerChannel::default()
@@ -294,6 +296,9 @@ impl GenericTimer {
         if key == 0x000e_0000 {
             return Some(self.counter_frequency_register);
         }
+        if key == 0x008e_0001 {
+            return Some(self.hyp_counter_control);
+        }
         let (index, control) = Self::decode32(key)?;
         let channel = &self.channels[index];
         let count = self.count(ns, index);
@@ -307,6 +312,10 @@ impl GenericTimer {
     fn write32(&mut self, key: u32, ns: u128, value: u32) -> bool {
         if key == 0x000e_0000 {
             self.counter_frequency_register = value;
+            return true;
+        }
+        if key == 0x008e_0001 {
+            self.hyp_counter_control = value;
             return true;
         }
         let Some((index, control)) = Self::decode32(key) else {
