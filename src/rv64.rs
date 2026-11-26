@@ -498,7 +498,10 @@ impl Rv64 {
         let key = (self.hart_id, index);
         if let Some(mut hook) = bus.csr_hooks.remove(&key) {
             let result = (|| {
-                if (index >> 8) & 3 > self.privilege.mode as u32 {
+                let writes = operation == 1 || source != 0;
+                if (index >> 8) & 3 > self.privilege.mode as u32
+                    || writes && index >> 10 == 3
+                {
                     return None;
                 }
                 let old = if operation == 1 && instruction.rd() == 0 {
@@ -513,9 +516,6 @@ impl Rv64 {
                     _ => None,
                 };
                 if let Some(new) = new {
-                    if index >> 10 == 3 {
-                        return None;
-                    }
                     hook.execute_csr(bus, index, Some(new)).ok()?;
                 }
                 Some(old)
