@@ -24,6 +24,7 @@ pub(crate) struct Iic {
     state: State,
     pending_address: Option<(u32, u8)>,
     requested_end: u8,
+    finish_reading: bool,
     irq_levels: u8,
     devices: BTreeMap<u8, Eeprom>,
 }
@@ -40,6 +41,7 @@ impl Iic {
             state: State::Idle,
             pending_address: None,
             requested_end: 0,
+            finish_reading: false,
             irq_levels: 0,
             devices: BTreeMap::new(),
         };
@@ -65,6 +67,7 @@ impl Iic {
         self.state = State::Idle;
         self.pending_address = None;
         self.requested_end = 0;
+        self.finish_reading = false;
         self.irq_levels = 0;
     }
 
@@ -83,12 +86,14 @@ impl Iic {
     fn start(&mut self) {
         self.pending_address = None;
         self.state = State::Address;
+        self.finish_reading = false;
         self.regs[9] = (self.regs[9] & !(STOP | RECEIVE | END)) | START | TRANSMIT;
     }
 
     fn stop(&mut self) {
         self.pending_address = None;
         self.state = State::Idle;
+        self.finish_reading = false;
         self.regs[4] &= !8;
         self.regs[9] = (self.regs[9] & !(START | RECEIVE | END | TRANSMIT)) | STOP;
     }
@@ -170,10 +175,11 @@ impl Iic {
                 let end = std::mem::take(&mut self.requested_end);
                 if end & 4 != 0 {
                     self.start();
-                } else if end & 8 != 0 && !dummy {
+                } else if (end & 8 != 0 || self.finish_reading) && !dummy {
                     self.stop();
                 } else {
                     self.requested_end = end;
+                    self.finish_reading = self.regs[4] & 8 != 0;
                     self.regs[9] |= RECEIVE;
                     self.irq_levels &= !1;
                 }
@@ -194,6 +200,7 @@ impl Iic {
                         self.state = State::Idle;
                         self.pending_address = None;
                         self.requested_end = 0;
+                        self.finish_reading = false;
                         self.regs[9] = 0;
                     }
                 }
