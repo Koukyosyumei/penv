@@ -73,6 +73,7 @@ pub struct Stm32Usart {
     pub clock: Option<Stm32UsartClock>,
     receive: VecDeque<u8>,
     pending_receive: VecDeque<u8>,
+    tester_input_before_enable: VecDeque<u8>,
     // Counts down to delivery of the next byte, or IDLE when the queue is empty.
     receive_deadline: Option<u64>,
     idle: bool,
@@ -105,6 +106,7 @@ impl Stm32Usart {
             clock: None,
             receive: VecDeque::new(),
             pending_receive: VecDeque::new(),
+            tester_input_before_enable: VecDeque::new(),
             receive_deadline: None,
             idle: false,
             frequency: None,
@@ -212,7 +214,12 @@ impl Stm32Usart {
     }
 
     pub(crate) fn queue_tester_input(&mut self, bytes: impl IntoIterator<Item = u8>) {
-        self.queue_input_with_period(bytes, self.tester_frame_ticks());
+        if matches!(self.layout, UsartLayout::F7 { .. }) && !self.receiver_enabled() {
+            self.tester_input_before_enable.extend(bytes);
+        } else {
+            let waiting = std::mem::take(&mut self.tester_input_before_enable);
+            self.queue_input_with_period(waiting.into_iter().chain(bytes), self.tester_frame_ticks());
+        }
     }
 
     fn queue_input_with_period(&mut self, bytes: impl IntoIterator<Item = u8>, period: Option<u64>) {
@@ -235,6 +242,9 @@ impl Stm32Usart {
     }
 
     pub fn tick(&mut self) {
+        if !self.tester_input_before_enable.is_empty() && self.receiver_enabled() {
+            self.queue_tester_input(std::iter::empty());
+        }
         let Some(remaining) = &mut self.receive_deadline else {
             return;
         };
@@ -682,6 +692,24 @@ mod tests {
         run_us(&mut uart, 10);
         assert_empty(&mut uart);
         assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+    }
+
+    #[test]
+    fn f7_tester_input_waits_for_firmware_to_enable_the_receiver() {
+        let mut uart = Stm32Usart::new("uart".into(), 0, None, false);
+        uart.frequency = Some(16_000_000);
+        uart.queue_tester_input([b'X']);
+        uart.tick();
+        assert_empty(&mut uart);
+
+        write(&mut uart, BRR, 16);
+        write(&mut uart, CR1, UE | RE);
+        for _ in 0..999 {
+            uart.tick();
+        }
+        assert_empty(&mut uart);
+        uart.tick();
+        assert_eq!(uart.read(RDR, 4), u32::from(b'X'));
     }
 
     #[test]
