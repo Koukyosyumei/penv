@@ -6339,7 +6339,16 @@ fn execute(
         });
         return Ok(());
     }
-    if boot.started || !matches!(words, ["showAnalyzer", _]) && boot.runtime.iter().any(|entry|
+    // Halt and pause settings are applied before the first guest instruction.
+    // Static image loads may still be collected after these settings.
+    let static_image_after_cpu_state = matches!(
+        words,
+        ["sysbus", "LoadBinary" | "LoadFdt", _, _] | ["sysbus", "LoadSymbolsFrom", _]
+    ) && boot.runtime.iter().all(|entry| matches!(
+        entry.action, Action::CpuHalted(_, Some(_)) | Action::CpuPaused(_, Some(_))
+    ) || is_console_action(&entry.action) || is_log_capture_setup(&entry.action));
+    if boot.started || !static_image_after_cpu_state
+        && !matches!(words, ["showAnalyzer", _]) && boot.runtime.iter().any(|entry|
         !is_console_action(&entry.action) && !is_log_capture_setup(&entry.action)
             && !matches!(entry.action, Action::AllowPrivates(_) | Action::ExecutePython(_)
                 | Action::PythonAssignment(..) | Action::SetCrashOnAbort(_)))
