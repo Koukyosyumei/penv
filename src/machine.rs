@@ -1083,7 +1083,7 @@ impl Machine {
     }
 
     pub(crate) fn start_execution_trace(
-        &mut self, cpu: &str, path: &std::path::Path, format: &str, binary: bool,
+        &mut self, cpu: &str, name: &str, path: &std::path::Path, format: &str, binary: bool,
     ) -> Result<(), String> {
         let (_, triple, features) = self.monitor_assembly_target(cpu)?;
         let hart = self.named_hart(cpu)?;
@@ -1109,11 +1109,20 @@ impl Machine {
         } else {
             return Err("execution tracing currently requires Cortex-M or RISC-V".into());
         };
-        if self.bus.execution_traces.contains_key(&slot) {
+        if self.bus.execution_traces.contains_key(&slot)
+            || self.bus.execution_traces.values().any(|trace| trace.name == name)
+        {
             return Err(format!("an execution tracer already exists for CPU {cpu:?}"));
         }
-        let tracer = crate::thumb::trace::Trace::create(path, format, binary, (triple, features, &model))?;
+        let tracer = crate::thumb::trace::Trace::create(name, path, format, binary, (triple, features, &model))?;
         self.bus.execution_traces.insert(slot, tracer);
+        Ok(())
+    }
+
+    pub(crate) fn track_execution_trace(&mut self, name: &str, tracking: crate::thumb::trace::Tracking) -> Result<(), String> {
+        let (_, trace) = self.bus.execution_traces.iter_mut().find(|(_, trace)| trace.name == name)
+            .ok_or_else(|| format!("unknown execution tracer {name:?}"))?;
+        trace.track(tracking);
         Ok(())
     }
 
@@ -3529,17 +3538,23 @@ impl Hart {
             }
             return Ok(value);
         }
-        self.translate(bus, address, N, crate::pmp::READ)
-            .and_then(|physical| {
-                if let Some(bytes) = bus.scoped_cpu_ram64(self.slot, u64::from(physical), N) {
-                    let mut value = [0; 4];
-                    value[..N].copy_from_slice(bytes);
-                    Ok(u32::from_le_bytes(value))
-                } else {
-                    bus.read::<N>(physical).map_err(|error| error.at_virtual(address))
-                }
-            })
-            .map_err(|error| Fault::Bus(Access::Load, error))
+        let physical = self.translate(bus, address, N, crate::pmp::READ)
+            .map_err(|error| Fault::Bus(Access::Load, error))?;
+        let value = if let Some(bytes) = bus.scoped_cpu_ram64(self.slot, u64::from(physical), N) {
+            let mut value = [0; 4];
+            value[..N].copy_from_slice(bytes);
+            u32::from_le_bytes(value)
+        } else {
+            bus.read::<N>(physical).map_err(|error| Fault::Bus(Access::Load, error.at_virtual(address)))?
+        };
+        if !bus.execution_traces.is_empty() {
+            let ram = bus.cpu_ram64(self.slot, u64::from(physical), N).is_some();
+            if let Some(trace) = bus.execution_traces.get_mut(&self.slot) {
+                trace.memory_access(if ram { 2 } else { 0 }, address.into(), physical.into(), value.into())
+                    .map_err(Fault::Abort)?;
+            }
+        }
+        Ok(value)
     }
 
     fn store(
@@ -3565,18 +3580,24 @@ impl Hart {
             }
             return Ok(());
         }
-        self.translate(bus, address, width, crate::pmp::WRITE)
-            .and_then(|physical| {
-                if let Some(bytes) = bus.scoped_cpu_memory64(self.slot, u64::from(physical), width) {
-                    bytes.copy_from_slice(&value.to_le_bytes()[..width]);
-                    bus.observe_memory_store(u64::from(physical), width, u64::from(value));
-                    Ok(())
-                } else {
-                    bus.write_with_origin(physical, width, value, output, Some(self.slot))
-                        .map_err(|error| error.at_virtual(address))
-                }
-            })
-            .map_err(|error| Fault::Bus(Access::Store, error))
+        let physical = self.translate(bus, address, width, crate::pmp::WRITE)
+            .map_err(|error| Fault::Bus(Access::Store, error))?;
+        if let Some(bytes) = bus.scoped_cpu_memory64(self.slot, u64::from(physical), width) {
+            bytes.copy_from_slice(&value.to_le_bytes()[..width]);
+            bus.observe_memory_store(u64::from(physical), width, u64::from(value));
+        } else {
+            bus.write_with_origin(physical, width, value, output, Some(self.slot))
+                .map_err(|error| Fault::Bus(Access::Store, error.at_virtual(address)))?;
+        }
+        if !bus.execution_traces.is_empty() {
+            let ram = bus.cpu_ram64(self.slot, u64::from(physical), width).is_some();
+            if let Some(trace) = bus.execution_traces.get_mut(&self.slot) {
+                let value = value & (u32::MAX >> ((4 - width) * 8));
+                trace.memory_access(if ram { 3 } else { 1 }, address.into(), physical.into(), value.into())
+                    .map_err(Fault::Abort)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn set_mstatus(&mut self, value: u32) {
@@ -4505,7 +4526,14 @@ impl Hart {
                 }
                 return Err(illegal());
             }
-            0x57 if funct3 == 7 => Some(self.csr.configure_vector(insn, a, b).ok_or_else(illegal)?),
+            0x57 if funct3 == 7 => {
+                let length = self.csr.configure_vector(insn, a, b).ok_or_else(illegal)?;
+                if let Some(trace) = bus.execution_traces.get_mut(&self.slot) {
+                    let kind = self.csr.monitor_vector_register(0xc21, None).map_err(Fault::Abort)?.unwrap_or_default();
+                    trace.vector_configuration(u64::from(length), kind).map_err(Fault::Abort)?;
+                }
+                Some(length)
+            }
             0x73 if insn == 0x0000_0073 => {
                 return Ok(self.environment_trap(self.csr.ecall_cause(), Stop::Ecall));
             }

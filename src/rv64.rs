@@ -237,6 +237,10 @@ impl Fault {
         }
     }
 
+    fn trace_error(error: String) -> Self {
+        Self { output: Some(std::io::Error::other(error)), ..Self::new(0, 0) }
+    }
+
     pub(crate) fn illegal_physical(cause: u64, address: u64) -> Self {
         Self {
             illegal_physical: true,
@@ -852,7 +856,12 @@ impl Rv64 {
                     2 if instruction >> 25 == 0x40 => (rhs, avl),
                     _ => return Err(illegal),
                 };
-                Some(self.privilege.configure_vector(kind, avl).ok_or(illegal)?)
+                let length = self.privilege.configure_vector(kind, avl).ok_or(illegal)?;
+                if let Some(trace) = bus.execution_traces.get_mut(&self.hart_id) {
+                    let kind = self.privilege.vector.as_ref().and_then(|state| state.read(0xc21)).unwrap_or_default();
+                    trace.vector_configuration(length, kind).map_err(Fault::trace_error)?;
+                }
+                Some(length)
             }
             0x57 if self.isa.xandesvqmac && instruction >> 26 >= 60 => {
                 self.andes_quad_mac(fields, lhs)?;
@@ -1284,7 +1293,8 @@ impl Rv64 {
             bus.cpu_memory64(self.hart_id, physical, width)
                 .ok_or_else(fault)?
                 .copy_from_slice(&value.to_le_bytes()[..width]);
-            if self.trace_amo {
+            let trace = bus.execution_traces.get_mut(&self.hart_id).filter(|trace| trace.tracks_atomics());
+            if self.trace_amo || trace.is_some() {
                 let destination = inst.rd();
                 let after = |reg| {
                     if reg == destination && destination != 0 {
@@ -1294,7 +1304,7 @@ impl Rv64 {
                     }
                 };
                 let mask = u64::MAX >> (64 - width * 8);
-                self.atomic_trace = Some(AtomicTrace {
+                let record = AtomicTrace {
                     instruction: inst.0,
                     width,
                     before: [
@@ -1309,7 +1319,13 @@ impl Rv64 {
                         after(inst.rs2()),
                         value & mask,
                     ],
-                });
+                };
+                if let Some(trace) = trace {
+                    trace.atomic_operands(&record).map_err(Fault::trace_error)?;
+                }
+                if self.trace_amo {
+                    self.atomic_trace = Some(record);
+                }
             }
         }
         Ok(sign(previous, width as u32 * 8))
