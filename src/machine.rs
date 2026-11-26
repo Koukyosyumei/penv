@@ -963,11 +963,17 @@ impl Machine {
         path: &str,
         config: bool,
         index: u32,
-        value: Option<u32>,
-    ) -> Result<Option<u32>, String> {
+        value: Option<u64>,
+    ) -> Result<Option<u64>, String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if let Some(cpu) = &mut hart.rv64
+                && let Some(result) = cpu.monitor_external_pmp(path, config, index, value)
+            {
+                return Ok(result);
+            }
             if let Some(pmp) = hart.csr.external_pmp(path) {
-                let result = pmp.external_csr(config, index, value);
+                let value = value.map(u32::try_from).transpose().map_err(|_| "PMP register value exceeds RV32 width")?;
+                let result = pmp.external_csr(config, index, value).map(u64::from);
                 if value.is_some() {
                     hart.translations.clear();
                 }

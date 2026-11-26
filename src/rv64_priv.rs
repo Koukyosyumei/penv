@@ -591,6 +591,7 @@ pub struct Pmp {
     active: u64,
     address_mask: u64,
     allow_when_inactive: bool,
+    pub(crate) external_path: Option<String>,
     mseccfg: Option<u8>,
 }
 
@@ -602,6 +603,7 @@ impl Pmp {
             active: 0,
             address_mask: (1 << address_bits) - 1,
             allow_when_inactive: false,
+            external_path: None,
             mseccfg: None,
         }
     }
@@ -651,6 +653,26 @@ impl Pmp {
             };
         }
         if machine == locked { config & RWX } else { 0 }
+    }
+
+    pub(crate) fn external_csr(&mut self, config: bool, index: u32, value: Option<u64>) -> Option<u64> {
+        let limit = if config { 16 } else { 64 };
+        if let Some(csr) = (index < limit).then(|| if config { 0x3a0 } else { 0x3b0 } + index)
+            && self.read(csr).is_some()
+        {
+            return if let Some(value) = value {
+                self.write(csr, value);
+                None
+            } else {
+                self.read(csr)
+            };
+        }
+        let action = if value.is_some() { "write to" } else { "read from" };
+        let register = if config { "config" } else { "address" };
+        let message = format!("Attempted to {action} invalid PMP {register} register {index}");
+        crate::monitor_log::record(3, &message);
+        eprintln!("{message}");
+        value.is_none().then_some(0)
     }
 
     fn config_start(&self, csr: u32) -> Option<usize> {

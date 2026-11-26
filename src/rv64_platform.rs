@@ -840,7 +840,9 @@ fn create_cpu(
         if !(1..=64).contains(&count) {
             return Err(external.error("unsupported RV64 external PMP entry count"));
         }
-        cpu.privilege.pmp = Some(Pmp::external(count as usize, pmp_bits as u32));
+        let mut pmp = Pmp::external(count as usize, pmp_bits as u32);
+        pmp.external_path = Some(format!("{}.{}", entry.name, external.name));
+        cpu.privilege.pmp = Some(pmp);
     } else if pmp_count != 0 {
         let mut pmp = Pmp::new(pmp_count as usize, pmp_bits as u32);
         if isa.smepmp {

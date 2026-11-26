@@ -531,6 +531,7 @@ enum Action {
     CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
     ClearTranslationCache(String),
+    ExternalPmpRegister(String, bool, u32, Option<u64>),
     CpuMips(u32),
     ReadCsrValidation(String),
     RequireFullCsrValidation(String),
@@ -889,6 +890,12 @@ fn run_commands<'a>(
                         })
                 }
             },
+            Action::ExternalPmpRegister(path, config, index, value) => {
+                if let Some(value) = machine.monitor_external_pmp(path, *config, *index, *value)? {
+                    writeln!(output.reply(), "0x{value:x}").map_err(|error| error.to_string())?;
+                }
+                Ok(None)
+            }
             Action::ClearTranslationCache(cpu) => machine.clear_monitor_translation_cache(cpu).map(|()| None),
             Action::CpuStep(cpu, steps) if !machine.is_cortex_m() => {
                 let chunk = (*steps).min(budget);
@@ -2237,7 +2244,7 @@ fn wait_for_uart(
 pub enum CpuRegisterCommand {
     TrapVector(TrapVector, Option<u32>),
     Integer(u32, Option<u64>),
-    ExternalPmp(String, bool, u32, Option<u32>),
+    ExternalPmp(String, bool, u32, Option<u64>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4343,6 +4350,16 @@ fn execute(
             resolve(cpu)?.trim_start_matches("sysbus.").into(), Some(unquote(resolve(register)?).into()),
             crate::parse_address64(resolve(value)?)?,
         )),
+        [device, command @ ("ConfigCSRRead" | "AddressCSRRead" | "ConfigCSRWrite" | "AddressCSRWrite"), index, operands @ ..]
+            if boot.started && operands.len() == usize::from(command.ends_with("Write")) =>
+        {
+            Some(Action::ExternalPmpRegister(
+                device.trim_start_matches("sysbus.").into(),
+                command.starts_with("Config"),
+                crate::parse_address(resolve(index)?)?,
+                operands.first().map(|value| crate::parse_address64(resolve(value)?)).transpose()?,
+            ))
+        }
         [target, "ClearTranslationCache"] => Some(Action::ClearTranslationCache(
             resolve(target)?.trim_start_matches("sysbus.").into(),
         )),
@@ -4897,7 +4914,7 @@ fn execute(
             let index = crate::parse_address(resolve(index)?)?;
             let value = arguments
                 .first()
-                .map(|value| crate::parse_address(resolve(value)?))
+                .map(|value| crate::parse_address64(resolve(value)?))
                 .transpose()?;
             boot.cpu_registers.push(CpuRegisterCommand::ExternalPmp(
                 path.into(),

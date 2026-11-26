@@ -99,7 +99,9 @@ impl Pmp {
     fn log_invalid(&self, config: bool, index: u32, write: bool) {
         let action = if write { "write to" } else { "read from" };
         let register = if config { "config" } else { "address" };
-        eprintln!("Attempted to {action} invalid PMP {register} register {index}");
+        let message = format!("Attempted to {action} invalid PMP {register} register {index}");
+        crate::monitor_log::record(3, &message);
+        eprintln!("{message}");
     }
 
     pub fn is_external_csr(&self, csr: u32) -> bool {

@@ -281,6 +281,15 @@ impl Rv64 {
         self.registers[11] = dtb;
     }
 
+    pub(crate) fn monitor_external_pmp(&mut self, path: &str, config: bool, index: u32, value: Option<u64>) -> Option<Option<u64>> {
+        let pmp = self.privilege.pmp.as_mut().filter(|pmp| pmp.external_path.as_deref() == Some(path))?;
+        let result = pmp.external_csr(config, index, value);
+        if value.is_some() {
+            self.clear_translation_cache();
+        }
+        Some(result)
+    }
+
     pub(crate) fn clear_translation_cache(&mut self) {
         self.translations.clear();
     }
