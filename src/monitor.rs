@@ -2338,7 +2338,8 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::ReadOpcodeCounter(cpu, name) => {
-                let count = machine.opcode_counters(cpu)?.get(name)?;
+                let count = machine.opcode_counters(cpu.trim_start_matches("sysbus."))?.get(name)
+                    .map_err(|error| format!("KeywordException: Could not execute command '{cpu} GetOpcodeCounter \"{name}\"': {error}"))?;
                 writeln!(output.reply(), "{count}").map_err(|error| error.to_string())?;
                 Ok(None)
             }
@@ -6766,7 +6767,7 @@ fn execute(
             parse_tester_bool(resolve(enabled)?)?,
         )),
         [target, "GetOpcodeCounter", name] => Some(Action::ReadOpcodeCounter(
-            resolve(target)?.trim_start_matches("sysbus.").into(),
+            resolve(target)?.into(),
             unquote(resolve(name)?).into(),
         )),
         [target, "GetRegister", register]
