@@ -531,6 +531,8 @@ enum Action {
     CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
     CpuMips(u32),
+    ReadCsrValidation(String),
+    RequireFullCsrValidation(String),
     ReadCpuMips(NumberMode),
     TraceStackAccess(String),
     AddStackAccessHook(String, String),
@@ -704,6 +706,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
                     | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::BusScalar(_)
+                    | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
@@ -917,6 +920,13 @@ fn run_commands<'a>(
             Action::AddCsrHook(cpu, csr, source) => machine.install_csr_hook(cpu, *csr, source).map(|()| None),
             Action::AddStackAccessHook(cpu, source) => machine.install_stack_access_hook(cpu, source).map(|()| None),
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
+            Action::ReadCsrValidation(cpu) | Action::RequireFullCsrValidation(cpu) => {
+                machine.require_riscv_cpu(cpu)?;
+                if matches!(command.action, Action::ReadCsrValidation(_)) {
+                    writeln!(output.reply(), "Full").map_err(|error| error.to_string())?;
+                }
+                Ok(None)
+            }
             Action::CpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
             Action::ReadCpuMips(mode) => {
                 if machine.cpu_less {
@@ -3686,6 +3696,14 @@ fn execute(
         ["TraceStackAccess", cpu] if boot.started => Some(Action::TraceStackAccess(
             cpu.trim_start_matches("sysbus.").to_owned(),
         )),
+        [target, "CSRValidation", value @ ..] if value.len() <= 1 => {
+            let cpu = resolve(target)?.trim_start_matches("sysbus.").to_owned();
+            match value {
+                [] => Some(Action::ReadCsrValidation(cpu)),
+                ["Full"] => Some(Action::RequireFullCsrValidation(cpu)),
+                _ => return Err("unsupported monitor CSR validation level".into()),
+            }
+        }
         ["cpu" | "sysbus.cpu", "PerformanceInMips"] if boot.started => Some(Action::ReadCpuMips(boot.session.number_mode)),
         ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.started || !boot.runtime.is_empty() => {
             let mips = resolve(value)?.parse().map_err(|_| "PerformanceInMips requires a positive integer")?;
@@ -4568,7 +4586,8 @@ fn execute(
                         | Action::ReadCpuPc(_)
                         | Action::ExecutionMode(..)
                         | Action::CpuPc(..)
-                        | Action::CpuStep(..)
+                        | Action::CpuStep(..) | Action::CpuMips(..) | Action::ReadCpuMips(..)
+                        | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)

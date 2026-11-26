@@ -600,6 +600,13 @@ impl Machine {
         Ok(())
     }
 
+    pub(crate) fn require_riscv_cpu(&mut self, name: &str) -> Result<(), String> {
+        if self.named_hart(name)?.thumb.is_some() {
+            return Err(format!("CSR validation requires a RISC-V CPU, got {name:?}"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn monitor_named_pc(&mut self, name: &str) -> Result<u64, String> {
         Ok(self.named_hart(name)?.program_counter())
     }

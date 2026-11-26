@@ -403,7 +403,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)
                         or re.fullmatch(r"sysbus IsPeripheralEnabled [\w.]+", command)
                         or re.match(r"[\w.]+\s+GetRegister\s", command)
-                        or re.fullmatch(r"[\w.]+\s+(?:PC|SP|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency)", command)):
+                        or re.fullmatch(r"[\w.]+\s+(?:PC|SP|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency|PerformanceInMips|CSRValidation)", command)):
                     return self.operation(command, assertion=True)
                 if (re.match(r"(?:include|i|ExecuteScript|log|Save|Load|runMacro)(?:\s|$)", command)
                         or re.match(r"machine\s+LoadPlatformDescription(?:\s|$)", command)
