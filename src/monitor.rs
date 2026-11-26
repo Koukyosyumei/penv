@@ -2889,7 +2889,7 @@ impl MonitorBuiltins {
             }).collect()),
             ["next_value"] | ["next_value", _] => {
                 let offset = words.get(1).map_or(Ok(0), |value| value.parse::<i64>())
-                    .map_err(|_| "expected a next_value offset")?;
+                    .map_err(|_| NEXT_VALUE_OPERAND_ERROR)?;
                 let current = self.next_value.checked_add(offset).ok_or("next_value overflow")?;
                 self.next_value = self.next_value.checked_add(1).ok_or("next_value overflow")?;
                 Ok(format!("{current}\n"))
@@ -3091,6 +3091,7 @@ pub fn serve(
         if !emulation_seed && let Some(result) = builtins.execute(machine, text) {
             let reply = match result {
                 Ok(body) => frame(&mut output, "OK", body.as_bytes()),
+                Err(error) if error == NEXT_VALUE_OPERAND_ERROR => frame(&mut output, "REJECTED", error.as_bytes()),
                 Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
             };
             reply.map_err(|error| error.to_string())?;
@@ -4762,6 +4763,8 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
 }
 
 const LOG_LEVEL_PARAMETERS: &str = "Bad parameters for command logLevel";
+const NEXT_VALUE_OPERAND_ERROR: &str = "unsupported operand type(s) for +: 'int' and 'str'";
+
 const LAST_LOG_PARAMETERS: &str = "Bad parameters for command lastLog";
 const LOG_PARAMETERS: &str = "Bad parameters for command log";
 const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expected @snapshot-path or quoted path";
