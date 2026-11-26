@@ -785,6 +785,16 @@ fn load_platform(
             "GPIOPort.LiteX_GPIO" => litex_gpios.push(entry),
             "Timers.AndesATCPIT100" => andes_pits.push(entry),
             "Timers.AndesATCRTC100" => andes_rtcs.push(entry),
+            "Miscellaneous.EgisET171_SMU2" | "Miscellaneous.EgisET171_Crypto" => {
+                keys(entry, &[])?;
+                let base = entry.address()?;
+                let device = if entry.model == "Miscellaneous.EgisET171_SMU2" {
+                    crate::egis_syscon::EgisExtra::smu2(base)
+                } else {
+                    crate::egis_syscon::EgisExtra::entropy(base)
+                };
+                machine.bus.map_egis_extra(device).map_err(|error| entry.error(&error))?;
+            }
             "Miscellaneous.EgisET171_AOSMU" => {
                 if egis_syscon.replace(entry).is_some() {
                     return Err(entry.error("only one Egis AOSMU is supported"));

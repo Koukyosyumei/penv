@@ -557,6 +557,7 @@ pub struct Bus {
     andes_spi: Vec<crate::andes_spi::AndesSpi>,
     andes_rtc: Vec<crate::andes_rtc::AndesRtc>,
     egis_syscon: Option<crate::egis_syscon::EgisSyscon>,
+    egis_extra: Vec<crate::egis_syscon::EgisExtra>,
     pub(crate) andes_reset_requested: bool,
     sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
@@ -2974,6 +2975,9 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.egis_extra.iter().any(|device| overlaps_range(start, end, device.base(), device.size())) {
+            return true;
+        }
         if self.egis_syscon.as_ref().is_some_and(|syscon| {
             overlaps_range(start, end, syscon.base, crate::egis_syscon::EgisSyscon::SIZE)
         }) {
@@ -3412,6 +3416,16 @@ impl Bus {
             return Err("PLIC requires 1–63 interrupt sources".into());
         }
         self.register_plic("plic", Plic::new(base, sources, outputs).with_priorities(priorities))
+    }
+
+    pub(crate) fn map_egis_extra(&mut self, device: crate::egis_syscon::EgisExtra) -> Result<(), String> {
+        let start = u64::from(device.base());
+        let end = start + u64::from(device.size());
+        if device.base() & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping Egis peripheral at {start:#010x}"));
+        }
+        self.egis_extra.push(device);
+        Ok(())
     }
 
     pub(crate) fn map_egis_syscon(&mut self, syscon: crate::egis_syscon::EgisSyscon) -> Result<(), String> {
@@ -6858,6 +6872,9 @@ impl Bus {
         {
             return Ok(clic.read(offset, N));
         }
+        if N == 4 && let Some(device) = self.egis_extra.iter_mut().find(|device| device.contains(address)) {
+            return Ok(device.read(address));
+        }
         if N == 4 && let Some(syscon) = self.egis_syscon.as_ref().filter(|syscon| syscon.contains(address)) {
             return Ok(syscon.read(address));
         }
@@ -7747,6 +7764,10 @@ impl Bus {
             && let Some(offset) = clic.offset(address, width)
         {
             clic.write(offset, width, value);
+            return Ok(());
+        }
+        if width == 4 && let Some(device) = self.egis_extra.iter_mut().find(|device| device.contains(address)) {
+            device.write(address, value);
             return Ok(());
         }
         if width == 4 && let Some(syscon) = self.egis_syscon.as_mut().filter(|syscon| syscon.contains(address)) {

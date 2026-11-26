@@ -112,3 +112,102 @@ mod tests {
         assert_eq!(syscon.apb_clock(), 4_273);
     }
 }
+
+pub(crate) enum EgisExtra {
+    Smu2 {
+        base: u32,
+    },
+    Entropy {
+        base: u32,
+        control: u32,
+        key: [u32; 4],
+        sequence: crate::pseudorandom::Sequence,
+    },
+}
+
+impl EgisExtra {
+    pub fn smu2(base: u32) -> Self {
+        Self::Smu2 { base }
+    }
+
+    pub fn entropy(base: u32) -> Self {
+        Self::Entropy {
+            base,
+            control: 0,
+            key: [0; 4],
+            sequence: crate::pseudorandom::Sequence::new(0),
+        }
+    }
+
+    pub fn base(&self) -> u32 {
+        match self {
+            Self::Smu2 { base } | Self::Entropy { base, .. } => *base,
+        }
+    }
+
+    pub fn size(&self) -> u32 {
+        match self {
+            Self::Smu2 { .. } => 0x1000,
+            Self::Entropy { .. } => 0x10_0000,
+        }
+    }
+
+    pub fn contains(&self, address: u32) -> bool {
+        address.wrapping_sub(self.base()) < self.size()
+    }
+
+    fn smu2_has_register(offset: u32) -> bool {
+        matches!(
+            offset,
+            0x100 | 0x104 | 0x110 | 0x114 | 0x200 | 0x300 | 0x304 | 0x500 | 0x600
+        ) || ((0x400..=0x424).contains(&offset) && offset & 3 == 0)
+    }
+
+    pub fn read(&mut self, address: u32) -> u32 {
+        let offset = address - self.base();
+        match self {
+            Self::Smu2 { .. } => {
+                if !Self::smu2_has_register(offset) {
+                    crate::monitor_log::record(
+                        2,
+                        &format!("SMU2: Unhandled read from offset {offset:#x}"),
+                    );
+                }
+                0
+            }
+            Self::Entropy {
+                control,
+                key,
+                sequence,
+                ..
+            } => match offset {
+                0x400 => 0x400,
+                0x1000 => *control,
+                0x1004 => u32::MAX,
+                0x1010 | 0x1014 | 0x1018 | 0x101c => key[((offset - 0x1010) / 4) as usize],
+                0x1030 => 0x87,
+                0x1080 => sequence.next() as u32,
+                _ => 0,
+            },
+        }
+    }
+
+    pub fn write(&mut self, address: u32, value: u32) {
+        let offset = address - self.base();
+        match self {
+            Self::Smu2 { .. } => {
+                if !Self::smu2_has_register(offset) {
+                    crate::monitor_log::record(
+                        2,
+                        &format!("SMU2: Unhandled write to offset {offset:#x}"),
+                    );
+                }
+            }
+            Self::Entropy { control, key, .. } => match offset {
+                0x1000 => *control = value,
+                0x1010 | 0x1014 | 0x1018 | 0x101c => key[((offset - 0x1010) / 4) as usize] = value,
+                _ => {}
+            },
+        }
+    }
+}
