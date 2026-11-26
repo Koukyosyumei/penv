@@ -291,6 +291,14 @@ struct RamAlias {
     harts: u64,
     base: u64,
     length: usize,
+    arm_tcm: Option<ArmTcm>,
+}
+
+#[derive(Debug)]
+struct ArmTcm {
+    index: usize,
+    register: u32,
+    reset_address: u64,
 }
 
 struct Tohost {
@@ -1041,8 +1049,70 @@ impl Bus {
             harts,
             base,
             length,
+            arm_tcm: None,
         });
         Ok(())
+    }
+
+    pub(crate) fn annotate_arm_tcm(&mut self, slot: usize, index: usize) -> Result<(), String> {
+        if index >= 3 || self.aliases.iter().any(|alias| {
+            alias.harts & (1 << slot) != 0 && alias.arm_tcm.as_ref().is_some_and(|region| region.index == index)
+        }) {
+            return Err("invalid or duplicate ARM TCM index".into());
+        }
+        let alias = self.aliases.last_mut().ok_or("ARM TCM needs a CPU-scoped memory")?;
+        if alias.harts != 1 << slot || alias.base & 4095 != 0
+            || !alias.length.is_power_of_two() || !(512..=8 * 1024 * 1024).contains(&alias.length)
+        {
+            return Err("invalid ARM TCM range".into());
+        }
+        let size = (alias.length / 512).trailing_zeros() << 2;
+        let base = u32::try_from(alias.base).map_err(|_| "ARM TCM exceeds 32-bit address space")?;
+        alias.arm_tcm = Some(ArmTcm { index, register: base | size | 3, reset_address: alias.base });
+        Ok(())
+    }
+
+    pub(crate) fn fill_arm_memory(&mut self, backing: usize, pattern: &[u8]) {
+        for (destination, byte) in self.regions[backing].bytes.iter_mut().zip(pattern.iter().copied().cycle()) {
+            *destination = byte;
+        }
+    }
+
+    pub(crate) fn arm_tcm_type(&self, slot: usize) -> u32 {
+        let banks = self.aliases.iter().filter_map(|alias| {
+            (alias.harts & (1 << slot) != 0).then_some(alias.arm_tcm.as_ref()).flatten().map(|region| 1 << region.index)
+        }).fold(0, |mask, region| mask | region);
+        banks | (u32::from(banks != 0) << 31)
+    }
+
+    pub(crate) fn arm_tcm_register(&mut self, slot: usize, index: usize, value: Option<u32>) -> Option<u32> {
+        let alias = self.aliases.iter_mut().find(|alias| {
+            alias.harts & (1 << slot) != 0 && alias.arm_tcm.as_ref().is_some_and(|region| region.index == index)
+        })?;
+        let tcm = alias.arm_tcm.as_mut().unwrap();
+        if let Some(value) = value {
+            // Renode's implementation shifts the guest write by 13 for the remapping callback.
+            alias.base = u64::from(value >> 13);
+            tcm.register = (tcm.register & 0x1ffc) | (value & !0x1ffc);
+        }
+        Some(tcm.register)
+    }
+
+    pub(crate) fn reset_arm_tcm(&mut self, slot: usize) {
+        for alias in self.aliases.iter_mut().filter(|alias| alias.harts & (1 << slot) != 0) {
+            if let Some(tcm) = alias.arm_tcm.as_mut() {
+                alias.base = tcm.reset_address;
+                tcm.register = tcm.reset_address as u32 | ((alias.length / 512).trailing_zeros() << 2);
+            }
+        }
+    }
+
+    pub(crate) fn arm_tcm_permits(&self, slot: usize, address: u32, hypervisor: bool) -> bool {
+        let address = u64::from(address);
+        self.aliases.iter().find(|alias| {
+            alias.harts & (1 << slot) != 0 && (alias.base..alias.base + alias.length as u64).contains(&address)
+        }).and_then(|alias| alias.arm_tcm.as_ref())
+            .is_none_or(|tcm| tcm.register & (1 << u32::from(hypervisor)) != 0)
     }
 
     pub(crate) fn map_named_monitor_ram(&mut self, name: &str, hart: Option<usize>, address: u64, size: u32) -> Result<(), String> {

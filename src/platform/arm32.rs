@@ -1,4 +1,4 @@
-use super::{Entry, keys, map_pl011, multi_registration, number, object_fields};
+use super::{Entry, keys_in, map_pl011, multi_registration, number, object_fields};
 use crate::{
     arm_gic::{Gic, Version, Window, WindowKind},
     arm32::{Cpu, GenericTimer, Profile},
@@ -27,12 +27,15 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
         .iter()
         .find(|entry| entry.model == "IRQControllers.ARM_GenericInterruptController");
     let mut affinities = Vec::new();
+    let mut tcm = Vec::new();
     for (hart, entry) in cpus.iter().enumerate() {
         if entry.registration.as_deref() != Some("sysbus") {
             return Err(entry.error("ARMv7 CPU must be registered on sysbus"));
         }
-        let fields = keys(
+        let (properties, init) = split_init(entry);
+        let fields = keys_in(
             entry,
+            properties,
             &[
                 "cpuType",
                 "numberOfMPURegions",
@@ -90,6 +93,20 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
         cpu.name = Some(entry.name.clone());
         cpu.configure_reset_vector(0);
         cpu.arm32 = Some(Box::new(processor));
+        for (_, command) in init {
+            match command
+                .split_ascii_whitespace()
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                ["IsHalted", "true"] => cpu.monitor_halted = true,
+                ["RegisterTCMRegion", memory, index] if cpu.arm32.as_ref().unwrap().is_v8r() => {
+                    let index = number(index).map_err(|error| entry.error(&error))? as usize;
+                    tcm.push((hart, memory.trim_start_matches("sysbus.").to_owned(), index));
+                }
+                _ => return Err(entry.error("unsupported AArch32 CPU init command")),
+            }
+        }
         machine.bus.guest_cpu_names.push(entry.name.clone());
     }
     let mut mapped = false;
@@ -97,7 +114,7 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
         match entry.model.as_str() {
             "CPU.ARMv7A" | "CPU.ARMv7R" | "CPU.ARMv8R" => {}
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
-                map_memory(&mut machine, entry)?;
+                map_memory(&mut machine, entry, &mut tcm)?;
                 mapped = true;
             }
             "UART.PL011" => map_pl011(entry, controller, &mut machine.bus)?,
@@ -108,10 +125,25 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
             _ => return Err(entry.error("unsupported ARMv7 platform peripheral")),
         }
     }
+    if let Some((_, memory, _)) = tcm.first() {
+        return Err(format!(
+            "ARM TCM {memory:?} has no corresponding CPU-scoped registration"
+        ));
+    }
     if require_ram && !mapped {
         return Err("ARMv7 platform has no mapped RAM".into());
     }
     Ok(machine)
+}
+
+fn split_init(entry: &Entry) -> (&[(usize, String)], &[(usize, String)]) {
+    entry
+        .body
+        .iter()
+        .position(|(_, line)| line == "init:" || line == "init add:")
+        .map_or((entry.body.as_slice(), &[]), |index| {
+            (&entry.body[..index], &entry.body[index + 1..])
+        })
 }
 
 fn map_timer(
@@ -188,10 +220,17 @@ fn map_timer(
 }
 
 fn map_gic(machine: &mut Machine, entry: &Entry, affinities: &[u32]) -> Result<(), String> {
-    let mut version = Version::V2;
+    let mut version = Version::V3;
     let mut shared = 960;
-    for (key, value) in keys(
+    let properties: Vec<_> = entry
+        .body
+        .iter()
+        .filter(|(_, value)| !value.contains("->"))
+        .cloned()
+        .collect();
+    for (key, value) in keys_in(
         entry,
+        &properties,
         &[
             "architectureVersion",
             "sharedPeripheralCount",
@@ -206,6 +245,22 @@ fn map_gic(machine: &mut Machine, entry: &Entry, affinities: &[u32]) -> Result<(
             }
             ("supportsTwoSecurityStates", "false") => {}
             _ => return Err(entry.error("unsupported ARM GIC configuration")),
+        }
+    }
+    for (_, connection) in entry.body.iter().filter(|(_, value)| value.contains("->")) {
+        let (source, destination) = connection.split_once("->").unwrap();
+        let (cpu, input) = destination
+            .trim()
+            .split_once('@')
+            .ok_or_else(|| entry.error("invalid ARM GIC CPU output connection"))?;
+        let slot = machine
+            .bus
+            .scoped_cpu_index(cpu.trim())
+            .map_err(|error| entry.error(&error))?;
+        let affinity = affinities[slot];
+        let first = affinity * 4;
+        if source.trim() != format!("[{first}-{}]", first + 1) || input.trim() != "[0-1]" {
+            return Err(entry.error("unsupported ARM GIC CPU output connection"));
         }
     }
     let registrations = entry
@@ -261,8 +316,13 @@ fn map_gic(machine: &mut Machine, entry: &Entry, affinities: &[u32]) -> Result<(
         .map_err(|error| entry.error(&error))
 }
 
-fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
-    let fields = keys(entry, &["size"])?;
+fn map_memory(
+    machine: &mut Machine,
+    entry: &Entry,
+    tcm: &mut Vec<(usize, String, usize)>,
+) -> Result<(), String> {
+    let (properties, init) = split_init(entry);
+    let fields = keys_in(entry, properties, &["size"])?;
     let [("size", value)] = fields.as_slice() else {
         return Err(entry.error("ARMv7 memory requires a size"));
     };
@@ -331,11 +391,34 @@ fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
         machine.bus.allocate_ram_backing(size)
     }
     .map_err(|error| entry.error(&error))?;
+    for (_, command) in init {
+        let pattern = command
+            .strip_prefix("FillWithRepeatingData ")
+            .and_then(|text| text.trim().strip_prefix('['))
+            .and_then(|text| text.strip_suffix(']'))
+            .ok_or_else(|| entry.error("unsupported ARM memory init command"))?;
+        let bytes = pattern
+            .split(',')
+            .map(|value| number(value.trim()).map(|word| word as u8))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| entry.error(&error))?;
+        machine.bus.fill_arm_memory(backing, &bytes);
+    }
     for (address, mask) in windows {
         machine
             .bus
             .map_alias64(backing, address, size, 0, mask, false)
             .map_err(|error| entry.error(&error))?;
+        if let Some(request) = tcm
+            .iter()
+            .position(|(slot, memory, _)| *memory == entry.name && mask == 1 << slot)
+        {
+            let (slot, _, index) = tcm.remove(request);
+            machine
+                .bus
+                .annotate_arm_tcm(slot, index)
+                .map_err(|error| entry.error(&error))?;
+        }
     }
     Ok(())
 }

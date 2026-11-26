@@ -741,7 +741,7 @@ enum Action {
     AssertCpuValue(String, Option<String>, u64),
     CpuRegister(String, String, Option<u64>),
     ArmSystemRegister(String, String, Option<u64>),
-    ArmExceptionState(String, bool),
+    ArmExceptionState(String, bool, Option<String>),
     ExecutionMode(String, Option<bool>),
     AddCpuHook(String, Option<u32>, CpuHook),
     PeripheralLog(String, i8),
@@ -1856,9 +1856,10 @@ fn run_commands<'a>(
                 }
                 Ok(None)
             }
-            Action::ArmExceptionState(cpu, security) => {
-                let state = machine.monitor_arm_exception_state(cpu, *security)?;
-                writeln!(output.reply(), "{state}").map_err(|error| error.to_string())?;
+            Action::ArmExceptionState(cpu, security, level) => {
+                if let Some(state) = machine.monitor_arm_exception_state(cpu, *security, level.as_deref())? {
+                    writeln!(output.reply(), "{state}").map_err(|error| error.to_string())?;
+                }
                 Ok(None)
             }
             // Synchronous script actions run at completed instruction boundaries.
@@ -5918,8 +5919,11 @@ fn execute(
                 unquote(resolve(register)?).into(), value,
             ))
         }
-        [target, property @ ("ExceptionLevel" | "SecurityState")] => {
-            Some(Action::ArmExceptionState(resolve(target)?.trim_start_matches("sysbus.").into(), *property == "SecurityState"))
+        [target, property @ ("ExceptionLevel" | "SecurityState"), level @ ..]
+            if level.is_empty() || *property == "ExceptionLevel" && level.len() == 1 =>
+        {
+            let level = level.first().map(|level| resolve(level).map(unquote).map(str::to_owned)).transpose()?;
+            Some(Action::ArmExceptionState(resolve(target)?.trim_start_matches("sysbus.").into(), *property == "SecurityState", level))
         }
         [target, property @ ("SP" | "CPSR"), value @ ..]
             if (boot.started || boot.has_platform()) && value.len() <= 1 =>

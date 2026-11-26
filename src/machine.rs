@@ -607,7 +607,13 @@ impl Machine {
             hart.monitor_halted = false;
             Ok(())
         } else {
-            hart.monitor_reset(initial)
+            let slot = hart.slot;
+            let v8r = hart.arm32.as_ref().is_some_and(|cpu| cpu.is_v8r());
+            hart.monitor_reset(initial)?;
+            if v8r {
+                self.bus.reset_arm_tcm(slot);
+            }
+            Ok(())
         }
     }
 
@@ -683,14 +689,33 @@ impl Machine {
     }
 
     pub(crate) fn monitor_arm_system_register(&mut self, cpu: &str, register: &str, value: Option<u64>) -> Result<Option<u64>, String> {
-        self.named_hart(cpu)?.arm32.as_mut().ok_or("system register requires an AArch32 CPU")?
-            .monitor_system_register(register, value)
+        let hart = self.named_hart(cpu)?;
+        let slot = hart.slot;
+        let processor = hart.arm32.as_mut().ok_or("system register requires an AArch32 CPU")?;
+        let key = match register.to_ascii_lowercase().as_str() {
+            "tcmtr" => Some(0x0000_0040),
+            "imp_atcmregionr" => Some(0x0009_0001),
+            "imp_btcmregionr" => Some(0x0009_0021),
+            "imp_ctcmregionr" => Some(0x0009_0041),
+            _ => None,
+        };
+        if processor.is_v8r() && let Some(key) = key {
+            let value = value.map(u32::try_from).transpose().map_err(|_| "system register value exceeds 32 bits")?;
+            return crate::arm32::Cpu::access_tcm_register(&mut self.bus, slot, key, value)
+                .map(|value| value.map(u64::from)).ok_or_else(|| format!("invalid access to {register:?}"));
+        }
+        processor.monitor_system_register(register, value)
     }
 
-    pub(crate) fn monitor_arm_exception_state(&mut self, cpu: &str, security: bool) -> Result<&'static str, String> {
-        let cpu = self.named_hart(cpu)?.arm32.as_ref().filter(|cpu| cpu.is_v8r())
+    pub(crate) fn monitor_arm_exception_state(&mut self, cpu: &str, security: bool, level: Option<&str>) -> Result<Option<&'static str>, String> {
+        let hart = self.named_hart(cpu)?;
+        let cpu = hart.arm32.as_mut().filter(|cpu| cpu.is_v8r())
             .ok_or("exception state requires a Cortex-R52 CPU")?;
-        Ok(if security { "NonSecure" } else { cpu.monitor_exception_level() })
+        if let Some(level) = level {
+            cpu.set_monitor_exception_level(level, &mut hart.registers)?;
+            return Ok(None);
+        }
+        Ok(Some(if security { "NonSecure" } else { cpu.monitor_exception_level() }))
     }
 
     pub(crate) fn drive_arm_cpu_interrupt(&mut self, name: &str, input: u32, asserted: bool) -> Option<Result<(), String>> {

@@ -459,13 +459,15 @@ fn apply_repl_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
     let mut merged: Vec<Entry> = Vec::with_capacity(entries.len());
     for entry in std::mem::take(entries) {
         if entry.model.is_empty()
-            && entry.registration.is_none()
             && entry.name != "sysbus"
-            && !entry.body.is_empty()
+            && (entry.registration.is_some() || !entry.body.is_empty())
             && entry.body.iter().all(|(_, text)| property_key(text).is_some())
             && let Some(&index) = declarations.get(&entry.name)
             && !merged[index].model.is_empty()
         {
+            if entry.registration.is_some() {
+                merged[index].registration = entry.registration;
+            }
             let properties: HashSet<_> = entry.body.iter()
                 .filter_map(|(_, text)| property_key(text)).collect();
             merged[index].body.retain(|(_, text)| {

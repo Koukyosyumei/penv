@@ -321,7 +321,8 @@ impl Cpu {
         slot: usize,
         address: u32,
     ) -> Result<(), String> {
-        Self::load(bus, slot, address, if self.cpsr & T != 0 { 2 } else { 4 }).map(|_| ())
+        self.load(bus, slot, address, if self.cpsr & T != 0 { 2 } else { 4 })
+            .map(|_| ())
     }
 
     pub(crate) fn configure_pmsa(
@@ -344,8 +345,39 @@ impl Cpu {
             0x10 => "EL0_UserMode",
             0x1a => "EL2_HypervisorMode",
             0x16 => "EL3_MonitorMode",
-            _ => "EL1_SupervisorMode",
+            _ => "EL1_SystemMode",
         }
+    }
+
+    pub(crate) fn set_monitor_exception_level(
+        &mut self,
+        level: &str,
+        registers: &mut [u32; 32],
+    ) -> Result<(), String> {
+        let mode = match level {
+            "EL0_UserMode" => 0x10,
+            "EL1_SystemMode" => 0x1f,
+            "EL2_HypervisorMode" => 0x1a,
+            _ => return Err(format!("unsupported Cortex-R52 exception level {level:?}")),
+        };
+        self.set_cpsr((self.cpsr & !31) | mode, registers)
+    }
+
+    pub(crate) fn access_tcm_register(
+        bus: &mut Bus,
+        slot: usize,
+        key: u32,
+        value: Option<u32>,
+    ) -> Option<Option<u32>> {
+        let reply = match key {
+            0x0000_0040 if value.is_none() => return Some(Some(bus.arm_tcm_type(slot))),
+            0x0009_0001 | 0x0009_0021 | 0x0009_0041 => {
+                let index = ((key >> 5) & 3) as usize;
+                bus.arm_tcm_register(slot, index, value).unwrap_or(0)
+            }
+            _ => return None,
+        };
+        Some(value.is_none().then_some(reply))
     }
 
     pub(crate) fn monitor_system_register(
@@ -384,6 +416,7 @@ impl Cpu {
             "ifsr" => 0x0005_0020,
             "hsr" => 0x0085_0002,
             "dfar" => 0x0006_0000,
+            "id_mmfr0" => 0x0000_0081,
             "ifar" => 0x0006_0040,
             "hdfar" => 0x0086_0000,
             "hifar" => 0x0086_0040,
@@ -408,6 +441,9 @@ impl Cpu {
             return pmsa[bank].access(register, value);
         }
         let v8r = self.is_v8r();
+        if v8r && key == 0x0000_0081 {
+            return value.is_none().then_some(Some(0x0021_1040));
+        }
         let (register, mask) = match key {
             0x0001_0000 => (&mut self.sctlr, u32::MAX),
             0x000c_0000 => (&mut self.vbar, !31),
@@ -671,8 +707,8 @@ impl Cpu {
             } else {
                 base.wrapping_sub(8)
             };
-            let address = Self::load(bus, slot, target, 4)?;
-            let status = Self::load(bus, slot, target.wrapping_add(4), 4)?;
+            let address = self.load(bus, slot, target, 4)?;
+            let status = self.load(bus, slot, target.wrapping_add(4), 4)?;
             if Self::bank_for(status).is_none() {
                 return Ok(Some(self.undefined(pc.wrapping_add(4), registers)));
             }
@@ -699,8 +735,8 @@ impl Cpu {
         } else {
             base.wrapping_sub(8)
         };
-        Self::store(bus, slot, target, 4, registers[14], output)?;
-        Self::store(
+        self.store(bus, slot, target, 4, registers[14], output)?;
+        self.store(
             bus,
             slot,
             target.wrapping_add(4),
@@ -859,7 +895,16 @@ impl Cpu {
         }
     }
 
-    fn load(bus: &mut Bus, slot: usize, address: u32, width: usize) -> Result<u32, String> {
+    fn load(&self, bus: &mut Bus, slot: usize, address: u32, width: usize) -> Result<u32, String> {
+        if self.is_v8r() && !bus.arm_tcm_permits(slot, address, self.cpsr & 31 == 0x1a) {
+            crate::monitor_log::record(
+                2,
+                &format!(
+                    "sysbus: Tried to read {width} bytes at 0x{address:X}, with incorrect permissions, returning 0."
+                ),
+            );
+            return Ok(0);
+        }
         if let Some(bytes) = bus.cpu_ram64(slot, u64::from(address), width) {
             let mut word = [0; 4];
             word[..width].copy_from_slice(bytes);
@@ -874,6 +919,7 @@ impl Cpu {
     }
 
     fn store(
+        &self,
         bus: &mut Bus,
         slot: usize,
         address: u32,
@@ -881,6 +927,15 @@ impl Cpu {
         value: u32,
         output: &mut impl Write,
     ) -> Result<(), String> {
+        if self.is_v8r() && !bus.arm_tcm_permits(slot, address, self.cpsr & 31 == 0x1a) {
+            crate::monitor_log::record(
+                2,
+                &format!(
+                    "sysbus: Tried to write {width} bytes at 0x{address:X}, with incorrect permissions."
+                ),
+            );
+            return Ok(());
+        }
         if let Some(bytes) = bus.cpu_memory64(slot, u64::from(address), width) {
             bytes.copy_from_slice(&value.to_le_bytes()[..width]);
             bus.observe_memory_store(u64::from(address), width, u64::from(value));
@@ -934,7 +989,7 @@ impl Cpu {
                 *pc = vector;
                 return Ok(Step::Trap);
             }
-            let raw = Self::load(bus, slot, *pc, 2)?;
+            let raw = self.load(bus, slot, *pc, 2)?;
             if raw & 0xff07 == 0x4700 {
                 let reg = ((raw >> 3) & 15) as usize;
                 let target = if reg == 15 {
@@ -959,7 +1014,7 @@ impl Cpu {
                     *pc = vector;
                     return Ok(Step::Trap);
                 }
-                let low = Self::load(bus, slot, pc.wrapping_add(2), 2)?;
+                let low = self.load(bus, slot, pc.wrapping_add(2), 2)?;
                 if let Some(next) =
                     self.exception_return(raw, low, *pc, registers, bus, slot, output)?
                 {
@@ -980,7 +1035,7 @@ impl Cpu {
             *pc = vector;
             return Ok(Step::Trap);
         }
-        let instruction = Self::load(bus, slot, *pc, 4)?;
+        let instruction = self.load(bus, slot, *pc, 4)?;
         let address = *pc;
         let mut next = address.wrapping_add(4);
         let condition = instruction >> 28;
@@ -1106,6 +1161,18 @@ impl Cpu {
                         && let Some(reply) = self
                             .access_cp15(key, write.then_some(registers[rd]))
                             .or_else(|| {
+                                self.is_v8r()
+                                    .then(|| {
+                                        Self::access_tcm_register(
+                                            bus,
+                                            slot,
+                                            key,
+                                            write.then_some(registers[rd]),
+                                        )
+                                    })
+                                    .flatten()
+                            })
+                            .or_else(|| {
                                 bus.arm_gic.as_mut()?.access_aarch32(
                                     slot,
                                     key,
@@ -1192,6 +1259,26 @@ impl Cpu {
                         (registers[rd] & 0xffff) | (immediate << 16)
                     };
                 }
+                _ if matches!(
+                    instruction & 0x0ff0_03f0,
+                    0x06a0_0070 | 0x06b0_0070 | 0x06e0_0070 | 0x06f0_0070
+                ) && rd != 15 =>
+                {
+                    let source = (instruction & 15) as usize;
+                    let value = Self::reg(registers, source, address)
+                        .rotate_right(((instruction >> 10) & 3) * 8);
+                    let extended = match (instruction >> 20) & 7 {
+                        2 => value as i8 as i32 as u32,
+                        3 => value as i16 as i32 as u32,
+                        6 => value & 0xff,
+                        _ => value & 0xffff,
+                    };
+                    registers[rd] = if rn == 15 {
+                        extended
+                    } else {
+                        registers[rn].wrapping_add(extended)
+                    };
+                }
                 _ if instruction & 0x0e00_0000 == 0x0800_0000 => {
                     let list = instruction as u16;
                     if list == 0 || rn == 15 {
@@ -1234,7 +1321,7 @@ impl Cpu {
                             return Ok(Step::Trap);
                         }
                         if load {
-                            let value = Self::load(bus, slot, target, 4)?;
+                            let value = self.load(bus, slot, target, 4)?;
                             if index == 15 {
                                 loaded_pc = Some(value);
                             } else if user_bank {
@@ -1248,7 +1335,7 @@ impl Cpu {
                             } else {
                                 Self::reg(registers, index, address)
                             };
-                            Self::store(bus, slot, target, 4, value, output)?;
+                            self.store(bus, slot, target, 4, value, output)?;
                         }
                         target = target.wrapping_add(4);
                     }
@@ -1305,14 +1392,14 @@ impl Cpu {
                         return Ok(Step::Trap);
                     }
                     if instruction & (1 << 20) != 0 {
-                        let value = Self::load(bus, slot, target, width)?;
+                        let value = self.load(bus, slot, target, width)?;
                         if rd == 15 {
                             next = self.exchange(value);
                         } else {
                             registers[rd] = value;
                         }
                     } else {
-                        Self::store(
+                        self.store(
                             bus,
                             slot,
                             target,
