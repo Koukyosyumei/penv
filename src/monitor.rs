@@ -3132,6 +3132,25 @@ pub fn serve(
             }.map_err(|error| error.to_string())?;
             continue;
         }
+        if let Some(source) = text.strip_prefix("ExecutePythonValue ") {
+            let result = (|| {
+                let (source, rest) = uart_text_argument(source, &session.variables)?;
+                if !rest.is_empty() {
+                    return Err("ExecutePythonValue expects one source argument".into());
+                }
+                if session.python.is_none() {
+                    session.python = Some(crate::cpu_python_hook::Hook::new("", None, None)?);
+                }
+                session.python.as_mut().unwrap().execute_monitor_value(
+                    &mut machine.bus, &source, machine.monitor_firmware.clone(),
+                )
+            })();
+            match result {
+                Ok(value) => frame(&mut output, "OK", value.as_bytes()),
+                Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+            }.map_err(|error| error.to_string())?;
+            continue;
+        }
         let mut boot = live_command_boot(path, &session);
         let mut existing_machine = true;
         let mut included_state = None;

@@ -143,7 +143,8 @@ print('ready', flush=True)
 for line in sys.stdin:
     fields = line.split()
     is_csr = fields[0] == 'csr'
-    is_monitor = fields[0] == 'monitor'
+    is_value = fields[0] == 'monitor-value'
+    is_monitor = fields[0] == 'monitor' or is_value
     is_instruction = fields[0] == 'instruction'
     if is_csr:
         request.Csr = int(fields[1])
@@ -167,15 +168,27 @@ for line in sys.stdin:
             # RPCs use the original stdout even when script output is redirected.
             if is_monitor:
                 code = bytes.fromhex(fields[1]).decode() if len(fields) > 1 else ''
-                exec(compile(code, '<monitor>', 'exec'), scope)
+                if is_value:
+                    import json
+                    try:
+                        expression = compile(code, '<monitor>', 'eval')
+                    except SyntaxError:
+                        exec(compile(code, '<monitor>', 'exec'), scope)
+                        value = None
+                    else:
+                        value = eval(expression, scope)
+                    capture = json.dumps(value, allow_nan=False)
+                else:
+                    exec(compile(code, '<monitor>', 'exec'), scope)
             else:
                 exec(program, scope)
     except Exception as error:
         marker = 'monitor-exception' if is_monitor else 'instruction-exception' if is_instruction else 'exception'
-        print(marker + ' ' + str(error).encode().hex(), flush=True)
+        message = f'{type(error).__name__}Exception: {error}' if is_value else str(error)
+        print(marker + ' ' + message.encode().hex(), flush=True)
     else:
         if is_monitor:
-            print('monitor-result ' + capture.getvalue().encode().hex(), flush=True)
+            print('monitor-result ' + (capture if is_value else capture.getvalue()).encode().hex(), flush=True)
         elif is_csr:
             print('csr-result ' + str(request.Value), flush=True)
         else:
@@ -307,6 +320,14 @@ impl Hook {
             compatible.push('\n');
         }
         self.invoke(bus, format_args!("monitor {}", encode(&compatible)))?;
+        Ok(std::mem::take(&mut self.monitor_output))
+    }
+
+    pub(crate) fn execute_monitor_value(
+        &mut self, bus: &mut Bus, source: &str, symbols: Option<PathBuf>,
+    ) -> Result<String, String> {
+        self.symbols = symbols;
+        self.invoke(bus, format_args!("monitor-value {}", encode(source)))?;
         Ok(std::mem::take(&mut self.monitor_output))
     }
 

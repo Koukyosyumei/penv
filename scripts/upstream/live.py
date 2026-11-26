@@ -22,6 +22,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     rust_monitor = False
     response_timeout = 120
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
+        "Execute Python": "execute_python",
         "Wait For Prompt On Uart": "prompt",
         "Wait For Next Line On Uart": "wait_for_next_uart_line",
         "Wait For Lines On Uart": "wait_for_uart_lines",
@@ -378,6 +379,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if reply not in {"OK", "DEFER"}:
             raise PenvExecutionError(value)
         return reply, value
+
+    def execute_python(self, command, machine=None):
+        if not self.rust_monitor:
+            raise Unsupported("Execute Python requires the Rust monitor")
+        if machine:
+            self.operation(f"mach set {self.literal(machine)}")
+        return json.loads(self.operation(f"ExecutePythonValue hex:{command.encode().hex()}"))
 
     def execute(self, command, *args, machine=None):
         if isinstance(command, list):

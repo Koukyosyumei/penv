@@ -99,7 +99,7 @@ class Endpoint:
         self.calls.append(call)
         try:
             kwargs = kwargs or {}
-            if kwargs and (name != "Execute Command" or set(kwargs) != {"machine"}):
+            if kwargs and (name not in {"Execute Command", "Execute Python"} or set(kwargs) != {"machine"}):
                 raise Unsupported("named arguments")
             result = robot_result(getattr(self, self.keywords[name])(*args, **kwargs))
         except PenvUnsupported as exc:
