@@ -4184,13 +4184,17 @@ fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus, root: &Path, assets: Option<&
         let tail = tail.trim();
         match command {
             "SilenceRange" if tail.is_empty() => bus.map_silencer(start, size),
-            "Tag"
-                if tail
-                    .strip_prefix('"')
-                    .and_then(|value| value.strip_suffix('"'))
-                    .is_some_and(|name| !name.is_empty() && !name.contains('"')) =>
-            {
-                bus.map_tag(start, size)
+            "Tag" => {
+                let (name, default) = tail.strip_prefix('"')
+                    .and_then(|quoted| quoted.split_once('"'))
+                    .filter(|(name, _)| !name.is_empty())
+                    .ok_or_else(|| error("expected a quoted bus tag name"))?;
+                if default.trim().is_empty() {
+                    bus.map_tag(start, size)
+                } else {
+                    let default = crate::parse_address64(default.trim()).map_err(|detail| error(&detail))?;
+                    bus.tag_named(start, size, default, false, name, false)
+                }
             }
             _ => return Err(error("expected SilenceRange or Tag")),
         }
