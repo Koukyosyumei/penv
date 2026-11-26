@@ -1,0 +1,18 @@
+$ cargo test --locked --bin penv upstream_nunit::efr32_i2c
+running 15 tests
+test upstream_nunit::efr32_i2c::interrupt_transfer_completed ... ok
+test upstream_nunit::efr32_i2c::interrupt_start ... ok
+test upstream_nunit::efr32_i2c::interrupt_nack ... ok
+test upstream_nunit::efr32_i2c::peek_double_byte ... ok
+test upstream_nunit::efr32_i2c::interrupt_bus_hold ... ok
+test upstream_nunit::efr32_i2c::peek_single_byte ... ok
+test upstream_nunit::efr32_i2c::interrupt_transmit_buffer_level ... ok
+test upstream_nunit::efr32_i2c::interrupt_ack ... ok
+test upstream_nunit::efr32_i2c::interrupt_read_underflow ... ok
+test upstream_nunit::efr32_i2c::interrupt_master_stop ... ok
+test upstream_nunit::efr32_i2c::read_from_slave_using_double_byte_transfer ... ok
+test upstream_nunit::efr32_i2c::read_from_slave_using_single_byte_transfer ... ok
+test upstream_nunit::efr32_i2c::write_to_slave_using_single_byte_transfer ... ok
+test upstream_nunit::efr32_i2c::write_to_slave_using_double_byte_transfer ... ok
+test upstream_nunit::efr32_i2c::test_with_bmp180 ... ok
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1617 filtered out; finished in 0.00s

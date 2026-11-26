@@ -1,0 +1,4 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.PythonCommands.NextValueTest	0-1086	upstream_nunit::python_monitor::next_value_test	passed
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.PythonCommands.SleepTest	0-1087	upstream_nunit::python_monitor::sleep_test	passed
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.PythonCommands.EchoTest	0-1088	upstream_nunit::python_monitor::echo_test	passed

@@ -1,0 +1,4 @@
+official_id	nunit_id	rust_test	rust_outcome
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests.ShouldValidateObjectValueInCtorParameter	0-1278	repl_parser::upstream_verification_tests::should_validate_object_value_in_ctor_parameter	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests.ShouldFailOnNoAvailableCtorInEntry	0-1279	repl_parser::upstream_verification_tests::should_fail_on_no_available_ctor_in_entry	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests.ShouldFailOnAmbiguousCtorInEntry	0-1280	repl_parser::upstream_verification_tests::should_fail_on_ambiguous_ctor_in_entry	passed

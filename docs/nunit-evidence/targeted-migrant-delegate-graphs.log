@@ -1,0 +1,35 @@
+$ cargo test --locked --bin penv upstream_nunit::migrant_object_stream::serial_delegate_graphs
+running 32 tests
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::as_user_object::reflection_generated_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::ordinary::both_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::as_user_object::reflection_reflection_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::ordinary::both_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::as_user_object::generated_generated_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::ordinary::reader_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::as_user_object::generated_generated_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::as_user_object::generated_reflection_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::as_user_object::generated_reflection_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::as_user_object::reflection_generated_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::as_user_object::reflection_reflection_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::ordinary::reader_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::ordinary::writer_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::ordinary::writer_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::as_user_object::generated_generated_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::reflection_reflection_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::as_user_object::generated_generated_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::backreference::reflection_reflection_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::as_user_object::reflection_generated_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::as_user_object::generated_reflection_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::as_user_object::reflection_reflection_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::as_user_object::generated_reflection_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::as_user_object::reflection_generated_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::ordinary::both_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::ordinary::both_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::as_user_object::reflection_reflection_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::ordinary::reader_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::ordinary::reader_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::ordinary::writer_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::reflection_reflection_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::reflection_reflection_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_delegate_graphs::generic::ordinary::writer_stamped ... ok
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 3403 filtered out; finished in 0.00s

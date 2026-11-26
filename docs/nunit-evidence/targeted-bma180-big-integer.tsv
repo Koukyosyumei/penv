@@ -1,0 +1,5 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.BMA180Test.InitTest	0-1016	upstream_nunit::bma180::init_test	pass
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.BMA180Test.ReadDataTest	0-1017	upstream_nunit::bma180::read_data_test	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeBigInteger	0-1505	upstream_nunit::migrant_object_stream::big_integer_plain	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeBigInteger	0-2265	upstream_nunit::migrant_object_stream::big_integer_stamped	pass

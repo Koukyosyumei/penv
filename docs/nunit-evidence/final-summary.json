@@ -1,0 +1,39 @@
+{
+  "renode_sha": "c38ac3babcd38a7144b9498e3ca4c2226b76aa37",
+  "penv_sha": "c5111107f91b2faad617364f4524bc3e268f6891",
+  "submodule_shas": {
+    "lib/Migrant": "169677b3e43dbbc530c9f7c3f4a13ba49e40bb2d",
+    "lib/options-parser": "53a5b82bdbfe724648071400047a6b333c89571a",
+    "src/Infrastructure": "09ac7c563095c5410258ecc1b1a6b841a013db85"
+  },
+  "rust_binary_sha256": "91e48ea1b0eb9420272242257069c6e0ff609d7c962545d491c3ae5e844c6f2f",
+  "compiler_sdk": "10.0.100",
+  "inventory_verified": [
+    "official_id",
+    "nunit_id",
+    "fixture",
+    "runstate",
+    "categories",
+    "parameters"
+  ],
+  "primitive_reader_writer_parameters_normalized": 102,
+  "summary": {
+    "ported": 3398,
+    "newly_ported": 3283,
+    "passed": 3395,
+    "failed": 0,
+    "not_run": 0,
+    "discovered": 3413,
+    "runnable": 3395,
+    "api_missing": 0,
+    "unmapped": 0,
+    "selected": 3395,
+    "mapped_excluded": 3,
+    "excluded": 3,
+    "ignored": 14,
+    "skipped": 0,
+    "explicit": 0,
+    "not_runnable": 0,
+    "inconclusive": 1
+  }
+}

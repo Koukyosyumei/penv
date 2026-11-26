@@ -1,0 +1,3 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.SDCardEmmcTest.ShouldRejectSpiMode	0-1117	upstream_nunit::sd_emmc::should_reject_spi_mode	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.SDCardEmmcTest.ShouldUseSectorAddressingForEmmc	0-1120	upstream_nunit::sd_emmc::should_use_sector_addressing_for_emmc	passed

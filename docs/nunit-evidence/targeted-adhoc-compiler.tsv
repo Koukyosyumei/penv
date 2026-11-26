@@ -1,0 +1,3 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.Utilities.AdHocCompilerTests.ShouldNotThrowOnEmptyFile	0-1056	upstream_nunit::adhoc_compiler::should_not_throw_on_empty_file	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.Utilities.AdHocCompilerTests.ShouldCompileCsFile	0-1057	upstream_nunit::adhoc_compiler::should_compile_cs_file	passed

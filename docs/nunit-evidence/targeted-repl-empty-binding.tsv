@@ -1,0 +1,4 @@
+official_id	nunit_id	rust_test	rust_outcome
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldHandleEmptyBoolValue	0-1033	repl_parser::upstream_verification_tests::should_handle_empty_bool_value	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldHandleEmptyReferenceAttribute	0-1034	repl_parser::upstream_verification_tests::should_handle_empty_reference_attribute	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldHandleNoneInCtorParam	0-1039	repl_parser::upstream_verification_tests::should_handle_none_in_ctor_param	passed

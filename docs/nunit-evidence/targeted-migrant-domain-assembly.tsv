@@ -1,0 +1,5 @@
+official_id	nunit_id	rust_test	rust_outcome
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TwoDomainTests(False,False).ShouldHandleAssemblyVersionChange	0-3177	upstream_nunit::migrant_two_domains::assembly_version::write_false_read_false	passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TwoDomainTests(False,True).ShouldHandleAssemblyVersionChange	0-3207	upstream_nunit::migrant_two_domains::assembly_version::write_false_read_true	passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TwoDomainTests(True,False).ShouldHandleAssemblyVersionChange	0-3187	upstream_nunit::migrant_two_domains::assembly_version::write_true_read_false	passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TwoDomainTests(True,True).ShouldHandleAssemblyVersionChange	0-3197	upstream_nunit::migrant_two_domains::assembly_version::write_true_read_true	passed

@@ -2,6 +2,7 @@ mod nrf52840;
 use crate::repl_syntax::{quoted_string, unquoted_delimiters, without_comment};
 
 mod stm32f0;
+mod scoped_nvic;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -517,7 +518,7 @@ pub(crate) fn validate_entry_properties<'a, S>(
 ) -> Result<(), String> {
     let mut properties = HashSet::new();
     for (source, text) in body {
-        if matches!(text.as_str(), "init:" | "init add:") {
+        if crate::repl_parser::init_header(text).is_some() {
             break;
         }
         if let Some(key) = property_key(text)
@@ -558,6 +559,9 @@ fn load_platform(
                 entry.name
             )
         })?;
+    }
+    if !require_ram && scoped_nvic::matches(&entries) {
+        return scoped_nvic::construct(&entries);
     }
     apply_repl_overrides(&mut entries)?;
     if entries.iter().any(|entry| entry.model == "CPU.RiscV64") {
@@ -2440,14 +2444,39 @@ fn load_platform(
                 return Err(entry.error(&format!("expected CLINT connection {expected}")));
             }
         }
+        let address = if let Some(registration) = entry.registration_list()
+            .and_then(|items| match items.as_slice() {
+                [item] => item.strip_prefix("sysbus new Bus.BusPointRegistration"),
+                _ => None,
+            })
+        {
+            let body = registration.trim().strip_prefix('{').and_then(|text| text.strip_suffix('}'))
+                .ok_or_else(|| entry.error("expected a CLINT bus point registration body"))?;
+            let fields = object_fields(body).map_err(|error| entry.error(error))?;
+            let mut address = None;
+            let mut registration_cpu = None;
+            for (key, value) in fields {
+                match key {
+                    "address" if address.is_none() => address = Some(number(value).map_err(|error| entry.error(&error))?),
+                    "cpu" if registration_cpu.is_none() => registration_cpu = Some(value),
+                    _ => return Err(entry.error("unsupported or duplicate CLINT bus point field")),
+                }
+            }
+            if configs.len() != 1 || registration_cpu != Some(configs[0].1.name.as_str()) {
+                return Err(entry.error("expected a CLINT bus point scoped to its single attached CPU"));
+            }
+            address.ok_or_else(|| entry.error("missing CLINT bus point address"))?
+        } else {
+            entry.address()?
+        };
         // VexRiscv's custom CLINT wiring uses the established one-tick-per-step
         // time base used by the LiteX Linux demos.
         if let Some(frequency) = frequency.filter(|_| !uses_vex_irq(cpu)) {
             machine
                 .bus
-                .map_clint_with_frequency(entry.address()?, targets, frequency)
+                .map_clint_with_frequency(address, targets, frequency)
         } else {
-            machine.bus.map_clint(entry.address()?, targets)
+            machine.bus.map_clint(address, targets)
         }
         .map_err(|e| entry.error(&e))?;
         if wires.is_empty() {
@@ -3756,12 +3785,22 @@ pub(crate) fn irq_receiver(target: &str) -> Result<(&str, Option<u32>), String> 
 pub(crate) use crate::repl_parser::{ListItem, boolean_value, list_value, object_fields};
 
 pub(crate) fn multiline_value(value: &str) -> Option<String> {
+    decode_multiline_value(value, false)
+}
+
+pub(crate) fn decode_multiline_value(value: &str, keep_lone_line_escape: bool) -> Option<String> {
     let body = value.trim().strip_prefix("'''")?.strip_suffix("'''")?;
     let mut decoded = String::new();
     let mut start = 0;
     for (index, _) in body.match_indices("\\'''") {
         if index != 0 && body.as_bytes()[index - 1] == b'\\' {
             continue;
+        }
+        if keep_lone_line_escape && body[index + 4..].starts_with('\n') {
+            let line_start = body[..index].rfind('\n').map_or(0, |end| end + 1);
+            if !body[line_start..index].contains("'''") {
+                continue;
+            }
         }
         decoded.push_str(&body[start..index]);
         start = index + 1;

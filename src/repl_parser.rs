@@ -1,3 +1,5 @@
+pub(crate) mod creation;
+
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -150,6 +152,9 @@ pub(crate) fn irq_connection(input: &str) -> Result<IrqConnection<'_>, String> {
 
     let (source, destinations) = input.split_once("->").ok_or("expected IRQ connection")?;
     let sources = (!source.trim().is_empty()).then(|| groups(source, true)).transpose()?;
+    if destinations.trim() == "none" {
+        return Ok(IrqConnection { sources, destinations: Vec::new() });
+    }
     let destinations = destinations.split('|').map(|destination| {
         let (name, pins) = destination.split_once('@').ok_or("expected IRQ destination pins")?;
         let (name, local) = crate::platform::irq_receiver(name)?;
@@ -355,6 +360,9 @@ fn registration_point(item: &str) -> Result<(&str, Option<RegistrationValue<'_>>
         .find(|&(_, c)| !c.is_alphanumeric() && c != '_')
         .map_or(item.len(), |(index, _)| index);
     let (register, value) = item.split_at(end);
+    if register == "empty" {
+        return Err("SyntaxError: empty cannot name a registration destination");
+    }
     let value = value.trim();
     let point = match value.as_bytes().first() {
         None => None,
@@ -467,6 +475,16 @@ fn inline_body<'a>(
             Ok((declaration, Vec::new()))
         };
     };
+    if let Some((_, registration)) = declaration.split_once('@')
+        && let Some((_, value)) = registration.trim_start().split_once(char::is_whitespace)
+        && value.trim_start().starts_with("new ")
+    {
+        let (_, tail) = object_prefix(value.trim_start())?;
+        if tail.trim().is_empty() || tail.trim_start().starts_with("as ") {
+            return Ok((declaration, Vec::new()));
+        }
+        return Err("unexpected text after registration object");
+    }
     if declaration[..begin].trim_end().ends_with('@') {
         let mut depth = 1;
         let end = braces
@@ -590,8 +608,20 @@ pub(crate) struct ObjectValue<'a> {
 pub(crate) fn object_fields(input: &str) -> Result<Vec<(&str, &str)>, &'static str> {
     let mut fields = Vec::new();
     let mut start = 0;
-    for end in unquoted_delimiters(input, &[';'])
-        .map(|(index, _)| index)
+    let mut depth = 0;
+    for end in unquoted_delimiters(input, &[';', '{', '}', '[', ']'])
+        .filter_map(|(index, delimiter)| match delimiter {
+            '{' | '[' => {
+                depth += 1;
+                None
+            }
+            '}' | ']' => {
+                depth -= 1;
+                None
+            }
+            ';' if depth == 0 => Some(index),
+            _ => None,
+        })
         .chain([input.len()])
     {
         let text = input[start..end].trim();
@@ -606,6 +636,12 @@ pub(crate) fn object_fields(input: &str) -> Result<Vec<(&str, &str)>, &'static s
     Ok(fields)
 }
 
+fn plain_object_type(value: &str) -> bool {
+    value.trim().strip_prefix("new ").is_some_and(|model| {
+        !model.is_empty() && !model.contains(char::is_whitespace) && !model.contains('{')
+    })
+}
+
 fn object_prefix(input: &str) -> Result<(ObjectValue<'_>, &str), &'static str> {
     let input = input
         .strip_prefix("new ")
@@ -618,12 +654,13 @@ fn object_prefix(input: &str) -> Result<(ObjectValue<'_>, &str), &'static str> {
     if model.is_empty() || model.contains(char::is_whitespace) {
         return Err("expected REPL object type");
     }
-    let (end, delimiter) = unquoted_delimiters(body, &['{', '}'])
-        .next()
+    let mut depth = 1;
+    let end = unquoted_delimiters(body, &['{', '}'])
+        .find_map(|(position, delimiter)| {
+            depth += if delimiter == '{' { 1 } else { -1 };
+            (depth == 0).then_some(position)
+        })
         .ok_or("expected closing brace in REPL object")?;
-    if delimiter != '}' {
-        return Err("nested REPL object attributes are unsupported");
-    }
     Ok((
         ObjectValue {
             model,
@@ -879,6 +916,49 @@ fn load_using(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScriptSection { Init, Preinit, Reset }
+
+pub(crate) fn init_header(text: &str) -> Option<(ScriptSection, bool)> {
+    let marker = text.strip_suffix(':')?;
+    let (name, append) = marker.strip_suffix(" add").map_or((marker, false), |name| (name, true));
+    let section = match name {
+        "init" => ScriptSection::Init,
+        "preinit" => ScriptSection::Preinit,
+        "reset" => ScriptSection::Reset,
+        _ => return None,
+    };
+    Some((section, append))
+}
+
+fn unescaped_multiline_quotes(line: &str) -> impl Iterator<Item = usize> {
+    line.match_indices("'''").filter_map(|(at, _)| {
+                    let escapes = line.as_bytes()[..at]
+                        .iter()
+                        .rev()
+                        .take_while(|&&byte| byte == b'\\')
+                        .count();
+                    (escapes % 2 == 0).then_some(at)
+                })
+}
+
+fn unclosed_multiline_after<'a>(lines: impl Iterator<Item = (usize, &'a str)>) -> Option<(usize, usize)> {
+    // Like the upstream line prepass, an open string consumes through the next
+    // unescaped delimiter before the remaining lines are handed to the grammar.
+    let mut open = None;
+    for (index, line) in lines {
+        let mut quotes = unescaped_multiline_quotes(line);
+        if let Some(first) = quotes.next() {
+            if open.is_some() {
+                open = None;
+            } else if quotes.next().is_none() {
+                open = Some((index + 1, line[..first].chars().count()));
+            }
+        }
+    }
+    open
+}
+
 fn parse_text(
     content: &str,
     path: &Path,
@@ -887,7 +967,7 @@ fn parse_text(
 ) -> Result<(), String> {
     let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
-    let mut init = Vec::new();
+    let mut init = Properties::new();
     let mut init_indent = None;
     let mut definitions = Vec::new();
     let mut seen_usings = HashSet::new();
@@ -898,6 +978,68 @@ fn parse_text(
         let (index, mut line) = if let Some(remainder) = remainder.take() {
             remainder
         } else if let Some((index, raw)) = lines.next() {
+            if !comments.in_block
+                && raw.starts_with(char::is_whitespace)
+                && !init_indent.is_some_and(|parent| indentation(raw) > parent)
+                && let Some((key, after)) = raw.trim_start().split_once(':')
+                && !(key.trim() == "script"
+                    && current.as_ref().is_some_and(|entry| entry.model == "Python.PythonPeripheral"))
+                && let Some(first) = after.trim_start().strip_prefix("'''")
+            {
+                let mut property = format!("{key}: '''");
+                let start_offset = raw.len() - first.len();
+                let mut line = first;
+                let mut line_number = index + 1;
+                let mut offset = start_offset;
+                loop {
+                    let closing = unescaped_multiline_quotes(line).next();
+                    if let Some(at) = closing {
+                        property.push_str(&line[..at + 3]);
+                        let suffix = &line[at + 3..];
+                        let tail = comments.line(suffix)
+                            .map_err(|error| format!("{}:{line_number}: {error}", path.display()))?;
+                        if !tail.trim().is_empty() {
+                            if offset == 0 && let Some((line, column)) = unclosed_multiline_after(lines.clone()) {
+                                return Err(format!("SyntaxError: unclosed multiline string\nAt {line}:{column}:"));
+                            }
+                            let prefix = offset + at + 3;
+                            let whitespace = if suffix.trim_start().starts_with("'''") {
+                                0
+                            } else {
+                                suffix.len() - suffix.trim_start().len()
+                            };
+                            let full_line = if offset == 0 { line } else { raw };
+                            let column = full_line[..prefix + whitespace].chars().count() + 1;
+                            return Err(format!("SyntaxError: unexpected text after multiline string\nAt {line_number}:{column}:"));
+                        }
+                        break;
+                    }
+                    property.push_str(line);
+                    property.push('\n');
+                    let (next_index, next_line) = lines.next().ok_or_else(|| {
+                        let column = raw[..raw.len() - after.len()].chars().count() + 1;
+                        format!("SyntaxError: unclosed multiline string\nAt {}:{column}:", index + 1)
+                    })?;
+                    line = next_line;
+                    line_number = next_index + 1;
+                    offset = 0;
+                }
+                let entry = current.as_mut().ok_or_else(|| {
+                    format!(
+                        "{}:{}: property has no declaration",
+                        path.display(),
+                        index + 1
+                    )
+                })?;
+                entry.body.push((
+                    SourceLine {
+                        path: Rc::clone(&source_path),
+                        line: index + 1,
+                    },
+                    property,
+                ));
+                continue;
+            }
             let line = comments
                 .first_line(raw)
                 .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
@@ -929,12 +1071,16 @@ fn parse_text(
             continue;
         }
         init_indent = None;
-        if matches!(text, "init:" | "init add:") && indent != 0 {
+        if indent != 0 && let Some((preinit, _)) = init_header(text) {
             if current.is_none() {
                 return Err(error("init section has no declaration"));
             }
-            if !init.is_empty() {
-                return Err(error("more than one init section in a declaration"));
+            if init.iter().any(|(_, marker)| init_header(marker).is_some_and(|(phase, _)| phase == preinit)) {
+                return Err(error(match preinit {
+                    ScriptSection::Init => "MoreThanOneInitAttribute: duplicate section",
+                    ScriptSection::Preinit => "MoreThanOnePreinitAttribute: duplicate section",
+                    ScriptSection::Reset => "MoreThanOneResetAttribute: duplicate section",
+                }));
             }
             init_indent = Some(indent);
             init.push((source, text.into()));
@@ -985,6 +1131,7 @@ fn parse_text(
                 && !model.contains('{')
             {
                 property.push_str(" {");
+                let mut open = vec![indent];
                 while lines.peek().is_some_and(|(_, raw)| {
                     raw.trim().is_empty()
                         || matches!(
@@ -996,13 +1143,30 @@ fn parse_text(
                     let continuation = comments
                         .line(raw)
                         .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
+                    let child_indent = indentation(&continuation);
                     let continuation = continuation.trim();
-                    if !continuation.is_empty() {
-                        property.push_str(continuation);
+                    if continuation.is_empty() {
+                        continue;
+                    }
+                    while open.last().is_some_and(|&level| level >= child_indent) {
+                        open.pop();
+                        property.push_str("};");
+                    }
+                    property.push_str(continuation);
+                    if continuation
+                        .split_once(':')
+                        .is_some_and(|(_, value)| plain_object_type(value))
+                    {
+                        open.push(child_indent);
+                        property.push_str(" {");
+                    } else {
                         property.push(';');
                     }
                 }
-                property.push('}');
+                while open.pop().is_some() {
+                    property.push_str("};");
+                }
+                property.pop();
             }
             if let Some((_, value)) = property.split_once(':')
                 && value.trim().starts_with("new ")
@@ -1012,6 +1176,9 @@ fn parse_text(
                 if !tail.trim().is_empty() {
                     return Err(error("unexpected text after REPL object"));
                 }
+            }
+            if property_key(&property) == Some("empty") {
+                return Err(error("SyntaxError: empty cannot name a property"));
             }
             current
                 .as_mut()
@@ -1025,7 +1192,8 @@ fn parse_text(
             definitions.push(entry);
         }
         if let Some(argument) = text.strip_prefix("using ") {
-            let filename = using_path(argument).map_err(error)?;
+            let filename = using_path(argument)
+                .map_err(|detail| error(&format!("SyntaxError: {detail}")))?;
             if !seen_usings.insert(filename.clone()) {
                 return Err(error("Duplicate using entry."));
             }
@@ -1083,6 +1251,9 @@ fn parse_text(
             }
             None => (declaration.trim(), None),
         };
+        if model == "empty" {
+            return Err(error("SyntaxError: empty cannot name a type"));
+        }
         current = Some(Entry {
             name: name.into(),
             model: model.into(),
@@ -1227,12 +1398,16 @@ pub(crate) fn parse_inline(
     content: &str,
     root: &Path,
 ) -> Result<Vec<crate::network_repl::Entry>, String> {
+    convert(inline_entries(content, root)?)
+}
+
+fn inline_entries(content: &str, root: &Path) -> Result<Vec<Entry>, String> {
     let source = Path::new("<inline REPL>");
     let mut entries = Vec::new();
     parse_text(content, source, &mut entries, |filename, entries| {
         load_using(filename, root, root, &mut HashSet::new(), entries)
     })?;
-    convert(entries)
+    Ok(entries)
 }
 
 fn convert(entries: Vec<Entry>) -> Result<Vec<crate::network_repl::Entry>, String> {
@@ -1278,3 +1453,7 @@ mod upstream_prelexer_tests;
 #[cfg(test)]
 #[path = "upstream_nunit/repl_using.rs"]
 mod upstream_using_tests;
+
+#[cfg(test)]
+#[path = "upstream_nunit/repl_verification.rs"]
+mod upstream_verification_tests;

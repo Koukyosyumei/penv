@@ -1,0 +1,6 @@
+official_id	nunit_id	rust_test	rust_outcome	official_outcome
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.OpenStreamSerializationTests(False,False).ShouldDoBasicOpenStreamSerialization(UseWeakReference)	0-1266	upstream_nunit::migrant_object_stream::basic_open_stream_weak	pass	Passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.OpenStreamSerializationTests(False,False).ShouldPreserveReferences(UseWeakReference)	0-1269	upstream_nunit::migrant_object_stream::should_preserve_weak_references	pass	Passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests.ShouldCorrectlyGuessZeroLengthSymbol	0-1632	upstream_nunit::symbol_lookup::should_correctly_guess_zero_length_symbol	pass	not_run
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests.ShouldHaveImportantViaAddress	0-1611	upstream_nunit::symbol_lookup::should_have_important_via_address	pass	not_run
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests.ShouldHaveMoreAndLessImportantViaName	0-1610	upstream_nunit::symbol_lookup::should_have_more_and_less_important_via_name	pass	not_run

@@ -1,0 +1,19 @@
+$ cargo test --locked --bin penv upstream_nunit::migrant_object_stream::serial_transient_derived
+running 16 tests
+test upstream_nunit::migrant_object_stream::serial_transient_derived::as_user_object::reflection_reflection_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::as_user_object::reflection_generated_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::as_user_object::generated_generated_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::as_user_object::generated_reflection_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::ordinary::both_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::as_user_object::reflection_reflection_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::as_user_object::generated_generated_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::as_user_object::reflection_generated_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::as_user_object::generated_reflection_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::ordinary::both_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::ordinary::reader_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::ordinary::reader_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::ordinary::writer_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::ordinary::writer_stamped ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::reflection_reflection_plain ... ok
+test upstream_nunit::migrant_object_stream::serial_transient_derived::reflection_reflection_stamped ... ok
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 3227 filtered out; finished in 0.00s

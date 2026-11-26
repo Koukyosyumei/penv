@@ -1,0 +1,31 @@
+running 20 tests
+test upstream_nunit::null_registration::should_throw_when_second_peripheral ... ok
+test upstream_nunit::null_registration::should_register_peripheral ... ok
+test upstream_nunit::null_registration::should_throw_when_unregistering_from_empty_containers ... ok
+test upstream_nunit::null_registration::should_unregister_peripheral ... ok
+test upstream_nunit::null_registration::should_get_registered_peripheral_as_children ... ok
+test upstream_nunit::null_registration::should_throw_when_unregistering_not_registered_peripheral ... ok
+test upstream_nunit::null_registration::should_register_2nd_after_unregistering ... ok
+test upstream_nunit::null_registration::should_get_empty_children ... ok
+test upstream_nunit::null_registration::should_get_empty_registration_points ... ok
+test upstream_nunit::null_registration::should_get_registration_points ... ok
+test upstream_nunit::peripherals_group::should_not_add_unregistered_peripheral_to_group ... ok
+test upstream_nunit::peripherals_group::should_not_unregister_single_peripheral_from_group ... ok
+test upstream_nunit::system_bus::find_after_many_registrations ... ok
+test upstream_nunit::system_bus::should_fail_to_register_non_clustered_cpu_on_null ... ok
+test upstream_nunit::system_bus::find_after_registration ... ok
+test upstream_nunit::peripherals_group::should_unregister_peripheral_groups ... ok
+test upstream_nunit::system_bus::should_pause_and_resume_only_once ... ok
+test upstream_nunit::system_bus::should_register_parametrized_peripheral ... ok
+test upstream_nunit::system_bus::should_register_multi_function_peripheral ... ok
+test upstream_nunit::system_bus::should_test_enable_all_translations ... ok
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 1513 filtered out; finished in 0.00s
+running 7 tests
+test time_source::tests::renode_time_source_should_handle_slave_time_source_with_different_quantum ... ok
+test time_source::tests::renode_time_source_should_handle_multiple_sinks ... ok
+test time_source::tests::renode_time_source_should_handle_slave_time_source_with_not_aligned_quantum ... ok
+test time_source::tests::renode_time_source_should_handle_slave_time_source_with_same_quantum ... ok
+test time_source::tests::renode_time_source_should_not_tick_disconnected_slave_time_source ... ok
+test upstream_nunit::time_source::should_not_sleep_on_advance_immediately ... ok
+test upstream_nunit::time_source::should_not_tick_disconnected_slave_time_source ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1528 filtered out; finished in 0.00s

@@ -1,0 +1,8 @@
+$ cargo test --locked --bin penv upstream_nunit::lpc43xx_gpio
+running 5 tests
+test upstream_nunit::lpc43xx_gpio::change_masked_ouput_state ... ok
+test upstream_nunit::lpc43xx_gpio::init_test ... ok
+test upstream_nunit::lpc43xx_gpio::change_outputs_state ... ok
+test upstream_nunit::lpc43xx_gpio::change_mask ... ok
+test upstream_nunit::lpc43xx_gpio::change_direction_to_output ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1542 filtered out; finished in 0.00s

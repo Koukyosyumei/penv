@@ -1,3 +1,10 @@
+#[path = "bus_cpu_registration.rs"]
+mod cpu_registration;
+pub use cpu_registration::CpuRegistrationPoint;
+#[path = "bus_children.rs"]
+mod children;
+pub use children::NULL_REGISTRATION_POINT;
+
 use std::{
     alloc::{Layout, alloc_zeroed},
     cell::RefCell,
@@ -360,6 +367,14 @@ struct NrfGpioConnector {
     led: Weak<RefCell<GpioLed>>,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum PeripheralRunState {
+    #[default]
+    Cold,
+    Running,
+    Paused,
+}
+
 #[derive(Default)]
 pub struct Bus {
     monitor_log_level: Option<i8>,
@@ -388,6 +403,12 @@ pub struct Bus {
     pub rv64_devices: crate::rv64_devices::Devices,
     rv64_reservations: [Option<Reservation64>; crate::machine::MAX_HARTS],
     constant_mmio: Vec<ConstantMmio>,
+    translated_peripherals: Vec<crate::bus_translation::Registration>,
+    registered_cpu_identities: Vec<cpu_registration::RegisteredCpu>,
+    registered_peripheral_state: PeripheralRunState,
+    translated_children: Vec<(crate::bus_translation::PeripheralHandle, crate::bus_translation::PeripheralHandle)>,
+    translated_peripheral_groups: std::collections::BTreeMap<String, Vec<crate::bus_translation::PeripheralHandle>>,
+    translations_enabled: bool,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
     reservations: [Option<(u32, usize)>; crate::machine::MAX_HARTS],
@@ -529,6 +550,7 @@ pub struct Bus {
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
     pub nvic: Option<Nvic>,
+    scoped_nvics: BTreeMap<(usize, u32), Nvic>,
     nvic_name: Option<String>,
     external_nvic_levels: u32,
     pub clint: Option<Clint>,
@@ -1108,6 +1130,20 @@ impl Bus {
     }
 
     pub(crate) fn unregister_from_address(&mut self, address: u32) -> Result<(), String> {
+        if let Some(index) = self.translated_peripherals.iter().position(|device| {
+            device.ports.iter().any(|port| port.base == address)
+        }) {
+            if self.translated_group_for(&self.translated_peripherals[index].handle).is_some() {
+                return Err("cannot unregister a peripheral independently of its group".into());
+            }
+            let device = &mut self.translated_peripherals[index];
+            device.remove_port(address);
+            if device.ports.is_empty() {
+                let device = self.translated_peripherals.remove(index);
+                self.remove_translated_children(&device.handle);
+            }
+            return Ok(());
+        }
         if let Some(index) = self
             .constant_mmio
             .iter()
@@ -1310,6 +1346,181 @@ impl Bus {
         Self::initialize_timer_clocks(&mut self.h7_timers, &mut control);
         self.h7_network_control = Some(control);
         Ok(())
+    }
+
+    pub fn map_translated_peripheral(
+        &mut self,
+        ports: Vec<crate::bus_translation::Port>,
+        width: crate::dma_engine::Width,
+        peripheral: Box<dyn crate::bus_translation::NativePeripheral>,
+    ) -> Result<(), String> {
+        self.register_translated_peripheral(
+            &crate::bus_translation::PeripheralHandle::default(), ports, width, peripheral,
+        )
+    }
+
+    pub fn register_translated_peripheral(
+        &mut self,
+        handle: &crate::bus_translation::PeripheralHandle,
+        ports: Vec<crate::bus_translation::Port>,
+        width: crate::dma_engine::Width,
+        peripheral: Box<dyn crate::bus_translation::NativePeripheral>,
+    ) -> Result<(), String> {
+        self.register_translated_port_widths(
+            handle, ports.into_iter().map(|port| (port, vec![width])).collect(), peripheral,
+        )
+    }
+
+    pub fn register_translated_port_widths(
+        &mut self,
+        handle: &crate::bus_translation::PeripheralHandle,
+        ports: Vec<(crate::bus_translation::Port, Vec<crate::dma_engine::Width>)>,
+        peripheral: Box<dyn crate::bus_translation::NativePeripheral>,
+    ) -> Result<(), String> {
+        if self.is_peripheral_registered(handle) {
+            return Err("translated peripheral already registered".into());
+        }
+        if ports.is_empty() {
+            return Err("translated peripheral requires at least one port".into());
+        }
+        for (index, (port, widths)) in ports.iter().enumerate() {
+            let base = u64::from(port.base);
+            let end = base + u64::from(port.length);
+            if widths.is_empty() || port.length == 0 || end > 1 << 32 || self.overlaps(base, end)
+                || ports[..index].iter().any(|(other, _)| overlaps_range(base, end, other.base, other.length))
+            {
+                return Err("invalid or overlapping translated peripheral port".into());
+            }
+        }
+        let mut device = crate::bus_translation::Registration::new(handle.clone(), ports, peripheral);
+        if self.registered_peripheral_state == PeripheralRunState::Running {
+            device.start();
+        }
+        self.translated_peripherals.push(device);
+        Ok(())
+    }
+
+    pub fn is_translated_peripheral_registered(
+        &self, handle: &crate::bus_translation::PeripheralHandle,
+    ) -> bool {
+        self.translated_peripherals.iter().any(|peripheral| peripheral.handle == *handle)
+    }
+
+    pub fn name_translated_peripheral(&mut self, handle: &crate::bus_translation::PeripheralHandle, name: &str) -> Result<(), String> {
+        if name.is_empty() || self.translated_peripherals.iter().any(|device| {
+            device.handle != *handle && device.name.as_deref() == Some(name)
+        }) {
+            return Err(format!("invalid or occupied peripheral name {name:?}"));
+        }
+        let device = self.translated_peripherals.iter_mut().find(|device| device.handle == *handle)
+            .ok_or("peripheral is not registered")?;
+        device.name = Some(name.into());
+        Ok(())
+    }
+
+    pub fn translated_peripheral_by_path(
+        &self, path: &str,
+    ) -> Option<&crate::bus_translation::PeripheralHandle> {
+        let name = path.strip_prefix("sysbus.")?;
+        self.translated_peripherals.iter()
+            .find(|device| device.name.as_deref() == Some(name))
+            .map(|device| &device.handle)
+    }
+
+    pub(crate) fn dispatch_external_call(&mut self, time: u64, peripheral: &str, method: &str, arguments: &[i32]) -> Result<(), String> {
+        let name = peripheral.strip_prefix("sysbus.").unwrap_or(peripheral);
+        let device = self.translated_peripherals.iter_mut().find(|device| device.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown peripheral {peripheral:?}"))?;
+        device.external_call(time, method, arguments)
+    }
+
+    fn translated_group_for(&self, handle: &crate::bus_translation::PeripheralHandle) -> Option<&str> {
+        self.translated_peripheral_groups.iter()
+            .find(|(_, members)| members.contains(handle))
+            .map(|(name, _)| name.as_str())
+    }
+
+    pub fn get_or_create_translated_group(
+        &mut self, name: &str, handles: &[crate::bus_translation::PeripheralHandle],
+    ) -> Result<(), crate::bus_translation::RegistrationError> {
+        use crate::bus_translation::RegistrationError;
+        for handle in handles {
+            if !self.is_translated_peripheral_registered(handle) {
+                return Err(RegistrationError::NotRegistered);
+            }
+            if self.translated_group_for(handle).is_some_and(|previous| previous != name) {
+                return Err(RegistrationError::AlreadyGrouped);
+            }
+        }
+        let group = self.translated_peripheral_groups.entry(name.into()).or_default();
+        for handle in handles {
+            if !group.contains(handle) {
+                group.push(handle.clone());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn unregister_translated_peripheral(
+        &mut self, handle: &crate::bus_translation::PeripheralHandle,
+    ) -> Result<(), crate::bus_translation::RegistrationError> {
+        use crate::bus_translation::RegistrationError;
+        if self.translated_group_for(handle).is_some() {
+            return Err(RegistrationError::AlreadyGrouped);
+        }
+        let index = self.translated_peripherals.iter()
+            .position(|device| device.handle == *handle).ok_or(RegistrationError::NotRegistered)?;
+        self.translated_peripherals.remove(index);
+        self.remove_translated_children(handle);
+        Ok(())
+    }
+
+    pub fn unregister_translated_group(&mut self, name: &str) -> Result<(), crate::bus_translation::RegistrationError> {
+        use crate::bus_translation::RegistrationError;
+        let handles = self.translated_peripheral_groups.remove(name).ok_or(RegistrationError::GroupNotFound)?;
+        self.translated_peripherals.retain(|device| !handles.contains(&device.handle));
+        for handle in &handles {
+            self.remove_translated_children(handle);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn pause_registered_peripherals(&mut self) {
+        if self.registered_peripheral_state == PeripheralRunState::Running {
+            self.registered_peripheral_state = PeripheralRunState::Paused;
+            for device in &mut self.translated_peripherals {
+                device.pause();
+            }
+        }
+    }
+
+    pub(crate) fn start_registered_peripherals(&mut self) {
+        let old = std::mem::replace(&mut self.registered_peripheral_state, PeripheralRunState::Running);
+        match old {
+            PeripheralRunState::Cold => {
+                for device in &mut self.translated_peripherals { device.start(); }
+            }
+            PeripheralRunState::Paused => {
+                for device in &mut self.translated_peripherals { device.resume(); }
+            }
+            PeripheralRunState::Running => {}
+        }
+    }
+
+    pub fn enable_all_translations(&mut self, enabled: bool) {
+        self.translations_enabled = enabled;
+    }
+
+    fn read_translated(&mut self, address: u32, width: crate::dma_engine::Width) -> Option<u64> {
+        self.translated_peripherals.iter_mut().find_map(|device| {
+            device.read(address, width, self.translations_enabled)
+        })
+    }
+
+    fn write_translated(&mut self, address: u32, width: crate::dma_engine::Width, value: u64) -> Option<()> {
+        self.translated_peripherals.iter_mut().find_map(|device| {
+            device.write(address, width, value, self.translations_enabled)
+        })
     }
 
     pub fn map_constant_mmio(&mut self, peripheral: ConstantMmio) -> Result<(), String> {
@@ -2750,6 +2961,11 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.translated_peripherals.iter().flat_map(|device| &device.ports)
+            .any(|port| overlaps_range(start, end, port.base, port.length))
+        {
+            return true;
+        }
         if self
             .bitbands
             .iter()
@@ -3167,6 +3383,26 @@ impl Bus {
         }
         self.ns16550 = Some(uart);
         Ok(())
+    }
+
+    pub(crate) fn register_scoped_nvic(
+        &mut self,
+        cpu_slot: usize,
+        address: u32,
+        controller: Nvic,
+    ) -> Result<(), String> {
+        if self.registered_cpu_architecture(cpu_slot).is_none() {
+            return Err("unknown CPU slot for NVIC registration".into());
+        }
+        match self.scoped_nvics.entry((cpu_slot, address)) {
+            std::collections::btree_map::Entry::Vacant(point) => {
+                point.insert(controller);
+                Ok(())
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                Err("duplicate NVIC registration for CPU and address".into())
+            }
+        }
     }
 
     pub fn map_nrf_nvic(
@@ -3824,17 +4060,52 @@ impl Bus {
         size: u32,
         initable: bool,
     ) -> Result<(), String> {
+        self.map_pydev_range(source, base, size, size, initable)
+    }
+
+    pub(crate) fn map_pydev_range(
+        &mut self,
+        source: &str,
+        base: u32,
+        size: u32,
+        mapped_size: u32,
+        initable: bool,
+    ) -> Result<(), String> {
         let base = u64::from(base);
-        let end = base + u64::from(size);
+        let end = base + u64::from(mapped_size);
         if end > 1 << 32 || self.overlaps(base, end) {
             return Err("overlapping or invalid Python peripheral range".into());
         }
-        self.pydevs.push(crate::pydev::Peripheral::new(
+        self.pydevs.push(crate::pydev::Peripheral::new_mapped(
             source,
             base,
             u64::from(size),
+            u64::from(mapped_size),
             initable,
         )?);
+        Ok(())
+    }
+
+    pub(crate) fn snapshot_pydevs(&mut self) -> Result<Vec<crate::pydev::PeripheralSnapshot>, String> {
+        self.pydevs.iter_mut().map(crate::pydev::Peripheral::snapshot).collect()
+    }
+
+    pub(crate) fn restore_pydevs(
+        &mut self,
+        snapshots: Vec<crate::pydev::PeripheralSnapshot>,
+    ) -> Result<(), String> {
+        let mut devices: Vec<crate::pydev::Peripheral> = Vec::new();
+        for snapshot in snapshots {
+            let device = crate::pydev::Peripheral::from_snapshot(snapshot)?;
+            let (base, end) = device.range();
+            if end > 1 << 32 || self.overlaps(base, end)
+                || devices.iter().any(|device| device.overlaps(base, end))
+            {
+                return Err("overlapping or invalid Python peripheral range".into());
+            }
+            devices.push(device);
+        }
+        self.pydevs.extend(devices);
         Ok(())
     }
 
@@ -6190,6 +6461,12 @@ impl Bus {
     }
 
     fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if N < 8
+            && let Some(width) = crate::bus_translation::width(N)
+            && let Some(value) = self.read_translated(address, width)
+        {
+            return Ok(value as u32);
+        }
         if N == 4
             && let Some(error) = self
                 .command_error_peripherals
@@ -7004,6 +7281,11 @@ impl Bus {
         uart: &mut impl Write,
         writer: Option<usize>,
     ) -> Result<(), BusError> {
+        if let Some(width) = crate::bus_translation::width(width)
+            && self.write_translated(address, width, value.into()).is_some()
+        {
+            return Ok(());
+        }
         if let Some(device) = self
             .pydevs
             .iter_mut()
@@ -7932,6 +8214,11 @@ impl crate::dma_engine::DmaBus for Bus {
 
     fn read_unit(&mut self, address: u64, width: crate::dma_engine::Width) -> Result<u64, BusError> {
         use crate::dma_engine::Width::*;
+        if width == QuadWord && let Ok(address) = u32::try_from(address)
+            && let Some(value) = self.read_translated(address, width)
+        {
+            return Ok(value);
+        }
         let count = width as usize;
         if address > u32::MAX.into() || width == QuadWord {
             let mut unit = [0; 8];
@@ -7952,6 +8239,11 @@ impl crate::dma_engine::DmaBus for Bus {
     fn write_unit(
         &mut self, address: u64, width: crate::dma_engine::Width, value: u64, mut output: &mut dyn Write,
     ) -> Result<(), BusError> {
+        if width == crate::dma_engine::Width::QuadWord && let Ok(address) = u32::try_from(address)
+            && self.write_translated(address, width, value).is_some()
+        {
+            return Ok(());
+        }
         let count = width as usize;
         if address > u32::MAX.into() || count == 8 {
             let memory = self.memory64(address, count)

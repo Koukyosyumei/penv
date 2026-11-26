@@ -1,7 +1,7 @@
 mod adxl372;
 mod arducam;
 mod bme280;
-mod bmp180;
+pub(crate) mod bmp180;
 mod lis2ds12;
 mod lsm303;
 mod lsm330;

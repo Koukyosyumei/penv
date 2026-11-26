@@ -1,0 +1,62 @@
+running 12 tests
+test upstream_nunit::migrant_surrogate::place_write_stamped ... ok
+test upstream_nunit::migrant_surrogate::place_write_identity_plain ... ok
+test upstream_nunit::migrant_surrogate::place_read_stamped ... ok
+test upstream_nunit::migrant_surrogate::place_read_plain ... ok
+test upstream_nunit::migrant_surrogate::place_write_plain ... ok
+test upstream_nunit::migrant_surrogate::place_write_identity_stamped ... ok
+test upstream_nunit::migrant_surrogate::swap_plain ... ok
+test upstream_nunit::migrant_surrogate::self_plain ... ok
+test upstream_nunit::migrant_surrogate::swap_stamped ... ok
+test upstream_nunit::migrant_surrogate::swap_twice_plain ... ok
+test upstream_nunit::migrant_surrogate::self_stamped ... ok
+test upstream_nunit::migrant_surrogate::swap_twice_stamped ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1180 filtered out; finished in 0.00s
+running 30 tests
+test upstream_nunit::migrant_object_stream::mixed_array_stamped ... ok
+test upstream_nunit::migrant_object_stream::basic_open_stream_preserve ... ok
+test upstream_nunit::migrant_object_stream::primitives_array_plain ... ok
+test upstream_nunit::migrant_object_stream::basic_open_stream_do_not_preserve ... ok
+test upstream_nunit::migrant_object_stream::mixed_array_plain ... ok
+test upstream_nunit::migrant_object_stream::primitives_array_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_handle_two_writes_and_reads ... ok
+test upstream_nunit::migrant_object_stream::should_preserve_identity ... ok
+test upstream_nunit::migrant_object_stream::should_deserialize_many ... ok
+test upstream_nunit::migrant_object_stream::should_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::should_preserve_identity_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_array_reference_to_self ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_array_reference_to_self_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_cyclic_reference ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_cyclic_reference_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_null_reference ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_null_reference_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_object ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_object_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_readonly_field ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_readonly_field_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_reference_to_self_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_simple_class ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_reference_to_self ... ok
+test upstream_nunit::migrant_object_stream::shouldnt_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_simple_class_stamped ... ok
+test upstream_nunit::migrant_object_stream::strings_array_plain ... ok
+test upstream_nunit::migrant_object_stream::strings_array_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_deep_graph ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_deep_graph_stamped ... ok
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 1162 filtered out; finished in 0.20s
+running 14 tests
+test upstream_nunit::symbol_lookup::should_find_one_symbol ... ok
+test upstream_nunit::symbol_lookup::should_find_nested_and_double_cut ... ok
+test upstream_nunit::symbol_lookup::should_find_double_cut ... ok
+test upstream_nunit::symbol_lookup::should_find_one_symbol_boundary ... ok
+test upstream_nunit::symbol_lookup::should_find_recursively_nested_symbol ... ok
+test upstream_nunit::symbol_lookup::should_not_find_one_symbol_miss ... ok
+test upstream_nunit::symbol_lookup::should_find_ten_symbols ... ok
+test upstream_nunit::symbol_lookup::should_work_with_long_series_and_nesting ... ok
+test upstream_nunit::symbol_lookup::should_not_find_one_symbol_boundary ... ok
+test upstream_nunit::symbol_lookup::should_not_find_hole ... ok
+test upstream_nunit::symbol_lookup::should_find_simply_nested_symbol ... ok
+test upstream_nunit::symbol_lookup::should_not_crash_on_insert_doubled_symbol ... ok
+test upstream_nunit::symbol_lookup::should_find_zero_length_symbol ... ok
+test upstream_nunit::symbol_lookup::should_trim_big_symbol ... ok
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1192 filtered out; finished in 0.00s

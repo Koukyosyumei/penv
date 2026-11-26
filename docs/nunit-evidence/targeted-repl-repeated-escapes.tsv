@@ -1,0 +1,2 @@
+official_id	nunit_id	rust_test	rust_outcome
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldHandleMultipleEscapedMultilineStringSignsInOneLine	0-1019	repl_parser::upstream_verification_tests::should_handle_multiple_escaped_multiline_string_signs_in_one_line	passed

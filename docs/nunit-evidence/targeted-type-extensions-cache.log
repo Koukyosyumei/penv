@@ -1,0 +1,14 @@
+$ cargo test --locked --bin penv upstream_nunit::type_extensions_cache
+running 11 tests
+test upstream_nunit::type_extensions_cache::all_public_queries_tested ... ok
+test upstream_nunit::type_extensions_cache::enumerable_types ... ok
+test upstream_nunit::type_extensions_cache::currently_gettable ... ok
+test upstream_nunit::type_extensions_cache::field_callable ... ok
+test upstream_nunit::type_extensions_cache::extension_callable ... ok
+test upstream_nunit::type_extensions_cache::currently_settable ... ok
+test upstream_nunit::type_extensions_cache::is_static ... ok
+test upstream_nunit::type_extensions_cache::indexer_callable ... ok
+test upstream_nunit::type_extensions_cache::is_extension ... ok
+test upstream_nunit::type_extensions_cache::method_callable ... ok
+test upstream_nunit::type_extensions_cache::property_callable ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 3435 filtered out; finished in 0.00s

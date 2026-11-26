@@ -1,0 +1,4 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.SDCardEmmcTest.ShouldKeepHardwarePartitionsSeparate	0-1118	upstream_nunit::sd_emmc::should_keep_hardware_partitions_separate	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.SDCardEmmcTest.ShouldResetPartitionAndExtendedCsdTransferOnCmd0	0-1119	upstream_nunit::sd_emmc::should_reset_partition_and_extended_csd_transfer_on_cmd0	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.SDCardEmmcTest.ShouldRejectUnavailableGeneralPurposePartition	0-1121	upstream_nunit::sd_emmc::should_reject_unavailable_general_purpose_partition	passed

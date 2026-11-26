@@ -1,0 +1,2 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.FeaturesTests.AutoLoadCommandTest	0-1001	upstream_nunit::monitor_features::auto_load_command	passed

@@ -376,7 +376,7 @@ impl Stm32Usart {
                 }
                 _ => self.legacy_register(offset & !3),
             };
-            return (value >> ((offset & 3) * 8)) & width_mask(width);
+            return crate::access_translation::little_lane(value.into(), offset & 3, width) as u32;
         }
         let value = if matches!(self.layout, UsartLayout::F4) {
             match offset & !3 {
@@ -394,7 +394,7 @@ impl Stm32Usart {
                 _ => 0,
             }
         };
-        (value >> ((offset & 3) * 8)) & width_mask(width)
+        crate::access_translation::little_lane(value.into(), offset & 3, width) as u32
     }
 
     pub fn write(

@@ -62,15 +62,11 @@ impl Sdmmc {
     pub(crate) fn attach_file(&mut self, path: &std::path::Path, size: u64) -> Result<(), String> {
         use std::io::Read;
 
-        if path.as_os_str().is_empty() {
-            return Err("No image file provided.".into());
-        }
-        let file = std::fs::File::open(path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                format!("Could not find image file '{}'", path.display())
-            } else {
-                format!("{}: {error}", path.display())
-            }
+        use crate::data_storage::{ImageError, open_image};
+        let file = open_image(Some(path)).map_err(|error| match error {
+            ImageError::MissingPath => "No image file provided.".into(),
+            ImageError::MissingFile => format!("Could not find image file '{}'", path.display()),
+            ImageError::Io(error) => format!("{}: {error}", path.display()),
         })?;
         if size == 0 {
             return Err("SD image size must be nonzero".into());

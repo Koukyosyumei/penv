@@ -30,3 +30,158 @@ python3 scripts/upstream/audit_migrant_nunit.py \
   /home/ec2-user/Dev/penv-renode-ci/target/renode-discovery/lib/Migrant \
   /tmp/migrant-parameters.tsv
 ```
+
+## 完了した独立マイルストーン
+
+PrimitiveReaderWriterTests の全102件と IdGeneratorTests の1件を移植した。
+バッファ有無、件数、長文字列の指定を元の組のまま残した。
+上流のランダム入力と同じ値生成範囲と条件を、再現できる Rust 側の固定シードで実施した。
+上流の `ShouldSerializeTimeSpan` は DateTime を書き込み、DateTime として読む。
+Rust 版も同じ観測を維持する。固定 C# と Rust の結果は103件の ID すべてで合格した。
+C# の出力から得た整数バイト列と128・1024・4096バイトのフレーム境界も、
+追加の Rust テストで照合した。
+[公式 ID 別の比較](nunit-evidence/migrant-comparison.tsv) · [公式生ログ](nunit-evidence/migrant-official.log) · [C# のバイト列と境界](nunit-evidence/migrant-wire.log)
+
+TypeDescriptorComparisonTests の11件を追加した。型階層上のフィールド移動、
+隠蔽フィールドの挿入、transient フィールド、アセンブリ版とモジュール GUID の許容条件を
+固定 C# で確認し、Rust では同じ形を明示的な型記述子で組み立てた。
+固定 C# と Rust の対象実行で11件とも合格した。
+[公式 ID 別の比較](nunit-evidence/migrant-descriptor-comparison.tsv) · [公式ログ](nunit-evidence/migrant-descriptor-official.log)
+
+SerializationTests は、生成読み書き・コレクション特殊設定・型スタンプを
+すべて無効にする公式設定 `(False,False,False,False)` から9件を移植した。
+Rust のオブジェクトレコードは既存の Migrant プリミティブでフレーミングする。
+参照 ID をフィールドの走査前に確保し、読み手は各参照を検証してから
+オブジェクト群を公開する。二ノード循環、自己参照、配列の自己参照、
+共有文字列、45,000リンクの復元を確認した。
+
+型スタンプ対応後は、同じ9ケースを `(False,False,False,True)` にも対応付けた。
+Rust 形式では型名、モジュール、版、フィールド名と種別を記録し、読み手が
+ローカルスキーマと照合してからグラフを公開する。組み込み文字列と配列の種別は
+レコードタグで表す。CLR のバイト列との相互運用は移植範囲に含めていない。
+
+StampingTests は反射書き込み・反射読み込みの4組を移植した。スタンプ有無が
+一致する場合は自己参照を復元し、不一致の場合は拒否した。固定 C# でも対応する
+4件が合格した。Rust ではフィールド名の異なるスタンプの拒否も追加で確認した。
+ObjectReaderWriterTests の1件と OpenStreamSerializationTests の反射・強参照または
+ルート単位参照の5件も型スタンプを有効にして移植した。
+[公式 ID 別の結果](nunit-evidence/targeted-stamps-symbol-dedup.tsv) · [固定 C# の StampingTests ログ](nunit-evidence/stamping-official.log)
+
+SurrogateTests は反射読み書き・型スタンプの有無2設定で6メソッド計12件を
+移植した。書き手は元のオブジェクト ID に対して変換を一度適用し、読み手は
+復元先の ID を維持して置換する。書き込み側の同一性、読み書き双方の型の
+置換、同じ登録での反復、読み込み側で作る自己参照を検証した。
+既存のグラフ API を使い、プリミティブ、文字列、異種混在の一次元配列も
+型スタンプの有無2設定で計6件を移植した。
+[公式 ID 別の結果](nunit-evidence/targeted-surrogates-arrays-symbols.tsv) · [固定 C# の SurrogateTests ログ](nunit-evidence/surrogates-official.log)
+
+SurrogateTests の継承、インターフェース、ジェネリック定義による選択を
+反射読み書き・型スタンプの有無2設定で11メソッド、計22件追加した。
+型関係は Rust 側で明示的に登録する。適用可能な候補の中で型の特殊化を優先し、
+比較できない候補は上流の登録順を維持する。具体型での無効化は基底型への
+フォールバックを止める。固定 C# の保存済み結果と Rust の対象実行で22件が合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-hierarchy-symbol-lookup.tsv)
+
+OpenStreamSerializationTests の `UseWeakReference` の2件を、反射読み書き設定で
+追加した。書き手はグラフとオブジェクト ID の対応を弱く保持し、グラフが
+解放された後もシリアル化済みのスロット番号は再使用しない。読み手は復元した
+ルートが所有するオブジェクトを弱く参照し、同じルートの再読込で実際の
+オブジェクト同一性を維持する。自己循環を含む最後のルートを解放した後は、
+失効した参照の読み込みを拒否する。上流の配列に対応する Rust のテストは、
+3つの読み込み結果を保持して比較する。残る21件には生成読み書きが必要。
+[公式 ID 別の結果](nunit-evidence/targeted-weak-stream-symbol.tsv) · [固定 C# の OpenStreamSerializationTests ログ](nunit-evidence/open-stream-official.log)
+
+SerializationTests の反射読み書き・型スタンプ有無の2設定に14件を追加した。
+多次元配列は次元長と行優先の要素順を記録し、復元前に形状を検証する。
+型付きフィールドと文字列タプルでは、参照先の型と値を復元した。
+[公式 ID 別の結果](nunit-evidence/targeted-cache-rectangular-records.tsv)
+
+SerializationTests の反射読み書き・型スタンプ有無の2設定に24件を追加した。
+nullable の null と整数、ボックス化された整数の参照同一性、入れ子と自己参照を
+含むリスト、100,000要素のリスト、同一ストリーム上で独立した2回の
+シリアライズ結果を確認した。順序付きリストは Rust の型付きレコードと
+参照可能な要素配列で表現する。
+[公式 ID 別の結果](nunit-evidence/targeted-memory-nullable-lists.tsv)
+
+SerializationTests の反射読み書き・型スタンプ有無の2設定に20件を追加した。
+辞書はキーと値の内容を順不同で比較し、共有文字列の参照同一性も確認した。
+キュー、集合、異種要素の ArrayList、読み取り専用ラッパーも検証した。
+これらのコレクションは Rust の型付きレコードと要素配列で表現する。
+[公式 ID 別の結果](nunit-evidence/targeted-collections-options.tsv)
+
+SerializationTests の反射読み書き・型スタンプ有無の2設定に10件を追加した。
+バイト配列は専用タグで復元し、空配列・空リストと、長さ0の軸を持つ
+2次元・3次元配列の復元も検証した。
+[公式 ID 別の結果](nunit-evidence/targeted-parser-empty-arrays.tsv)
+
+SerializationTests の反射読み書き・型スタンプ有無の2設定へ24件を追加した。
+列挙型の境界値とフラグの組み合わせ、キー値ペア、ボックス化された文字と
+型付き文字のスタック、継承フィールドと入れ子の値型を検証した。
+Rust 側では入れ子の値型をフィールドパス付きの型記述子で表す。
+[公式 ID 別の結果](nunit-evidence/targeted-enums-structs-segments.tsv)
+
+SerializationTests の反射読み書き・型スタンプ有無の2設定へ10件を追加した。
+カスタムオブジェクトを使う辞書・集合の要素数、同じ設定で別のストリームに書いた
+異なるルート型、GUIDとそのバイト列から導いた値を検証した。GUIDの入力は既存の
+プリミティブ fixture と同じ生成器を固定シードで使う。
+[公式 ID 別の結果](nunit-evidence/targeted-guid-collections-sht21.tsv)
+
+反射読み書き・型スタンプ有無の2設定に多倍長整数の2件を追加した。
+符号付きリトルエンディアンの2の補数で値を保持し、上流の (2^{64}+5)、
+(-3^{100})、0を、型付きフィールド、ボックス化されたオブジェクト、配列で比較した。
+[公式 ID 別の結果](nunit-evidence/targeted-bma180-big-integer.tsv)
+
+反射読み書き・型スタンプ有無の2設定に16件を追加した。一時フィールドは
+出力から除外し、復元時に既定値を挿入する。一時クラスへの参照は null として記録する。
+null または一時クラスのルート、ポインター・SpinLock・ThreadLocal を含むレコードは
+フレームを書き込む前に拒否する。Rust では一時属性とネイティブ型を明示的な
+メタデータで表す。
+[公式 ID 別の結果](nunit-evidence/targeted-transients-native-compare.tsv)
+
+反射読み書き・型スタンプ有無の2設定に8件を追加した。decimal は既存の
+プリミティブと同じ表現を使い、入れ子にある nullable フィールドを復元した。
+非直列化資源の診断には、最初に発見したルートからの型の経路を含める。
+サロゲート登録は読み込み・書き込みのレジストリごとに、成功した最初の処理後に閉じる。
+[公式 ID 別の結果](nunit-evidence/targeted-decimal-path-surrogates.tsv)
+
+反射読み書き・型スタンプ有無の2設定に14件を追加した。カスタムペイロードは
+プリミティブの読み書きをレコードの境界内で実行し、ローダーが未消費バイトを
+残す場合にエラーを返す。正規表現は既定設定のパターンを記録して再コンパイルした。
+ジェネリック配列とインターフェースのリストは明示的な Rust 型記述子を使う。
+[公式 ID 別の結果](nunit-evidence/targeted-custom-regex-generics.tsv)
+
+反射読み書き・型スタンプ有無の2設定に10件を追加した。ボックス化された整数は
+変換の前後で `System.Int32` の記述子を使い、サロゲートの入れ子はフィールドパスで表す。
+コンストラクター属性は明示的な初期化関数で表し、イベントはネイティブ資源の状態を
+表す記述子として復元した。復元後フックは、対象フレームのフィールド初期化と
+サロゲート復元の完了後にレコード単位で実行する。
+[公式 ID 別の結果](nunit-evidence/targeted-boxed-constructors-late-hook.tsv)
+
+HooksTests の反射読み書き・型スタンプ有無の2設定に16件を追加した。
+明示的なフック登録を使い、通常の読み込み後フックをレコード ID の逆順で実行し、
+次に遅延フックを実行する。固定上流の鎖と循環の構成、基底から派生への順序、
+遅延フックとサロゲートの排他、配列と文字列に対する全体コールバック数を確認した。
+このバッチでは書き込み側のグローバルコールバックまでを実装した。
+[公式 ID 別の結果](nunit-evidence/targeted-migrant-read-global-hooks.tsv)
+
+HooksTests に24件を追加し、反射読み書きの型スタンプ有無2設定が全40件揃った。
+元のレコードに対して書き込み前後のコールバックを実行し、失敗時も到達済み
+オブジェクトの後処理を行う。仮想メソッドのケースは Rust の trait による
+動的ディスパッチを明示的な登録から呼び出す。固定 C# は fixture 全160件が合格し、
+うち40件を Rust の公式 ID と照合した。残る120件には生成読み書きが必要。
+[公式 ID 別の結果](nunit-evidence/targeted-migrant-hooks-reflection.tsv) · [固定 C# のログ](nunit-evidence/migrant-hooks-official.log)
+
+BuiltinSurrogatesTests の XML サロゲート2件を追加した。型名と XML バイト列を
+サロゲートに保存し、復元時は登録型を照合して Rust の型固有コーデックに渡す。
+固定上流の属性と値を XML 要素で表す。リフレクション設定の4件が揃い、残る12件には
+生成読み書きが必要。
+[公式 ID 別の結果](nunit-evidence/targeted-xml-peripheral-groups.tsv)
+
+SurrogateTests の反射読み書き2設定を追加した。閉じた入力型の型引数を保った
+サロゲートを int、float、int の順で復元し、反射設定では登録数が増えないことを
+検証した。生成設定で必要となるコンバーターのキャッシュは引き続き移植待ち。
+[公式 ID 別の結果](nunit-evidence/targeted-event-replay-generic-surrogate.tsv)
+
+残りは9 fixture・1,867ケース。生成読み書き、コレクションと CLR 型の
+コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
+伴う型変更の復元が必要。

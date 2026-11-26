@@ -1,0 +1,9 @@
+$ cargo test --locked --bin penv upstream_nunit::register_enum
+running 6 tests
+test upstream_nunit::register_enum::should_parse_enum_with_multiple_values ... ok
+test upstream_nunit::register_enum::should_parse_enum_with_defined_ifdef ... ok
+test upstream_nunit::register_enum::should_parse_enum_with_undefined_ifdef ... ok
+test upstream_nunit::register_enum::should_parse_enum_with_simple_value ... ok
+test upstream_nunit::register_enum::should_parse_enum_with_comment_or_empty_lines ... ok
+test upstream_nunit::register_enum::should_parse_enum_with_multiple_values_with_indices ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1562 filtered out; finished in 0.00s

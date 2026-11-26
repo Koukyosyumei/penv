@@ -1,0 +1,8 @@
+$ cargo test --locked --bin penv upstream_nunit::python_peripheral_serialization
+running 5 tests
+test upstream_nunit::python_peripheral_serialization::serialize_machine_with_simple_pydev ... ok
+test upstream_nunit::python_peripheral_serialization::serialize_pydev_with_module_import ... ok
+test upstream_nunit::python_peripheral_serialization::serialize_pydev_with_list_and_dictionary ... ok
+test upstream_nunit::python_peripheral_serialization::serialize_simple_pydev ... ok
+test upstream_nunit::python_peripheral_serialization::snapshot_preserves_initialized_python_scope ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3885 filtered out; finished in 0.03s

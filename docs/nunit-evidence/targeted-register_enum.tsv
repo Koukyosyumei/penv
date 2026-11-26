@@ -1,0 +1,7 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests.ShouldParseEnumWithCommentOrEmptyLines	0-1054	upstream_nunit::register_enum::should_parse_enum_with_comment_or_empty_lines	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests.ShouldParseEnumWithDefinedIfdef	0-1052	upstream_nunit::register_enum::should_parse_enum_with_defined_ifdef	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests.ShouldParseEnumWithMultipleValues	0-1050	upstream_nunit::register_enum::should_parse_enum_with_multiple_values	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests.ShouldParseEnumWithMultipleValuesWithIndices	0-1053	upstream_nunit::register_enum::should_parse_enum_with_multiple_values_with_indices	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests.ShouldParseEnumWithSimpleValue	0-1049	upstream_nunit::register_enum::should_parse_enum_with_simple_value	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests.ShouldParseEnumWithUndefinedIfdef	0-1051	upstream_nunit::register_enum::should_parse_enum_with_undefined_ifdef	passed

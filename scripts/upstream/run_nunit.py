@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 
-from nunit_mapping import PIN, case_parameters, load_mapping, runtime_host_excluded
+from nunit_mapping import PIN, case_parameters, load_mapping, runtime_host_excluded, runtime_inconclusive
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,10 +28,10 @@ def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
 
 
-def run(command, cwd, log, timeout=600):
+def run(command, cwd, log, timeout=600, env=None):
     with log.open("wb") as output:
         return subprocess.run(command, cwd=cwd, stdout=output, stderr=subprocess.STDOUT,
-                              timeout=timeout, env={**os.environ, "DOTNET_CLI_UI_LANGUAGE": "en-US"}).returncode
+                              timeout=timeout, env={**os.environ, "DOTNET_CLI_UI_LANGUAGE": "en-US", **(env or {})}).returncode
 
 
 def manifest_projects(source):
@@ -110,6 +110,8 @@ def discover(project, mapping, clone, dotnet, output):
         elif runstate != "Runnable":
             status = {"Ignored": "ignored", "Skipped": "skipped",
                       "Explicit": "explicit"}.get(runstate, "not_runnable")
+        elif runtime_inconclusive(name):
+            status = "inconclusive"
         else:
             status = "not_run" if row else "unmapped"
         cases.append(dict(project=project, official_fullname=name,
@@ -118,7 +120,7 @@ def discover(project, mapping, clone, dotnet, output):
                           categories=sorted(categories), status=status,
                           rust_test=row["rust_test"] if row else "",
                           origin=row["origin"] if row else "",
-                          parameters=case_parameters(case["methodname"], case["name"])))
+                          parameters=case_parameters(case["methodname"], case["name"], name)))
     return cases, dict(project=project, command=command, discovered=len(nodes),
                        xml=str(xml.relative_to(output.parent)), log=str(log.relative_to(output.parent)),
                        assembly_sha256=hashlib.sha256(dll.read_bytes()).hexdigest())
@@ -176,7 +178,7 @@ def main():
     command = ["cargo", "test", "--locked", "--color", "never", "--bin", "penv", "--",
                "--exact", "--test-threads=1", *tests]
     log = out / "rust.log"
-    status = run(command, ROOT, log)
+    status = run(command, ROOT, log, env={"PENV_DOTNET": dotnet})
     rust_output = log.read_text()
     binary = re.search(r"^\s*Running unittests .* \((.+)\)$", rust_output, re.MULTILINE)
     binary_sha = hashlib.sha256((ROOT / binary[1]).read_bytes()).hexdigest() if binary else None
@@ -196,7 +198,7 @@ def main():
         fixtures[(case["project"], case["fixture"])][case["status"]] += 1
 
     totals = Counter(case["status"] for case in cases)
-    inactive = ("excluded", "ignored", "skipped", "explicit", "not_runnable")
+    inactive = ("excluded", "ignored", "skipped", "explicit", "not_runnable", "inconclusive")
     summary = dict(ported=len(mapped), newly_ported=sum(case["origin"] == "new" for case in mapped),
                    passed=totals["pass"], failed=totals["fail"], not_run=totals["not_run"],
                    discovered=len(cases), runnable=len(cases) - sum(totals[state] for state in inactive),

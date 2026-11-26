@@ -1,0 +1,37 @@
+$ cargo test --locked --bin penv upstream_nunit::register_fields
+running 34 tests
+test upstream_nunit::register_fields::should_call_global_read_handler ... ok
+test upstream_nunit::register_fields::should_not_accept_negative_fields ... ok
+test upstream_nunit::register_fields::should_call_read_handler ... ok
+test upstream_nunit::register_fields::should_call_global_write_and_change_handler ... ok
+test upstream_nunit::register_fields::should_call_write_and_change_handler ... ok
+test upstream_nunit::register_fields::should_not_accept_out_of_bounds_values ... ok
+test upstream_nunit::register_fields::should_handle_32_bit_wide_registers_properly ... ok
+test upstream_nunit::register_fields::should_handle_64_bit_wide_registers_properly ... ok
+test upstream_nunit::register_fields::should_not_allow_intersecting_fields ... ok
+test upstream_nunit::register_fields::should_not_exceed_register_size ... ok
+test upstream_nunit::register_fields::should_not_read_unreadable_field ... ok
+test upstream_nunit::register_fields::should_read_64_bit_wide_enum ... ok
+test upstream_nunit::register_fields::should_not_write_unwritable_field ... ok
+test upstream_nunit::register_fields::should_read_bool_field ... ok
+test upstream_nunit::register_fields::should_read_enum_field ... ok
+test upstream_nunit::register_fields::should_read_to_clear ... ok
+test upstream_nunit::register_fields::should_read_to_set ... ok
+test upstream_nunit::register_fields::should_read_value_field ... ok
+test upstream_nunit::register_fields::should_reset_complex_register ... ok
+test upstream_nunit::register_fields::should_retrieve_value_from_handler ... ok
+test upstream_nunit::register_fields::should_set_field ... ok
+test upstream_nunit::register_fields::should_toggle_field ... ok
+test upstream_nunit::register_fields::should_work_with_undefined_enum_value ... ok
+test upstream_nunit::register_fields::should_write_64_bit_wide_enum ... ok
+test upstream_nunit::register_fields::should_write_bool_field ... ok
+test upstream_nunit::register_fields::should_write_enum_field ... ok
+test upstream_nunit::register_fields::should_write_one_to_clear ... ok
+test upstream_nunit::register_fields::should_write_fields_with_max_length ... ok
+test upstream_nunit::register_fields::should_write_to_clear ... ok
+test upstream_nunit::register_fields::should_write_to_set ... ok
+test upstream_nunit::register_fields::should_write_value_field ... ok
+test upstream_nunit::register_fields::should_write_zero_to_clear ... ok
+test upstream_nunit::register_fields::should_write_zero_to_set ... ok
+test upstream_nunit::register_fields::should_write_zero_to_toggle ... ok
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 1651 filtered out; finished in 0.00s

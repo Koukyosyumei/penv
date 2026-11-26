@@ -1,4 +1,5 @@
 mod ble;
+pub mod external_cpu;
 
 use std::{
     cell::{Cell, RefCell},
@@ -160,6 +161,8 @@ pub struct Machine {
     frame_wait_deadline: Option<u64>,
     intermediate_frame_matches: Vec<u64>,
     time_source: TimeSource<1>,
+    managed_clock: crate::clock_source::ClockSource<'static>,
+    external_cpus: Vec<external_cpu::Registration>,
     pub rtc_clock: RtcClock,
     recorder: Option<Recorder>,
     replay: VecDeque<(u64, ExternalEvent)>,
@@ -442,6 +445,8 @@ impl Machine {
             frame_wait_deadline: None,
             intermediate_frame_matches: Vec::new(),
             time_source: TimeSource::default(),
+            managed_clock: crate::clock_source::ClockSource::default(),
+            external_cpus: Vec::new(),
             rtc_clock: RtcClock::default(),
             recorder: None,
             replay: VecDeque::new(),
@@ -744,6 +749,34 @@ impl Machine {
             let address = u32::try_from(address).map_err(|_| "symbol address exceeds CPU width")?;
             self.set_named_entry(cpu, address)
         }
+    }
+
+    pub fn obtain_managed_thread(
+        &mut self,
+        action: impl FnMut() + 'static,
+        frequency: std::num::NonZeroU64,
+    ) -> crate::clock_source::ManagedThread {
+        self.managed_clock.managed_thread(frequency, action)
+    }
+
+    pub fn run_to_nearest_sync_point(
+        &mut self,
+        quantum: std::time::Duration,
+    ) -> Result<(), crate::clock_source::ClockOverflow> {
+        self.managed_clock.advance(quantum)
+    }
+
+    pub fn set_peripheral_local_name(
+        &mut self, handle: &crate::bus_translation::PeripheralHandle, name: Option<&str>,
+    ) -> Result<(), String> {
+        let name = name.ok_or("missing peripheral name")?;
+        self.bus.name_translated_peripheral(handle, name)
+    }
+
+    pub fn peripheral_by_path(
+        &self, path: &str,
+    ) -> Option<&crate::bus_translation::PeripheralHandle> {
+        self.bus.translated_peripheral_by_path(path)
     }
 
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
@@ -1222,6 +1255,9 @@ impl Machine {
 
     fn apply_external_event(&mut self, event: &ExternalEvent) -> Result<(), String> {
         match event {
+            ExternalEvent::PeripheralCall { peripheral, method, arguments } => {
+                self.bus.dispatch_external_call(self.elapsed_steps(), peripheral, method, arguments)
+            }
             ExternalEvent::Button(name, pressed) => self.bus.set_named_button(name, *pressed),
             ExternalEvent::Adc(name, channel, volts) => {
                 self.bus.set_named_adc_input(name, *channel, *volts)
@@ -1523,10 +1559,12 @@ impl Machine {
 
     pub fn pause_cpu(&mut self) {
         self.cpu_paused = true;
+        self.bus.pause_registered_peripherals();
     }
 
     pub fn resume_cpu(&mut self) {
         self.cpu_paused = false;
+        self.bus.start_registered_peripherals();
     }
 
     pub fn set_cpu_halted(&mut self, halted: bool) {

@@ -1,0 +1,6 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.MultiCPUTests.ShouldEnumerateCPUs	0-1333	upstream_nunit::multi_cpu::should_enumerate_cpus	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.MultiCPUTests.ShouldGuardPeripheralReads(1)	0-1334	upstream_nunit::multi_cpu::should_guard_peripheral_reads_1	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.MultiCPUTests.ShouldGuardPeripheralReads(2)	0-1335	upstream_nunit::multi_cpu::should_guard_peripheral_reads_2	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.MultiCPUTests.ShouldGuardPeripheralReads(3)	0-1336	upstream_nunit::multi_cpu::should_guard_peripheral_reads_3	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.MultiCPUTests.ShouldGuardPeripheralReads(4)	0-1337	upstream_nunit::multi_cpu::should_guard_peripheral_reads_4	passed

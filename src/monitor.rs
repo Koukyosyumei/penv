@@ -1,3 +1,5 @@
+pub(crate) mod action_arguments;
+pub(crate) mod managed_extensions;
 use crate::csr::TrapVector;
 
 use std::{
@@ -1480,8 +1482,177 @@ pub fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<
     output.flush()
 }
 
+pub(crate) struct AutoLoadCommand {
+    pub(crate) name: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) method_signatures: &'static [&'static str],
+    pub(crate) execute: Box<dyn FnMut(&mut Machine, &[&str]) -> Result<String, String>>,
+}
+
+impl AutoLoadCommand {
+    pub(crate) fn register(self, monitor: &mut MonitorBuiltins) -> Result<(), String> {
+        if self.name.split_whitespace().collect::<Vec<_>>().as_slice() != [self.name]
+            || matches!(self.name, "help" | "next_value" | "sleep" | "echo" | "dump" | "dump_file")
+            || monitor.commands.contains_key(self.name)
+        {
+            return Err(format!("invalid or duplicate monitor command {:?}", self.name));
+        }
+        monitor.commands.insert(self.name, self);
+        Ok(())
+    }
+}
+
 /// Execute one runtime command at a time on the same machine. Separate command
 /// status from UART/monitor bytes so firmware output cannot create a reply frame.
+#[derive(Default)]
+pub(crate) struct MonitorBuiltins {
+    next_value: i64,
+    seed: u32,
+    extensions: managed_extensions::Session,
+    commands: std::collections::BTreeMap<&'static str, AutoLoadCommand>,
+}
+
+impl MonitorBuiltins {
+    pub(crate) fn execute_registered_script(&mut self, machine: &mut Machine, text: &str) -> Result<String, String> {
+        let mut output = String::new();
+        for command in action_arguments::commands(text) {
+            let command = command.trim();
+            if command.is_empty() {
+                continue;
+            }
+            let response = self.execute(machine, command)
+                .ok_or_else(|| format!("unknown monitor command {command}"))??;
+            output.push_str(&response);
+        }
+        Ok(output)
+    }
+
+    pub(crate) fn execute(&mut self, machine: &mut Machine, text: &str) -> Option<Result<String, String>> {
+        let command = text.split_whitespace().next()?;
+        let object = command.split_once('[').map_or(command, |(name, _)| name);
+        if let Some(registered) = self.commands.get_mut(object) {
+            return Some(
+                action_arguments::words(text).and_then(|mut words| {
+                    let indexer = words[0].strip_prefix(object).filter(|tail| !tail.is_empty());
+                    if let Some(indexer) = indexer {
+                        words[0] = indexer;
+                        (registered.execute)(machine, &words)
+                    } else {
+                        (registered.execute)(machine, &words[1..])
+                    }
+                }).map_err(|error| {
+                    if registered.method_signatures.is_empty() {
+                        error
+                    } else {
+                        format!("{error}\nThe following methods are available:\n{}", registered.method_signatures.join("\n"))
+                    }
+                }),
+            );
+        }
+        if matches!(command, "i" | "include") {
+            let words = match command_words(text) {
+                Ok(words) => words,
+                Err(error) => return Some(Err(error)),
+            };
+            if let [_, source] = words.as_slice()
+                && let Some(path) = source.strip_prefix('@')
+                && Path::new(&path_value(path)).extension().is_some_and(|ext| ext == "cs")
+            {
+                return Some(self.extensions.include(Path::new(&path_value(path))).map(|()| String::new()));
+            }
+        }
+        if command == "emulation" {
+            let words = match command_words(text) {
+                Ok(words) => words,
+                Err(error) => return Some(Err(error)),
+            };
+            match words.as_slice() {
+                ["emulation", "GetSeed"] => return Some(Ok(format!("{}\n", self.seed))),
+                ["emulation", "SetSeed", seed] => return Some(crate::parse_address(seed).map(|seed| {
+                    self.seed = seed;
+                    String::new()
+                })),
+                ["emulation", method] => {
+                    if let Some(result) = self.extensions.invoke(method) {
+                        return Some(result);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !matches!(command, "help" | "next_value" | "sleep" | "echo" | "dump" | "dump_file") {
+            return None;
+        }
+        Some(command_words(text).and_then(|words| match words.as_slice() {
+            ["help"] => Ok(self.commands.values().map(|command| {
+                format!("{}: {}\n", command.name, command.description)
+            }).collect()),
+            ["next_value"] | ["next_value", _] => {
+                let offset = words.get(1).map_or(Ok(0), |value| value.parse::<i64>())
+                    .map_err(|_| "expected a next_value offset")?;
+                let current = self.next_value.checked_add(offset).ok_or("next_value overflow")?;
+                self.next_value = self.next_value.checked_add(1).ok_or("next_value overflow")?;
+                Ok(format!("{current}\n"))
+            }
+            ["sleep", seconds] => {
+                let seconds = seconds.parse::<f64>().map_err(|_| "invalid sleep duration")?;
+                let duration = Duration::try_from_secs_f64(seconds).map_err(|_| "invalid sleep duration")?;
+                std::thread::sleep(duration);
+                Ok(String::new())
+            }
+            ["echo"] => Ok("\n".to_owned()),
+            ["echo", value] => Ok(format!("{}\n", unquote(value))),
+            ["echo", "-n", value] => Ok(unquote(value).to_owned()),
+            ["echo", ..] => Ok("usage: echo [-n] [string]\n".to_owned()),
+            ["dump", address, count] | ["dump", address, count, _] => {
+                let width = words.get(3).map_or(Ok(16), |value| value.parse::<usize>())
+                    .map_err(|_| "invalid dump row width")?;
+                let address = crate::parse_address(address)?;
+                let count = count.parse::<usize>().map_err(|_| "invalid dump length")?;
+                dump_monitor_rows(machine, address, count, width)
+            }
+            ["dump_file", address, count, path] => {
+                let address = crate::parse_address(address)?;
+                let count = count.parse::<usize>().map_err(|_| "invalid dump length")?;
+                let path = unquote(path);
+                let path = path_value(path.strip_prefix('@').unwrap_or(path));
+                let bytes = machine.bus.read_bytes(address, count).map_err(|error| error.to_string())?;
+                let mut file = io::BufWriter::new(fs::File::create(path).map_err(|error| error.to_string())?);
+                for byte in bytes {
+                    file.write_all(&[byte.map_err(|error| error.to_string())?])
+                        .map_err(|error| error.to_string())?;
+                }
+                file.flush().map_err(|error| error.to_string())?;
+                Ok(String::new())
+            }
+            _ => Err(format!("invalid {command} arguments")),
+        }))
+    }
+}
+
+fn dump_monitor_rows(machine: &mut Machine, address: u32, count: usize, width: usize) -> Result<String, String> {
+    use std::fmt::Write as _;
+
+    if width == 0 {
+        return Err("dump row width must be positive".into());
+    }
+    let mut output = String::new();
+    for offset in (0..count).step_by(width) {
+        let row = u32::try_from(offset).ok().and_then(|offset| address.checked_add(offset))
+            .ok_or("dump address overflow")?;
+        let values = machine.bus.read_bytes(row, width).map_err(|error| error.to_string())?;
+        write!(output, "0x{row:08X} |").unwrap();
+        let mut preview = String::new();
+        for value in values {
+            let value = value.map_err(|error| error.to_string())?;
+            write!(output, " {value:02X}").unwrap();
+            preview.push(if (0x20..=0x7f).contains(&value) { char::from(value) } else { '.' });
+        }
+        writeln!(output, " | {preview}").unwrap();
+    }
+    Ok(output)
+}
+
 pub fn serve(
     machine: &mut Machine,
     mut input: impl BufRead,
@@ -1493,6 +1664,7 @@ pub fn serve(
     let initial: Vec<_> = (0..machine.hart_count()).map(|id| machine.hart_mut(id).clone()).collect();
     let path = Path::new("<monitor>");
     let mut line = String::new();
+    let mut builtins = MonitorBuiltins::default();
     frame(&mut output, "READY", startup_output).map_err(|error| error.to_string())?;
     loop {
         line.clear();
@@ -1506,6 +1678,14 @@ pub fn serve(
         } else {
             line.trim()
         };
+        if let Some(result) = builtins.execute(machine, text) {
+            let reply = match result {
+                Ok(body) => frame(&mut output, "OK", body.as_bytes()),
+                Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+            };
+            reply.map_err(|error| error.to_string())?;
+            continue;
+        }
         if let Some(result) = crate::monitor_asm::handle(machine, text) {
             match result {
                 Ok(size) => frame(&mut output, "OK", size.to_string().as_bytes()),

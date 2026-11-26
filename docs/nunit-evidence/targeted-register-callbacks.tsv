@@ -1,0 +1,6 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.RegistersTests.ShouldCallGlobalReadHandler	0-1457	upstream_nunit::register_fields::should_call_global_read_handler	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.RegistersTests.ShouldCallGlobalWriteAndChangeHandler	0-1458	upstream_nunit::register_fields::should_call_global_write_and_change_handler	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.RegistersTests.ShouldCallReadHandler	0-1454	upstream_nunit::register_fields::should_call_read_handler	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.RegistersTests.ShouldCallWriteAndChangeHandler	0-1456	upstream_nunit::register_fields::should_call_write_and_change_handler	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.RegistersTests.ShouldRetrieveValueFromHandler	0-1455	upstream_nunit::register_fields::should_retrieve_value_from_handler	passed

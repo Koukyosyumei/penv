@@ -1,0 +1,7 @@
+$ cargo test --locked --bin penv upstream_nunit::opentitan_spi_device
+running 4 tests
+test upstream_nunit::opentitan_spi_device::should_receive_data_to_fifo ... ok
+test upstream_nunit::opentitan_spi_device::should_have_correct_fifo_configuration_after_boot ... ok
+test upstream_nunit::opentitan_spi_device::should_be_able_to_transmit_data ... ok
+test upstream_nunit::opentitan_spi_device::should_be_able_to_reset_fifos ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 3851 filtered out; finished in 0.00s

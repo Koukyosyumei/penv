@@ -17,7 +17,7 @@ def load_mapping():
     return mapping
 
 
-def case_parameters(method, display_name):
+def case_parameters(method, display_name, fullname=""):
     parameters = display_name.removeprefix(method)
     if method in {"ShouldParseHexadecimalLong", "ShouldParseNumber", "ShouldNotParseNumber"}:
         if parameters.startswith('("') and parameters.endswith('")'):
@@ -33,6 +33,16 @@ def case_parameters(method, display_name):
             source, destination, read_width, write_width = args
             return {"sourcePlaceType": source, "destinationPlaceType": destination,
                     "sourceAccessWidth": int(read_width), "destinationAccessWidth": int(write_width)}
+    prefix = "Antmicro.Migrant.Tests.PrimitiveReaderWriterTests("
+    if fullname.startswith(prefix):
+        buffered = fullname[len(prefix):].split(")", 1)[0] == "True"
+        case = {"buffered": buffered}
+        if parameters:
+            first, *rest = parameters.removeprefix("(").removesuffix(")").split(",")
+            case["count"] = int(first)
+            if rest:
+                case["withLongStrings"] = rest[0] == "True"
+        return case
     return {"display": parameters} if parameters else {}
 
 
@@ -41,3 +51,8 @@ def runtime_host_excluded(fixture, method, windows):
     if fixture != "Antmicro.Renode.UnitTests.PlatformDescription.UsingTests":
         return False
     return (method.endswith("Windows") and not windows) or (method.endswith("Unix") and windows)
+
+
+def runtime_inconclusive(fullname):
+    # At PIN this method consists solely of Assert.Inconclusive().
+    return fullname == "Antmicro.Renode.PeripheralsTests.CortexA9GICTests.ShouldSendAndReceiveIPI"

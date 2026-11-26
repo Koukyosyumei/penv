@@ -1,0 +1,7 @@
+$ cargo test --locked --bin penv upstream_nunit::efm32_i2c
+running 4 tests
+test upstream_nunit::efm32_i2c::ctrl_test ... ok
+test upstream_nunit::efm32_i2c::interrupt_test ... ok
+test upstream_nunit::efm32_i2c::init_test ... ok
+test upstream_nunit::efm32_i2c::dual_i2c_address_bmc050_test ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1558 filtered out; finished in 0.02s

@@ -249,7 +249,7 @@ def discover_nunit(root, dotnet, projects, host, output):
             run["selected_count"] += not excluded
             run["runnable_count"] += (not excluded and runstate == "Runnable")
             rows.append(dict(id=f"{project}::{unique_id}", project=project, name=case_id,
-                             nunit_id=engine_id, parameters=case_parameters(method, display_name),
+                             nunit_id=engine_id, parameters=case_parameters(method, display_name, case_id),
                              categories=sorted(categories), runstate=runstate,
                              rust_test=mapped["rust_test"] if mapped else None,
                              evidence=str(xml), status=status))

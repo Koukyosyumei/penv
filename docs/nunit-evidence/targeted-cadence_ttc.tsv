@@ -1,0 +1,7 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.UnitTests.Cadence_TTCTests.ShouldCountDownInIntervalMode	0-1006	upstream_nunit::cadence_ttc::should_count_down_in_interval_mode	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.UnitTests.Cadence_TTCTests.ShouldCountDownInOverflowMode	0-1004	upstream_nunit::cadence_ttc::should_count_down_in_overflow_mode	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.UnitTests.Cadence_TTCTests.ShouldCountIndependently	0-1002	upstream_nunit::cadence_ttc::should_count_independently	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.UnitTests.Cadence_TTCTests.ShouldCountUpInIntervalMode	0-1005	upstream_nunit::cadence_ttc::should_count_up_in_interval_mode	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.UnitTests.Cadence_TTCTests.ShouldCountUpInOverflowMode	0-1003	upstream_nunit::cadence_ttc::should_count_up_in_overflow_mode	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.UnitTests.Cadence_TTCTests.ShouldResetCounter	0-1001	upstream_nunit::cadence_ttc::should_reset_counter	passed

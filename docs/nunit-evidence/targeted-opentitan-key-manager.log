@@ -1,0 +1,8 @@
+$ cargo test --locked --bin penv upstream_nunit::opentitan_key_manager
+running 5 tests
+test upstream_nunit::opentitan_key_manager::init_to_reset_state ... ok
+test upstream_nunit::opentitan_key_manager::ignore_other_commands_in_reset_state ... ok
+test upstream_nunit::opentitan_key_manager::clear_errors_after_valid_operation ... ok
+test upstream_nunit::opentitan_key_manager::advance_state_properly ... ok
+test upstream_nunit::opentitan_key_manager::raise_error_on_illegal_command ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3873 filtered out; finished in 0.00s

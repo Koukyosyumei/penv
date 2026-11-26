@@ -1,0 +1,21 @@
+$ cargo test --locked --bin penv upstream_nunit::packet_layout
+running 18 tests
+test upstream_nunit::packet_layout::test_alignment ... ok
+test upstream_nunit::packet_layout::test_calculate_offset_with_optional_fields ... ok
+test upstream_nunit::packet_layout::test_calculate_length_with_optional_fields ... ok
+test upstream_nunit::packet_layout::test_decode ... ok
+test upstream_nunit::packet_layout::test_decode_field_offsets ... ok
+test upstream_nunit::packet_layout::test_decode_edianness ... ok
+test upstream_nunit::packet_layout::test_length_calculation ... ok
+test upstream_nunit::packet_layout::test_encode ... ok
+test upstream_nunit::packet_layout::test_multiargument_present_if_method ... ok
+test upstream_nunit::packet_layout::test_nested_decode ... ok
+test upstream_nunit::packet_layout::test_nested_encode ... ok
+test upstream_nunit::packet_layout::test_nested_struct_with_optional_fields ... ok
+test upstream_nunit::packet_layout::test_padding_before ... ok
+test upstream_nunit::packet_layout::test_present_if ... ok
+test upstream_nunit::packet_layout::test_present_if_bitfield ... ok
+test upstream_nunit::packet_layout::test_serializing_read_only_properties ... ok
+test upstream_nunit::packet_layout::test_width_in_elements ... ok
+test upstream_nunit::packet_layout::test_width_in_elements_errors ... ok
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1576 filtered out; finished in 0.00s

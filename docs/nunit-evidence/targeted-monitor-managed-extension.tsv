@@ -1,0 +1,2 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.FeaturesTests.ShouldHandleNewExtensionsFromLoadedAssembly	0-1002	upstream_nunit::adhoc_compiler::should_handle_new_extensions_from_loaded_assembly	passed

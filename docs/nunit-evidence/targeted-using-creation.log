@@ -1,0 +1,12 @@
+$ cargo test --locked --bin penv repl_parser::upstream_using_tests::renode_
+running 9 tests
+test repl_parser::upstream_using_tests::renode_using_reference_private ... ok
+test repl_parser::upstream_using_tests::renode_using_reference_direct ... ok
+test repl_parser::upstream_using_tests::renode_using_reference_reverse ... ok
+test repl_parser::upstream_using_tests::renode_using_reference_nested ... ok
+test repl_parser::upstream_using_tests::renode_override_2 ... ok
+test repl_parser::upstream_using_tests::renode_override_0 ... ok
+test repl_parser::upstream_using_tests::renode_override_4 ... ok
+test repl_parser::upstream_using_tests::renode_override_1 ... ok
+test repl_parser::upstream_using_tests::renode_override_3 ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 3446 filtered out; finished in 0.00s

@@ -1,4 +1,5 @@
 pub mod grants;
+pub mod paced;
 
 /// A serial clock domain with an initial sync point and complete quantum grants.
 #[derive(Default)]
