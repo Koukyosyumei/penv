@@ -594,6 +594,7 @@ fn load_platform(
     let mut andes_watchdogs = Vec::new();
     let mut andes_spis = Vec::new();
     let mut andes_rtcs = Vec::new();
+    let mut egis_syscon = None;
     let mut puya_flashes = Vec::new();
     let mut clic = None;
     let mut nvic = None;
@@ -784,6 +785,11 @@ fn load_platform(
             "GPIOPort.LiteX_GPIO" => litex_gpios.push(entry),
             "Timers.AndesATCPIT100" => andes_pits.push(entry),
             "Timers.AndesATCRTC100" => andes_rtcs.push(entry),
+            "Miscellaneous.EgisET171_AOSMU" => {
+                if egis_syscon.replace(entry).is_some() {
+                    return Err(entry.error("only one Egis AOSMU is supported"));
+                }
+            }
             "Timers.AndesATCWDT200_Watchdog" => andes_watchdogs.push(entry),
             "GPIOPort.AndesATCGPIO100" => andes_gpios.push(entry),
             "Timers.RiscVMachineTimer" => {
@@ -2024,9 +2030,19 @@ fn load_platform(
         } else {
             0
         };
+        let (properties, _) = split_rv32_init(entry);
+        let cpu_properties = properties.iter().position(|(_, line)| line == "reset:")
+            .map_or(properties, |index| &properties[..index]);
+        if cpu_properties.len() != properties.len() {
+            let reset = egis_syscon.ok_or_else(|| entry.error("unsupported CPU reset hook"))?;
+            let expected = format!("PC `{} ResetVector`", reset.name);
+            if !matches!(&properties[cpu_properties.len() + 1..], [(_, hook)] if hook == &expected) {
+                return Err(entry.error("unsupported CPU reset hook"));
+            }
+        }
         for (key, value) in keys_in(
             entry,
-            split_rv32_init(entry).0,
+            cpu_properties,
             &[
                 "cpuType",
                 "hartId",
@@ -2352,7 +2368,8 @@ fn load_platform(
         }
         if entry.model == "CPU.RiscV32" {
             hart.enable_address_triggers();
-            hart.configure_reset_vector(0x1000);
+            let reset = if entry.body.iter().any(|(_, line)| line == "reset:") { 0x7000_0000 } else { 0x1000 };
+            hart.configure_reset_vector(reset);
             if default_vector_mapped {
                 hart.set_mtvec(DEFAULT_MTVEC);
             }
@@ -2826,6 +2843,23 @@ fn load_platform(
         }
         machine.bus.map_andes_pit(crate::andes_pit::AndesPit::new(
             entry.address()?, entry.name.clone(), frequency, channels as usize, irq,
+        )).map_err(|error| entry.error(&error))?;
+    }
+    if let Some(entry) = egis_syscon {
+        let properties = keys(entry, &["mtimer", "pit", "wdt"])?;
+        let mut devices = [0; 3];
+        for (index, (key, model)) in [
+            ("mtimer", "Timers.RiscVMachineTimer"),
+            ("pit", "Timers.AndesATCPIT100"),
+            ("wdt", "Timers.AndesATCWDT200_Watchdog"),
+        ].into_iter().enumerate() {
+            let name = properties.iter().find_map(|&(name, value)| (name == key).then_some(value))
+                .ok_or_else(|| entry.error("missing AOSMU clock target"))?;
+            devices[index] = entries.iter().find(|device| device.name == name && device.model == model)
+                .ok_or_else(|| entry.error("invalid AOSMU clock target"))?.address()?;
+        }
+        machine.bus.map_egis_syscon(crate::egis_syscon::EgisSyscon::new(
+            entry.address()?, entry.name.clone(), devices,
         )).map_err(|error| entry.error(&error))?;
     }
     for entry in sifive_uarts {

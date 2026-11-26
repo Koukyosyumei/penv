@@ -556,6 +556,7 @@ pub struct Bus {
     andes_watchdogs: Vec<crate::andes_watchdog::AndesWatchdog>,
     andes_spi: Vec<crate::andes_spi::AndesSpi>,
     andes_rtc: Vec<crate::andes_rtc::AndesRtc>,
+    egis_syscon: Option<crate::egis_syscon::EgisSyscon>,
     pub(crate) andes_reset_requested: bool,
     sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
@@ -2973,6 +2974,11 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.egis_syscon.as_ref().is_some_and(|syscon| {
+            overlaps_range(start, end, syscon.base, crate::egis_syscon::EgisSyscon::SIZE)
+        }) {
+            return true;
+        }
         if self.andes_rtc.iter().any(|rtc| overlaps_range(start, end, rtc.base, crate::andes_rtc::AndesRtc::SIZE)) {
             return true;
         }
@@ -3406,6 +3412,40 @@ impl Bus {
             return Err("PLIC requires 1–63 interrupt sources".into());
         }
         self.register_plic("plic", Plic::new(base, sources, outputs).with_priorities(priorities))
+    }
+
+    pub(crate) fn map_egis_syscon(&mut self, syscon: crate::egis_syscon::EgisSyscon) -> Result<(), String> {
+        let start = u64::from(syscon.base);
+        let end = start + u64::from(crate::egis_syscon::EgisSyscon::SIZE);
+        if syscon.base & 3 != 0 || end > 1 << 32 || self.egis_syscon.is_some() || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping Egis AOSMU at {start:#010x}"));
+        }
+        self.set_egis_timer_clocks(syscon.devices, syscon.apb_clock());
+        self.egis_syscon = Some(syscon);
+        Ok(())
+    }
+
+    pub(crate) fn egis_syscon_property(&self, name: &str, property: &str) -> Option<u32> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        let syscon = self.egis_syscon.as_ref().filter(|syscon| syscon.name == name)?;
+        match property {
+            "RootClockFrequency" => Some(syscon.root_clock()),
+            "APBClockFrequency" => Some(syscon.apb_clock()),
+            "ResetVector" => Some(syscon.reset_vector()),
+            _ => None,
+        }
+    }
+
+    fn set_egis_timer_clocks(&mut self, [mtimer, pit, watchdog]: [u32; 3], frequency: u32) {
+        if let Some(timer) = self.riscv_machine_timer.as_mut().filter(|timer| timer.base == mtimer) {
+            timer.set_frequency(frequency);
+        }
+        if let Some(timer) = self.andes_pit.iter_mut().find(|timer| timer.base == pit) {
+            timer.set_frequency(frequency);
+        }
+        if let Some(timer) = self.andes_watchdogs.iter_mut().find(|timer| timer.base == watchdog) {
+            timer.set_frequency(frequency);
+        }
     }
 
     pub(crate) fn map_andes_rtc(&mut self, rtc: crate::andes_rtc::AndesRtc) -> Result<(), String> {
@@ -6818,6 +6858,9 @@ impl Bus {
         {
             return Ok(clic.read(offset, N));
         }
+        if N == 4 && let Some(syscon) = self.egis_syscon.as_ref().filter(|syscon| syscon.contains(address)) {
+            return Ok(syscon.read(address));
+        }
         if N == 4 && let Some(rtc) = self.andes_rtc.iter().find(|rtc| rtc.contains(address)) {
             return Ok(rtc.read(address));
         }
@@ -7704,6 +7747,15 @@ impl Bus {
             && let Some(offset) = clic.offset(address, width)
         {
             clic.write(offset, width, value);
+            return Ok(());
+        }
+        if width == 4 && let Some(syscon) = self.egis_syscon.as_mut().filter(|syscon| syscon.contains(address)) {
+            let devices = syscon.devices;
+            match syscon.write(address, value) {
+                crate::egis_syscon::SysconChange::None => {}
+                crate::egis_syscon::SysconChange::Clock(frequency) => self.set_egis_timer_clocks(devices, frequency),
+                crate::egis_syscon::SysconChange::Reset => self.andes_reset_requested = true,
+            }
             return Ok(());
         }
         if width == 4 && let Some(rtc) = self.andes_rtc.iter_mut().find(|rtc| rtc.contains(address)) {

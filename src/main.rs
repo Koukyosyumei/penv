@@ -44,6 +44,7 @@ mod andes_gpio;
 mod andes_watchdog;
 mod andes_spi;
 mod andes_rtc;
+mod egis_syscon;
 mod riscv_machine_timer;
 mod collapsed_profile;
 mod compressed;

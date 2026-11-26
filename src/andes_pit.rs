@@ -112,6 +112,10 @@ impl AndesPit {
         self.record_irq_change(was_asserted);
     }
 
+    pub(crate) fn set_frequency(&mut self, frequency: u32) {
+        self.frequency = frequency;
+    }
+
     pub fn tick(&mut self, steps_per_second: u32) {
         if self.enable == 0 {
             return;

@@ -554,6 +554,7 @@ enum Action {
     PeripheralWrite(String, u32, u32, u32),
     PeripheralRead(String, u32, u32),
     WatchdogIrq(String),
+    EgisSysconProperty(String, String),
     SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
@@ -738,7 +739,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
-                    | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::WatchdogIrq(_) | Action::CreateUartTester(..)
+                    | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::WatchdogIrq(_) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
@@ -1185,6 +1186,11 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::NvicLog(target) => machine.bus.enable_nvic_log(target).map(|()| None),
+            Action::EgisSysconProperty(target, property) => {
+                let value = machine.bus.egis_syscon_property(target, property)
+                    .ok_or_else(|| format!("unknown AOSMU property {target} {property}"))?;
+                writeln!(output.reply(), "{value}").map(|()| None).map_err(|error| error.to_string())
+            }
             Action::WatchdogIrq(target) => {
                 let value = machine.bus.andes_watchdog_irq(target)
                     .ok_or_else(|| format!("unknown Andes watchdog {target:?}"))?;
@@ -4591,6 +4597,8 @@ fn execute(
                 resolve(target)?.into(), crate::parse_address(resolve(offset)?)?,
                 crate::parse_address(resolve(value)?)?, peripheral_access_width(method),
             )),
+        [target, property @ ("APBClockFrequency" | "RootClockFrequency")] if !matches!(*target, "cpu" | "sysbus.cpu") =>
+            Some(Action::EgisSysconProperty(resolve(target)?.into(), (*property).into())),
         [target, "IRQ", "IsSet"] => Some(Action::WatchdogIrq(resolve(target)?.into())),
         ["emulation", "SynchroniseQuantum"] => Some(Action::SynchroniseQuantum),
         [target, operation @ ("Pause" | "Resume" | "IsPaused")] => {
@@ -4733,7 +4741,7 @@ fn execute(
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)
-                        | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::WatchdogIrq(_)
+                        | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::WatchdogIrq(_) | Action::EgisSysconProperty(..)
                         | Action::CreateUartTester(..)
                         | Action::DefaultUartTester(_)
                         | Action::ClearUartTesterReport(_)

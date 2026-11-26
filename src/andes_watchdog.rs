@@ -113,6 +113,10 @@ impl AndesWatchdog {
         self.log(&format!("resetTimer enabled: {reset_timer}"));
     }
 
+    pub(crate) fn set_frequency(&mut self, frequency: u32) {
+        self.frequency = frequency;
+    }
+
     pub fn tick(&mut self, rate: u32) -> bool {
         if self.control & Self::ENABLE == 0 || (self.elapsed && !self.reset_armed) {
             return false;
