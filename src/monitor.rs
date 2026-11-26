@@ -583,6 +583,7 @@ enum Action {
     I2cAccelerationFeed(String, PathBuf, bool),
     I2cAccelerationRead(String, usize),
     I2cSampleRate(String, u32),
+    UsartWriteChar(String, u8),
     AllowPrivates(bool),
     MachineReset(Vec<ResetHook>),
     ReadScalar(u64, ScalarWidth),
@@ -1308,6 +1309,8 @@ fn run_commands<'a>(
                 writeln!(output.reply(), "{value}").map_err(|error| error.to_string())?;
                 Ok(None)
             }
+            Action::UsartWriteChar(target, value) =>
+                machine.bus.write_usart_char(target, *value).map(|()| None),
             Action::I2cSampleRate(target, rate) => {
                 if !session.allow_privates {
                     return Err("setting the sensor sample rate requires allowPrivates".into());
@@ -4481,6 +4484,11 @@ fn execute(
                 ending,
             ))
         }
+        [target, "WriteChar", value] => {
+            let value = u8::try_from(crate::parse_address(resolve(value)?)?)
+                .map_err(|_| "expected a byte for WriteChar")?;
+            Some(Action::UsartWriteChar(resolve(target)?.into(), value))
+        }
         ["waitForLed", target, state, timeout, options @ ..] => {
             let state = resolve(state)?.parse().map_err(|_| "expected LED state true or false")?;
             let timeout = duration_steps(resolve(timeout)?)?;
@@ -4948,6 +4956,7 @@ fn execute(
                         | Action::UartIdle(..)
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)
+                        | Action::UsartWriteChar(..)
                         | Action::I2cAccelerationFeed(..) | Action::I2cAccelerationRead(..) | Action::I2cSampleRate(..) | Action::I2cAcceleration(..)
                         | Action::RunFor(_)
                         | Action::RunUntil(_)

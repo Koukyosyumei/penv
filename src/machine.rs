@@ -1909,7 +1909,9 @@ impl Machine {
             if selected.is_some() {
                 return Err("the platform has no CPU".into());
             }
-            let end = self.time_source.elapsed().saturating_add(limit);
+            let start = self.time_source.elapsed();
+            let end = start.saturating_add(limit);
+            self.bus.advance_cpu_less_uarts(end - start);
             self.time_source.grant_until(end);
             self.elapsed_steps = self.time_source.elapsed();
             self.bus.uart_clock_step = self.elapsed_steps;

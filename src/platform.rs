@@ -1258,6 +1258,34 @@ fn load_platform(
         machine.bus.set_step_hz(crate::bus::CORTEX_M_STEP_HZ as u32);
         return Ok(machine);
     }
+    if cpus.is_empty() && !stm32_uarts.is_empty() && entries.len() == stm32_uarts.len() {
+        for uart in stm32_uarts {
+            let mut frequency = None;
+            let mut low_power = false;
+            for (key, value) in keys(uart, &["frequency", "lowPowerMode"])? {
+                if key == "frequency" {
+                    frequency = Some(number(value).map_err(|error| uart.error(&error))?);
+                } else {
+                    low_power = value.parse().map_err(|_| uart.error("invalid USART lowPowerMode"))?;
+                }
+            }
+            if frequency == Some(0) {
+                return Err(uart.error("USART frequency must be positive"));
+            }
+            let layout = crate::stm32_uart::UsartLayout::F7 { low_power };
+            let (base, size) = sysbus_range(uart, layout.size())?;
+            if size < layout.size() {
+                return Err(uart.error("registered range is too small for STM32 USART"));
+            }
+            let mut device = Stm32Usart::with_layout(uart.name.clone(), base, None, layout);
+            device.legacy_layout = uart.model == "UART.STM32_UART";
+            device.frequency = frequency;
+            machine.bus.map_stm32_usart(device).map_err(|error| uart.error(&error))?;
+        }
+        machine.cpu_less = true;
+        machine.bus.set_step_hz(crate::bus::CORTEX_M_STEP_HZ as u32);
+        return Ok(machine);
+    }
     if cpus.is_empty() && !stm32_i2cs.is_empty()
         && entries.len() == stm32_i2cs.len() + i2c_sensors.len()
     {

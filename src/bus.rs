@@ -3646,6 +3646,10 @@ impl Bus {
             return offset.checked_add(4).filter(|end| *end <= *size)
                 .and_then(|_| addresses.first()?.checked_add(offset));
         }
+        if let Some(uart) = self.stm32_uarts.iter().find(|uart| uart.name == name) {
+            return offset.checked_add(4).filter(|end| *end <= uart.size())
+                .and_then(|_| uart.base.checked_add(offset));
+        }
         let (_, plic) = self.plics.iter().find(|(registered, _)| registered == name)?;
         (u64::from(offset) < plic.size).then(|| plic.base + offset)
     }
@@ -5726,6 +5730,22 @@ impl Bus {
             .iter_mut()
             .find(|uart| uart.name == name)
             .ok_or_else(|| format!("unknown STM32 UART {name:?}"))
+    }
+
+    pub(crate) fn advance_cpu_less_uarts(&mut self, cycles: u64) {
+        for uart in &mut self.stm32_uarts {
+            uart.advance_receive(cycles);
+        }
+    }
+
+    pub(crate) fn write_usart_char(&mut self, name: &str, value: u8) -> Result<(), String> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        let uart = self.stm32_uarts.iter_mut().find(|uart| uart.name == name)
+            .ok_or_else(|| format!("unknown STM32 UART {name:?}"))?;
+        if usart_clocked(self.h7_network_control.as_ref(), uart) {
+            uart.queue_input([value]);
+        }
+        Ok(())
     }
 
     pub fn write_stm32_uart_line(

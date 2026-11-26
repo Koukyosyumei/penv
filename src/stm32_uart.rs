@@ -268,6 +268,21 @@ impl Stm32Usart {
         }
     }
 
+    pub(crate) fn advance_receive(&mut self, mut cycles: u64) {
+        if cycles != 0 && !self.tester_input_before_enable.is_empty() && self.receiver_enabled() {
+            self.queue_tester_input(std::iter::empty());
+        }
+        while let Some(remaining) = self.receive_deadline {
+            if cycles < remaining {
+                self.receive_deadline = Some(remaining - cycles);
+                break;
+            }
+            cycles -= remaining;
+            self.receive_deadline = Some(1);
+            self.tick();
+        }
+    }
+
     fn status(&self) -> u32 {
         let flags = TXE
             | (u32::from(self.complete) * TC)
