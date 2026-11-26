@@ -1007,6 +1007,13 @@ fn load_platform(
                 }
             }
             "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
+            "Wireless.NRF52840_Radio" => {
+                keys(entry, &[])?;
+                let radio = crate::nrf52840::Peripheral::radio(
+                    entry.address()?, u8::MAX, entry.name.clone(), false,
+                );
+                machine.bus.map_nrf_peripheral(radio).map_err(|error| entry.error(&error))?;
+            }
             "UART.SiFive_UART" => sifive_uarts.push(entry),
             "GPIOPort.SiFive_GPIO" => sifive_gpios.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart" | "UART.MiV_CoreUART" => {

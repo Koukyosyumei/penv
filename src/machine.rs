@@ -2267,18 +2267,31 @@ impl Machine {
         self.bus.egis_quiet_steps(self.elapsed_steps, remaining)
     }
 
-    fn f4_quiet_steps(&mut self, remaining: u64) -> u64 {
+    fn f4_quiet_steps(&mut self, remaining: u64) -> (u64, u64) {
         if remaining <= 1 || !self.secondary.is_empty()
-            || !self.primary.thumb.as_ref().is_some_and(Thumb::sleeping)
             || self.primary.reset_held || self.primary.monitor_halted || self.cpu_halted
-            || self.profile.is_some() || self.recorder.is_some() || !self.replay.is_empty()
+            || self.primary.monitor_paused || self.halted != 0 || self.primary.monitor_single_step
+            || self.profile.is_some() || self.pc_trace.is_some() || self.recorder.is_some() || !self.replay.is_empty()
             || !self.inputs.is_empty() || !self.reset_steps.is_empty() || !self.button_events.is_empty()
             || !self.adc_events.is_empty() || !self.adxl_events.is_empty()
             || !self.uart_device_events.is_empty() || self.frame_wait_trigger.is_some()
         {
-            return 0;
+            return (0, 0);
         }
-        self.bus.advance_f4_quiet(remaining)
+        let Some(thumb) = self.primary.thumb.as_mut() else { return (0, 0) };
+        let pc = self.primary.pc;
+        let branch = thumb.can_repeat_self_branch()
+            && self.primary.busy_wait.is_none()
+            && self.primary.monitor_hooks.is_empty() && self.python_hooks.is_empty()
+            && self.bus.can_batch_thumb_branch(pc);
+        if !thumb.sleeping() && !branch {
+            return (0, 0);
+        }
+        let quiet = self.bus.advance_f4_quiet(remaining);
+        if branch {
+            thumb.retire_repeated_branch(quiet);
+        }
+        (quiet, if branch { quiet } else { 0 })
     }
 
     fn run_selected<W: Write>(
@@ -2321,12 +2334,13 @@ impl Machine {
         while remaining != 0 {
             // Give newly delivered host events a regular scheduler cycle
             // before considering an idle span.
-            let quiet = if selected.is_none() && remaining != limit {
+            let (quiet, repeated) = if selected.is_none() && remaining != limit {
                 self.f4_quiet_steps(remaining)
             } else {
-                0
+                (0, 0)
             };
             if quiet != 0 {
+                retired += repeated;
                 self.elapsed_steps = self.elapsed_steps.wrapping_add(quiet);
                 self.time_source.grant_until(self.time_source.elapsed().saturating_add(quiet));
                 self.bus.uart_clock_step = self.elapsed_steps;

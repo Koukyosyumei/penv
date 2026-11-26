@@ -1288,6 +1288,15 @@ impl Thumb {
         self.sleep != Sleep::Running
     }
 
+    pub(crate) fn can_repeat_self_branch(&self) -> bool {
+        self.thumb2 && self.clocked() && !self.sleeping() && !self.locked_up()
+            && !self.invalid_thumb_state && self.itstate == 0
+    }
+
+    pub(crate) fn retire_repeated_branch(&mut self, count: u64) {
+        self.retired_instructions = self.retired_instructions.wrapping_add(count);
+    }
+
     fn signal_event(&mut self) {
         if self.sleep == Sleep::Event {
             self.sleep = Sleep::Running;

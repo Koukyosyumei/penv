@@ -2618,6 +2618,14 @@ impl Bus {
         input_changed
     }
 
+    pub(crate) fn can_batch_thumb_branch(&self, pc: u32) -> bool {
+        self.f4_rcc.is_some() && !self.cpu_hooks.contains_key(&pc)
+            && self.thumb_block_hooks.iter().all(Option::is_none)
+            && matches!(self.read_ram::<2>(pc), Ok(0xe7fe))
+            && self.check_thumb_bus_context(pc, 2).is_ok()
+            && self.check_thumb_access(pc, 2, false, true).is_ok()
+    }
+
     // Stop before the next modeled clock edge. The ordinary scheduler runs
     // that edge, including capture wiring, DMA and NVIC sampling, in order.
     pub(crate) fn advance_f4_quiet(&mut self, limit: u64) -> u64 {
