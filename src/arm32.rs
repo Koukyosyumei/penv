@@ -1387,8 +1387,33 @@ impl Cpu {
                 _ if instruction & 0x0fff_0ff0 == 0x016f_0f10 && rd != 15 => {
                     registers[rd] = registers[(instruction & 15) as usize].leading_zeros();
                 }
-                _ if instruction & 0x0fff_0ff0 == 0x06bf_0f30 && rd != 15 => {
-                    registers[rd] = registers[(instruction & 15) as usize].swap_bytes();
+                _ if matches!(
+                    instruction & 0x0fff_0ff0,
+                    0x06bf_0f30 | 0x06bf_0fb0 | 0x06ff_0f30 | 0x06ff_0fb0
+                ) =>
+                {
+                    let source = (instruction & 15) as usize;
+                    if rd == 15 || source == 15 {
+                        next = self.undefined(next, registers);
+                    } else {
+                        let value = registers[source];
+                        registers[rd] = match instruction & 0x0040_0080 {
+                            0 => value.swap_bytes(),
+                            0x80 => (value & 0x00ff_00ff) << 8 | (value & 0xff00_ff00) >> 8,
+                            0x0040_0000 => value.reverse_bits(),
+                            _ => (value as u16).swap_bytes() as i16 as i32 as u32,
+                        };
+                    }
+                }
+                _ if instruction & 0x0ff0_00f0 == 0x0060_0090 => {
+                    let lhs = (instruction & 15) as usize;
+                    let rhs = ((instruction >> 8) & 15) as usize;
+                    if [lhs, rhs, rn, rd].contains(&15) {
+                        next = self.undefined(next, registers);
+                    } else {
+                        registers[rn] =
+                            registers[rd].wrapping_sub(registers[lhs].wrapping_mul(registers[rhs]));
+                    }
                 }
                 _ if instruction & 0x0fc0_00f0 == 0x0000_0090 => {
                     let lhs = (instruction & 15) as usize;
