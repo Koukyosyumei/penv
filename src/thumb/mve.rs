@@ -285,7 +285,7 @@ impl VectorArithmetic {
         };
         if let Some(operation) = unary {
             let size = (high >> 2) & 3;
-            if size == 3 || high & 0x40 != 0 || low & 0xa0 != 0 {
+            if size == 3 || high & 0x40 != 0 || low & 0x20 != 0 {
                 return None;
             }
             let source = ((low >> 1) & 7) as usize;
@@ -309,7 +309,7 @@ impl VectorArithmetic {
             _ => None,
         };
         if let Some(operation) = logic {
-            if high & 0x40 != 0 || low & 0xa0 != 0 {
+            if high & 0x40 != 0 || low & 0x20 != 0 {
                 return None;
             }
             let source = ((low >> 1) & 7) as usize;
