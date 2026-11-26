@@ -7245,8 +7245,8 @@ impl Bus {
     }
 
     pub(crate) fn supports_cortex_snapshot(&self) -> bool {
-        !self.trace_instructions() && let scs = u64::from(crate::nvic::BASE);
-        self.nvic.as_ref().is_some_and(Nvic::supports_snapshot) && self.systick.is_some()
+        let scs = u64::from(crate::nvic::BASE);
+        !self.trace_instructions() && self.nvic.as_ref().is_some_and(Nvic::supports_snapshot) && self.systick.is_some()
             && !self.peripheral_overlaps(0, scs) && !self.peripheral_overlaps(scs + 0x1000, 1 << 32)
             && self.pydevs.is_empty() && self.policy_tags.is_empty()
             && self.thumb_python_opcodes.is_empty() && self.thumb_block_hooks.iter().all(Option::is_none) && self.cpu_hooks.is_empty()
