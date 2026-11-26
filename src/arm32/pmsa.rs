@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(pmsa.check(0x103f, 1, Access::Write, true, false, 0), Ok(()));
         assert_eq!(
             pmsa.check(0x103f, 2, Access::Read, true, false, 0),
-            Err(Fault::Permission)
+            Err(Fault::Background)
         );
         pmsa.access(Register::Base(Some(1)), Some(0x1000));
         pmsa.access(Register::Limit(Some(1)), Some(0x1001));
