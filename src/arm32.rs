@@ -136,6 +136,22 @@ mod tests {
     }
 
     #[test]
+    fn arm_auxiliary_registers_remain_distinct_after_snapshot_restore() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        assert_eq!(cpu.monitor_system_register("ACTLR", Some(2)).unwrap(), None);
+        assert_eq!(cpu.monitor_system_register("HACTLR", Some(4)).unwrap(), None);
+
+        let mut snapshot = Vec::new();
+        cpu.save_snapshot(&mut snapshot).unwrap();
+        let mut restored = Cpu::new(Profile::RealTimeV8);
+        let version = crate::snapshot::arm32_version(crate::snapshot::ARM32_MAGIC).unwrap();
+        restored.load_snapshot(&mut snapshot.as_slice(), version).unwrap();
+
+        assert_eq!(restored.monitor_system_register("ACTLR", None).unwrap(), Some(2));
+        assert_eq!(restored.monitor_system_register("HACTLR", None).unwrap(), Some(4));
+    }
+
+    #[test]
     fn arm_mpu_type_registers_encode_their_region_counts_in_distinct_bytes() {
         let mut cpu = Cpu::new(Profile::RealTimeV8);
         cpu.configure_pmsa(12, 16).unwrap();
