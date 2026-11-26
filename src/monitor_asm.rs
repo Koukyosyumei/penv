@@ -154,6 +154,24 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
             | (funct3 << 12) | (andes_register(rd)? << 7) | 0x5b;
         return Ok(format!("{label} .4byte {encoding:#010x}"));
     }
+    let dot = match name {
+        "nds.vd4dots.vv" => Some(4),
+        "nds.vd4dotsu.vv" => Some(5),
+        "nds.vd4dotu.vv" => Some(7),
+        _ => None,
+    };
+    if let Some(function) = dot {
+        let args: Vec<_> = args.split(',').map(str::trim).collect();
+        let (rd, rs1, rs2, unmasked) = match args.as_slice() {
+            [rd, rs1, rs2] => (rd, rs1, rs2, true),
+            [rd, rs1, rs2, "v0.t"] => (rd, rs1, rs2, false),
+            _ => return Err(format!("{name} requires three vector registers and optional v0.t")),
+        };
+        let encoding = (function << 26) | (u32::from(unmasked) << 25)
+            | (andes_vector_register(rs2)? << 20) | (andes_vector_register(rs1)? << 15)
+            | 0x405b | (andes_vector_register(rd)? << 7);
+        return Ok(format!("{label} .4byte {encoding:#010x}"));
+    }
     if matches!(name, "nds.vln8.v" | "nds.vlnu8.v") {
         let args: Vec<_> = args.split(',').map(str::trim).collect();
         let (vd, base, unmasked) = match args.as_slice() {

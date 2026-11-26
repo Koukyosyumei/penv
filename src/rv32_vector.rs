@@ -97,6 +97,64 @@ impl Rv32Vector {
         Ok(())
     }
 
+    pub(crate) fn dot_product(&mut self, insn: u32) -> Option<()> {
+        let (signed_first, signed_second) = match insn >> 26 {
+            4 => (true, true),
+            5 => (true, false),
+            7 => (false, false),
+            _ => return None,
+        };
+        let kind = self.csrs.read(0xc21)?;
+        let sew = (kind >> 3) & 7;
+        if kind & !0xff != 0 || !matches!(sew, 2 | 3) {
+            return None;
+        }
+        let width = 1usize << sew;
+        let rd = ((insn >> 7) & 31) as usize;
+        let rs1 = ((insn >> 15) & 31) as usize;
+        let rs2 = ((insn >> 20) & 31) as usize;
+        let masked = insn & (1 << 25) == 0;
+        let register_bytes = self.csrs.read(0xc22)? as usize;
+        let alignment = match kind & 7 {
+            n @ 0..=3 => 1 << n,
+            5..=7 => 1,
+            _ => return None,
+        };
+        if (masked && rd == 0) || [rd, rs1, rs2].iter().any(|reg| reg % alignment != 0) {
+            return None;
+        }
+        let part_bits = width * 2;
+        let mask = (1 << part_bits) - 1;
+        let unpack = |value: u64, part, signed| {
+            let bits = (value >> (part * part_bits)) & mask;
+            if signed {
+                (bits << (64 - part_bits)) as i64 >> (64 - part_bits)
+            } else {
+                bits as i64
+            }
+        };
+        for lane in self.csrs.read(0x008)? as usize..self.csrs.read(0xc20)? as usize {
+            if masked && self.registers[lane / 8] & (1 << (lane % 8)) == 0 {
+                continue;
+            }
+            let read = |register| {
+                let offset = register * register_bytes + lane * width;
+                let mut bytes = [0; 8];
+                bytes[..width].copy_from_slice(&self.registers[offset..offset + width]);
+                u64::from_le_bytes(bytes)
+            };
+            let (left, right) = (read(rs1), read(rs2));
+            let mut result = read(rd);
+            for part in 0..4 {
+                result = result.wrapping_add((unpack(left, part, signed_first) * unpack(right, part, signed_second)) as u64);
+            }
+            let offset = rd * register_bytes + lane * width;
+            self.registers[offset..offset + width].copy_from_slice(&result.to_le_bytes()[..width]);
+        }
+        self.csrs.write(0x008, 0);
+        Some(())
+    }
+
     pub(crate) fn quad_mac(&mut self, insn: u32, scalar: u32) -> Option<()> {
         let form = (insn >> 12) & 7;
         let (signed_first, signed_second) = match (insn >> 26, form) {
