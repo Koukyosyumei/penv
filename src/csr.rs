@@ -2,7 +2,7 @@ use crate::{
     andes_csr::AndesCsrs,
     clint::{SOFTWARE, TIMER},
     pmp::Pmp,
-    vector_bootstrap::VectorBootstrap,
+    rv32_vector::Rv32Vector,
 };
 
 const MIE: u32 = 1 << 3;
@@ -149,7 +149,7 @@ pub struct Csr {
     pub f_extension: bool,
     pub d_extension: bool,
     pub fcsr: u8,
-    vector_bootstrap: Option<VectorBootstrap>,
+    pub(crate) vector_bootstrap: Option<Rv32Vector>,
     counters: Counters,
     user_supported: bool,
     pmp: Option<Box<Pmp>>,
@@ -374,24 +374,32 @@ impl Csr {
         self.f_extension && self.status & FS != 0
     }
 
+    pub(crate) fn vectors_active(&self) -> bool {
+        self.status & VS != 0
+    }
+
+    pub(crate) fn vectors_dirty(&mut self) {
+        self.status |= VS;
+    }
+
     pub fn floating_dirty(&mut self) {
         self.status |= FS;
     }
 
     pub fn enable_vector_bootstrap(&mut self) {
-        self.vector_bootstrap = Some(VectorBootstrap::default());
+        self.vector_bootstrap = Rv32Vector::new(1024);
     }
 
     pub(crate) fn monitor_vector_register(&mut self, address: u32, value: Option<u64>) -> Result<Option<u64>, String> {
         let vector = self.vector_bootstrap.as_mut().ok_or("vector register requires vector support")?;
         if let Some(value) = value {
             let value = u32::try_from(value).map_err(|_| "vector register value exceeds RV32 width")?;
-            if !vector.write(address, value) {
+            if !vector.csrs.write(address, value) {
                 return Err("vector register is read-only".into());
             }
             Ok(None)
         } else {
-            Ok(vector.read(address).map(u64::from))
+            Ok(vector.csrs.read(address).map(u64::from))
         }
     }
 
@@ -409,7 +417,7 @@ impl Csr {
         if self.status & VS == 0 {
             return None;
         }
-        let length = self.vector_bootstrap.as_mut()?.configure(insn, avl, kind)?;
+        let length = self.vector_bootstrap.as_mut()?.csrs.configure(insn, avl, kind)?;
         self.status |= VS;
         Some(length)
     }
@@ -622,7 +630,7 @@ impl Csr {
     fn read(&self, address: u32) -> Option<u32> {
         Some(match address {
             0x008..=0x00a | 0x00f | 0xc20..=0xc22 if self.status & VS != 0 => {
-                return self.vector_bootstrap.as_ref()?.read(address);
+                return self.vector_bootstrap.as_ref()?.csrs.read(address);
             }
             0x001 if self.floating_enabled() => u32::from(self.fcsr & 31),
             0x002 if self.floating_enabled() => u32::from(self.fcsr >> 5),
@@ -722,7 +730,7 @@ impl Csr {
                     .andes
                     .as_ref()
                     .and_then(|andes| andes.read(address))
-                    .or_else(|| self.pmp.as_ref()?.read(address));
+                    .or_else(|| self.pmp.as_ref()?.csrs.read(address));
             }
         })
     }

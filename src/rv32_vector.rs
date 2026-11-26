@@ -25,6 +25,15 @@ impl Rv32Vector {
         })
     }
 
+    pub(crate) fn set_length(&mut self, bits: u64) -> Result<(), &'static str> {
+        if u64::from(self.csrs.read(0xc22).unwrap()) * 8 == bits {
+            return Ok(());
+        }
+        self.csrs.set_length(bits)?;
+        self.registers = vec![0; (32 * bits / 8) as usize];
+        Ok(())
+    }
+
     /// Execute a plain unit-stride VLE/VSE. The caller checks VS and supplies
     /// normal translated guest memory access, propagating the original fault.
     /// A value of None requests a load and Some(value) requests a store.

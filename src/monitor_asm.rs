@@ -154,6 +154,20 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
             | (funct3 << 12) | (andes_register(rd)? << 7) | 0x5b;
         return Ok(format!("{label} .4byte {encoding:#010x}"));
     }
+    if matches!(name, "nds.vln8.v" | "nds.vlnu8.v") {
+        let args: Vec<_> = args.split(',').map(str::trim).collect();
+        let (vd, base, unmasked) = match args.as_slice() {
+            [vd, base] => (vd, base, true),
+            [vd, base, "v0.t"] => (vd, base, false),
+            _ => return Err(format!("{name} requires a vector register, a base address and optional v0.t")),
+        };
+        let base = base.strip_prefix('(').and_then(|base| base.strip_suffix(')'))
+            .ok_or("expected a parenthesized Andes vector load base register")?;
+        let encoding = 0x0820_405b | (u32::from(name == "nds.vlnu8.v") << 20)
+            | (u32::from(unmasked) << 25) | (andes_register(base)? << 15)
+            | (andes_vector_register(vd)? << 7);
+        return Ok(format!("{label} .4byte {encoding:#010x}"));
+    }
     if matches!(name, "nds.vfwcvt.s.bf16" | "nds.vfncvt.bf16.s") {
         let (rd, source) = args.split_once(',')
             .ok_or_else(|| format!("{name} requires two vector registers"))?;

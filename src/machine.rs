@@ -820,7 +820,7 @@ impl Machine {
         let available = [
             ("+m", hart.csr.m_extension), ("+a", hart.csr.a_extension),
             ("+c", hart.csr.c_extension), ("+f", hart.csr.f_extension),
-            ("+d", hart.csr.d_extension), ("+zba", hart.bitmanip.zba),
+            ("+d", hart.csr.d_extension), ("+v", hart.bitmanip.xandesvsintload), ("+zba", hart.bitmanip.zba),
             ("+zbb", hart.bitmanip.zbb), ("+zbc", hart.bitmanip.zbc),
             ("+zbs", hart.bitmanip.zbs), ("+zicond", hart.zicond),
             ("+zacas", hart.zacas),
@@ -2966,6 +2966,47 @@ impl Hart {
             ..self.bitmanip
         };
         let result = match insn & 0x7f {
+            0x07 | 0x27 if bitmanip.xandesvsintload && matches!(funct3, 0 | 5 | 6) => {
+                if !self.csr.vectors_active() {
+                    return Err(illegal());
+                }
+                let mut vector = self.csr.vector_bootstrap.take().ok_or_else(illegal)?;
+                let result = vector.transfer(insn, a, |address, width, value| {
+                    if let Some(value) = value {
+                        self.store(bus, address, width, value, output)?;
+                        return Ok(0);
+                    }
+                    match width {
+                        1 => self.load::<1>(bus, address),
+                        2 => self.load::<2>(bus, address),
+                        4 => self.load::<4>(bus, address),
+                        _ => unreachable!(),
+                    }
+                });
+                self.csr.vector_bootstrap = Some(vector);
+                self.csr.vectors_dirty();
+                result.map_err(|error| match error {
+                    crate::rv32_vector::TransferError::Illegal => illegal(),
+                    crate::rv32_vector::TransferError::Memory(error) => error,
+                })?;
+                None
+            }
+            0x5b if bitmanip.xandesvsintload && matches!(insn & 0xfdf0_707f, 0x0820_405b | 0x0830_405b) => {
+                if !self.csr.vectors_active() {
+                    return Err(illegal());
+                }
+                let mut vector = self.csr.vector_bootstrap.take().ok_or_else(illegal)?;
+                let result = vector.andes_int4_load(insn, a, |address| {
+                    self.load::<1>(bus, address).map(|byte| byte as u8)
+                });
+                self.csr.vector_bootstrap = Some(vector);
+                self.csr.vectors_dirty();
+                result.map_err(|error| match error {
+                    crate::rv32_vector::TransferError::Illegal => illegal(),
+                    crate::rv32_vector::TransferError::Memory(error) => error,
+                })?;
+                None
+            }
             0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => self
                 .floating_instruction(insn, bus, output)
                 .map_err(|fault| {

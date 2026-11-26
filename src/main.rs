@@ -179,6 +179,7 @@ mod uart;
 mod uart_check;
 mod uart_transcript;
 mod uart_trigger;
+mod rv32_vector;
 mod vector_bootstrap;
 mod veml7700;
 mod zephyr_boot;
