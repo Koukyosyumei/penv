@@ -803,6 +803,9 @@ impl Machine {
             return Ok(Some(u64::from(thumb.xpsr())));
         }
         if let Some(thumb) = hart.thumb.as_mut() {
+            if thumb.thumb2 && let Some(result) = thumb.monitor_fp_register(&register, value) {
+                return result;
+            }
             let system = match register.as_str() {
                 "apsr" => Some(0),
                 "ipsr" => Some(5),

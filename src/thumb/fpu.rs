@@ -76,6 +76,60 @@ impl Thumb {
         Ok(())
     }
 
+    pub(crate) fn monitor_fp_register(
+        &mut self,
+        register: &str,
+        value: Option<u64>,
+    ) -> Option<Result<Option<u64>, String>> {
+        if register == "fpscr" {
+            return Some(match value {
+                Some(value) => u32::try_from(value)
+                    .map(|value| {
+                        self.fpscr = value;
+                        None
+                    })
+                    .map_err(|_| "FPSCR value exceeds 32 bits".into()),
+                None => Ok(Some(u64::from(self.fpscr))),
+            });
+        }
+        let (prefix, index) = register.split_at_checked(1)?;
+        let index = index.parse::<usize>().ok()?;
+        match prefix {
+            "s" => {
+                let bits = self.fp.get_mut(index)?;
+                Some(match value {
+                    Some(value) => u32::try_from(value)
+                        .map(|value| {
+                            *bits = value;
+                            None
+                        })
+                        .map_err(|_| "single-precision register value exceeds 32 bits".into()),
+                    None => Ok(Some(u64::from(*bits))),
+                })
+            }
+            "d" if index < self.fp.len() / 2 => {
+                let index = index * 2;
+                Some(match value {
+                    Some(value) => {
+                        self.fp[index] = value as u32;
+                        self.fp[index + 1] = (value >> 32) as u32;
+                        Ok(None)
+                    }
+                    None => Ok(Some(
+                        u64::from(self.fp[index]) | (u64::from(self.fp[index + 1]) << 32),
+                    )),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn expand_fp_immediate(high: u32, low: u32) -> u32 {
+        let imm = ((high & 15) << 4) | (low & 15);
+        let exponent = if imm & 0x40 == 0 { 128 } else { 124 };
+        ((imm & 0x80) << 24) | ((exponent + ((imm >> 4) & 3)) << 23) | ((imm & 15) << 19)
+    }
+
     fn fp_round_kind(high: u32, low: u32) -> Option<(u32, bool)> {
         if !matches!(low & 0xf50, 0xa40 | 0xb40) {
             return None;
@@ -290,6 +344,14 @@ impl Thumb {
             } else {
                 self.fp[sn] = r[rt];
             }
+        } else if self.armv81m && high & 0xffb0 == 0xeeb0 && low & 0xfe0 == 0xb00 {
+            let destination = (low >> 12) as usize * 2 + (((high >> 6) & 1) as usize * 32);
+            if destination >= self.fp.len() {
+                return Ok(false);
+            }
+            let bits = f64::from(f32::from_bits(Self::expand_fp_immediate(high, low))).to_bits();
+            self.fp[destination] = bits as u32;
+            self.fp[destination + 1] = (bits >> 32) as u32;
         } else if low & 0x110 == 0 {
             let a = f32::from_bits(self.fp[sn]);
             let b = f32::from_bits(self.fp[sm]);
@@ -307,13 +369,7 @@ impl Thumb {
                 0xee90 => (-a).mul_add(b, -acc).to_bits(),
                 0xeea0 if subtract => (-a).mul_add(b, acc).to_bits(),
                 0xeea0 => a.mul_add(b, acc).to_bits(),
-                0xeeb0 if low & 0xe0 == 0 => {
-                    let imm = ((high & 15) << 4) | (low & 15);
-                    let exponent = if imm & 0x40 == 0 { 128 } else { 124 };
-                    ((imm & 0x80) << 24)
-                        | ((exponent + ((imm >> 4) & 3)) << 23)
-                        | ((imm & 15) << 19)
-                }
+                0xeeb0 if low & 0xe0 == 0 => Self::expand_fp_immediate(high, low),
                 0xeeb0 if subtract => match (high & 15, low & 0x80 != 0) {
                     (0, false) => self.fp[sm],
                     (0, true) => self.fp[sm] & 0x7fff_ffff,
