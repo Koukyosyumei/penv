@@ -740,6 +740,8 @@ enum Action {
     ReadCpuPc(String),
     AssertCpuValue(String, Option<String>, u64),
     CpuRegister(String, String, Option<u64>),
+    ArmSystemRegister(String, String, Option<u64>),
+    ArmExceptionState(String, bool),
     ExecutionMode(String, Option<bool>),
     AddCpuHook(String, Option<u32>, CpuHook),
     PeripheralLog(String, i8),
@@ -1012,6 +1014,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(..) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
+                    | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                     | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_) | Action::PeripheralLog(..)
@@ -1841,6 +1844,17 @@ fn run_commands<'a>(
                     }
                     Ok(None)
                 })
+            }
+            Action::ArmSystemRegister(cpu, register, value) => {
+                if let Some(value) = machine.monitor_arm_system_register(cpu, register, *value)? {
+                    writeln!(output.reply(), "0x{value:x}").map_err(|error| error.to_string())?;
+                }
+                Ok(None)
+            }
+            Action::ArmExceptionState(cpu, security) => {
+                let state = machine.monitor_arm_exception_state(cpu, *security)?;
+                writeln!(output.reply(), "{state}").map_err(|error| error.to_string())?;
+                Ok(None)
             }
             // Synchronous script actions run at completed instruction boundaries.
             Action::SynchroniseQuantum => Ok(None),
@@ -5879,13 +5893,23 @@ fn execute(
                 None,
             ))
         }
-        [target, "SP", value @ ..]
+        [target, "GetSystemRegisterValue", register] | [target, "SetSystemRegisterValue", register, _] => {
+            let value = words.get(3).map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
+            Some(Action::ArmSystemRegister(
+                resolve(target)?.trim_start_matches("sysbus.").into(),
+                unquote(resolve(register)?).into(), value,
+            ))
+        }
+        [target, property @ ("ExceptionLevel" | "SecurityState")] => {
+            Some(Action::ArmExceptionState(resolve(target)?.trim_start_matches("sysbus.").into(), *property == "SecurityState"))
+        }
+        [target, property @ ("SP" | "CPSR"), value @ ..]
             if (boot.started || boot.has_platform()) && value.len() <= 1 =>
         {
             let value = value.first()
                 .map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
             Some(Action::CpuRegister(
-                resolve(target)?.trim_start_matches("sysbus.").into(), "sp".into(), value,
+                resolve(target)?.trim_start_matches("sysbus.").into(), (*property).into(), value,
             ))
         }
         [target, "ResetVector", value @ ..]
@@ -6155,7 +6179,7 @@ fn execute(
                         | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                         | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                        | Action::CpuRegister(..)
+                        | Action::CpuRegister(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)
                         | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..)

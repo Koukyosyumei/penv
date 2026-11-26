@@ -19,6 +19,7 @@ const FLAGS: u32 = N | Z | C | V;
 pub(crate) enum Profile {
     Application,
     RealTime,
+    RealTimeV8,
 }
 
 #[cfg(test)]
@@ -92,6 +93,7 @@ impl Profile {
         match self {
             Self::Application => "armv7a-none-eabi",
             Self::RealTime => "armv7r-none-eabi",
+            Self::RealTimeV8 => "armv8r-none-eabi",
         }
     }
 }
@@ -101,6 +103,120 @@ struct Bank {
     sp: u32,
     lr: u32,
     spsr: u32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TimerChannel {
+    compare: u64,
+    control: u32,
+    interrupt: Option<usize>,
+}
+
+impl TimerChannel {
+    fn expired(&self, count: u64) -> bool {
+        count >= self.compare
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct GenericTimer {
+    frequency: u32,
+    counter_frequency_register: u32,
+    virtual_offset: u64,
+    channels: [TimerChannel; 3],
+}
+
+impl GenericTimer {
+    pub(crate) fn new(
+        frequency: u32,
+        counter_frequency_register: u32,
+        interrupts: [Option<usize>; 3],
+    ) -> Self {
+        Self {
+            frequency,
+            counter_frequency_register,
+            virtual_offset: 0,
+            channels: interrupts.map(|interrupt| TimerChannel {
+                interrupt,
+                ..TimerChannel::default()
+            }),
+        }
+    }
+
+    fn physical_count(&self, ns: u128) -> u64 {
+        (ns.saturating_mul(u128::from(self.frequency)) / 1_000_000_000) as u64
+    }
+
+    fn count(&self, ns: u128, channel: usize) -> u64 {
+        let physical = self.physical_count(ns);
+        if channel == 1 {
+            physical.wrapping_sub(self.virtual_offset)
+        } else {
+            physical
+        }
+    }
+
+    fn read32(&self, key: u32, ns: u128) -> Option<u32> {
+        if key == 0x000e_0000 {
+            return Some(self.counter_frequency_register);
+        }
+        let (index, control) = Self::decode32(key)?;
+        let channel = &self.channels[index];
+        let count = self.count(ns, index);
+        Some(if control {
+            channel.control | (u32::from(channel.control & 1 != 0 && channel.expired(count)) << 2)
+        } else {
+            channel.compare.wrapping_sub(count) as u32
+        })
+    }
+
+    fn write32(&mut self, key: u32, ns: u128, value: u32) -> bool {
+        if key == 0x000e_0000 {
+            self.counter_frequency_register = value;
+            return true;
+        }
+        let Some((index, control)) = Self::decode32(key) else {
+            return false;
+        };
+        let count = self.count(ns, index);
+        let channel = &mut self.channels[index];
+        if control {
+            channel.control = value & 3;
+        } else {
+            channel.compare = count.wrapping_add_signed(i64::from(value as i32));
+        }
+        true
+    }
+
+    fn decode32(key: u32) -> Option<(usize, bool)> {
+        let channel = match key & !0x20 {
+            0x000e_0002 => 0,
+            0x000e_0003 => 1,
+            0x008e_0002 => 2,
+            _ => return None,
+        };
+        Some((channel, key & 0x20 != 0))
+    }
+
+    fn read64(&self, operation: u32, ns: u128) -> Option<u64> {
+        Some(match operation {
+            0 | 1 => self.count(ns, operation as usize),
+            2 | 3 => self.channels[(operation - 2) as usize].compare,
+            4 => self.virtual_offset,
+            6 => self.channels[2].compare,
+            _ => return None,
+        })
+    }
+
+    fn write64(&mut self, operation: u32, value: u64) -> bool {
+        match operation {
+            2 | 3 => self.channels[(operation - 2) as usize].compare = value,
+            4 => self.virtual_offset = value,
+            6 => self.channels[2].compare = value,
+            _ => return false,
+        }
+        true
+    }
 }
 
 #[derive(Clone)]
@@ -113,6 +229,10 @@ pub(crate) struct Cpu {
     fiq_high: [u32; 5],
     sctlr: u32,
     vbar: u32,
+    hsctlr: u32,
+    hvbar: u32,
+    hcr: u32,
+    pub(crate) timer: Option<GenericTimer>,
 }
 
 impl Cpu {
@@ -121,18 +241,88 @@ impl Cpu {
         thumb.thumb2 = true;
         Self {
             profile,
-            cpsr: 0x1d3,
+            cpsr: if matches!(profile, Profile::RealTimeV8) {
+                0x1da
+            } else {
+                0x1d3
+            },
             thumb,
             banks: [Bank::default(); 8],
             shared_high: [0; 5],
             fiq_high: [0; 5],
             sctlr: 0,
             vbar: 0,
+            hsctlr: 0,
+            hvbar: 0,
+            hcr: 0,
+            timer: None,
         }
     }
 
     pub(crate) fn cpsr(&self) -> u32 {
         self.cpsr
+    }
+
+    pub(crate) fn is_v8r(&self) -> bool {
+        matches!(self.profile, Profile::RealTimeV8)
+    }
+
+    pub(crate) fn monitor_exception_level(&self) -> &'static str {
+        match self.cpsr & 31 {
+            0x10 => "EL0_UserMode",
+            0x1a => "EL2_HypervisorMode",
+            0x16 => "EL3_MonitorMode",
+            _ => "EL1_SupervisorMode",
+        }
+    }
+
+    pub(crate) fn monitor_system_register(
+        &mut self,
+        name: &str,
+        value: Option<u64>,
+    ) -> Result<Option<u64>, String> {
+        let key = match name.to_ascii_lowercase().as_str() {
+            "sctlr" => 0x0001_0000,
+            "vbar" => 0x000c_0000,
+            "hsctlr" => 0x0081_0000,
+            "hvbar" => 0x008c_0000,
+            "hcr" => 0x0081_0021,
+            "rvbar" if self.is_v8r() => {
+                return if value.is_none() {
+                    Ok(Some(0))
+                } else {
+                    Err("RVBAR is read-only".into())
+                };
+            }
+            _ => return Err(format!("unknown AArch32 system register {name:?}")),
+        };
+        self.access_cp15(
+            key,
+            value
+                .map(u32::try_from)
+                .transpose()
+                .map_err(|_| "system register value exceeds 32 bits")?,
+        )
+        .map(|reply| reply.map(u64::from))
+        .ok_or_else(|| format!("unknown AArch32 system register {name:?}"))
+    }
+
+    fn access_cp15(&mut self, key: u32, value: Option<u32>) -> Option<Option<u32>> {
+        let v8r = self.is_v8r();
+        let (register, mask) = match key {
+            0x0001_0000 => (&mut self.sctlr, u32::MAX),
+            0x000c_0000 => (&mut self.vbar, !31),
+            0x0081_0000 if v8r => (&mut self.hsctlr, u32::MAX),
+            0x008c_0000 if v8r => (&mut self.hvbar, !31),
+            0x0081_0021 if v8r => (&mut self.hcr, u32::MAX),
+            _ => return None,
+        };
+        if let Some(value) = value {
+            *register = value & mask;
+            Some(None)
+        } else {
+            Some(Some(*register))
+        }
     }
 
     fn bank_for(status: u32) -> Option<usize> {
@@ -455,6 +645,21 @@ impl Cpu {
         output: &mut impl Write,
     ) -> Result<Step, String> {
         bus.refresh_arm_gic_inputs();
+        let timer_now = self
+            .timer
+            .as_ref()
+            .map(|_| bus.monitor_time_ns(bus.uart_clock_step));
+        if let (Some(timer), Some(now), Some(gic)) = (&self.timer, timer_now, &mut bus.arm_gic) {
+            for (index, channel) in timer.channels.iter().enumerate() {
+                if let Some(interrupt) = channel.interrupt {
+                    gic.set_private(
+                        slot,
+                        interrupt,
+                        channel.control == 1 && channel.expired(timer.count(now, index)),
+                    );
+                }
+            }
+        }
         if self.cpsr & I == 0
             && bus.arm_gic.as_ref().is_some_and(|gic| {
                 gic.highest_pending(slot, None) != crate::arm_gic::SPURIOUS_INTERRUPT
@@ -530,24 +735,60 @@ impl Cpu {
             let rn = ((instruction >> 16) & 15) as usize;
             let rd = ((instruction >> 12) & 15) as usize;
             match instruction {
-                _ if instruction & 0x0f00_0f10 == 0x0e00_0f10 => {
-                    let key = instruction & 0x00ef_00ef;
-                    let register = match key {
-                        0x0001_0000 => Some(&mut self.sctlr),
-                        0x000c_0000 => Some(&mut self.vbar),
-                        _ => None,
-                    };
-                    if let Some(register) = register.filter(|_| self.cpsr & 31 != 0x10 && rd != 15)
-                    {
+                _ if instruction & 0x0fe0_0f0f == 0x0c40_0f0e => {
+                    let operation = (instruction >> 4) & 15;
+                    let handled = if self.cpsr & 31 == 0x10 || rd == 15 || rn == 15 || rd == rn {
+                        false
+                    } else if let (Some(timer), Some(now)) = (&mut self.timer, timer_now) {
                         if instruction & (1 << 20) != 0 {
-                            registers[rd] = *register;
-                        } else {
-                            *register = registers[rd];
-                            if key == 0x000c_0000 {
-                                *register &= !31;
+                            if let Some(value) = timer.read64(operation, now) {
+                                registers[rd] = value as u32;
+                                registers[rn] = (value >> 32) as u32;
+                                true
+                            } else {
+                                false
                             }
+                        } else {
+                            let value = u64::from(registers[rd]) | (u64::from(registers[rn]) << 32);
+                            timer.write64(operation, value)
                         }
                     } else {
+                        false
+                    };
+                    if !handled {
+                        next = self.undefined(address.wrapping_add(4), registers);
+                    }
+                }
+                _ if instruction & 0x0f00_0f10 == 0x0e00_0f10 => {
+                    let key = instruction & 0x00ef_00ef;
+                    let write = instruction & (1 << 20) == 0;
+                    let permitted = rd != 15
+                        && self.cpsr & 31 != 0x10
+                        && (key & (1 << 23) == 0 || self.cpsr & 31 == 0x1a);
+                    if permitted
+                        && let Some(reply) = self.access_cp15(key, write.then_some(registers[rd]))
+                    {
+                        if let Some(value) = reply {
+                            registers[rd] = value;
+                        }
+                    } else if !self
+                        .timer
+                        .as_mut()
+                        .zip(timer_now)
+                        .is_some_and(|(timer, now)| {
+                            if !permitted {
+                                return false;
+                            }
+                            if instruction & (1 << 20) == 0 {
+                                timer.write32(key, now, registers[rd])
+                            } else if let Some(value) = timer.read32(key, now) {
+                                registers[rd] = value;
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                    {
                         next = self.undefined(address.wrapping_add(4), registers);
                     }
                 }

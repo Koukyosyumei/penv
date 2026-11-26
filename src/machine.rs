@@ -681,6 +681,17 @@ impl Machine {
         Ok(self.named_hart(name)?.program_counter())
     }
 
+    pub(crate) fn monitor_arm_system_register(&mut self, cpu: &str, register: &str, value: Option<u64>) -> Result<Option<u64>, String> {
+        self.named_hart(cpu)?.arm32.as_mut().ok_or("system register requires an AArch32 CPU")?
+            .monitor_system_register(register, value)
+    }
+
+    pub(crate) fn monitor_arm_exception_state(&mut self, cpu: &str, security: bool) -> Result<&'static str, String> {
+        let cpu = self.named_hart(cpu)?.arm32.as_ref().filter(|cpu| cpu.is_v8r())
+            .ok_or("exception state requires a Cortex-R52 CPU")?;
+        Ok(if security { "NonSecure" } else { cpu.monitor_exception_level() })
+    }
+
     pub(crate) fn monitor_named_register(
         &mut self, name: &str, register: &str, value: Option<u64>,
     ) -> Result<Option<u64>, String> {
@@ -3120,6 +3131,15 @@ impl Hart {
         value: Option<u32>,
     ) -> Result<Option<u32>, String> {
         if let Some(cpu) = &mut self.arm32 {
+            let index = if cpu.is_v8r() {
+                match index {
+                    100..=115 => index - 100,
+                    125 => 25,
+                    index => index,
+                }
+            } else {
+                index
+            };
             if index == 25 {
                 if let Some(value) = value {
                     cpu.set_cpsr(value, &mut self.registers)?;

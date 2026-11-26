@@ -1,22 +1,24 @@
 use super::{Entry, keys, map_pl011, multi_registration, number, object_fields};
 use crate::{
     arm_gic::{Gic, Version, Window, WindowKind},
-    arm32::{Cpu, Profile},
+    arm32::{Cpu, GenericTimer, Profile},
     machine::Machine,
 };
 
 pub(super) fn matches(entries: &[Entry]) -> bool {
-    entries
-        .iter()
-        .any(|entry| matches!(entry.model.as_str(), "CPU.ARMv7A" | "CPU.ARMv7R"))
+    entries.iter().any(is_cpu)
+}
+
+fn is_cpu(entry: &Entry) -> bool {
+    matches!(
+        entry.model.as_str(),
+        "CPU.ARMv7A" | "CPU.ARMv7R" | "CPU.ARMv8R"
+    )
 }
 
 pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine, String> {
     let mut machine = Machine::without_default_ram();
-    let cpus: Vec<_> = entries
-        .iter()
-        .filter(|entry| matches!(entry.model.as_str(), "CPU.ARMv7A" | "CPU.ARMv7R"))
-        .collect();
+    let cpus: Vec<_> = entries.iter().filter(|entry| is_cpu(entry)).collect();
     if cpus.len() > crate::machine::MAX_HARTS {
         return Err("too many ARMv7 CPUs".into());
     }
@@ -64,7 +66,8 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
             ("CPU.ARMv7R", "cortex-r4" | "cortex-r5" | "cortex-r7" | "cortex-r8") => {
                 Profile::RealTime
             }
-            _ => return Err(entry.error("unsupported ARMv7 CPU type")),
+            ("CPU.ARMv8R", "cortex-r52") if controller.is_some() => Profile::RealTimeV8,
+            _ => return Err(entry.error("unsupported AArch32 CPU type")),
         };
         let cpu = machine.hart_mut(hart);
         cpu.name = Some(entry.name.clone());
@@ -74,12 +77,13 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
     let mut mapped = false;
     for entry in entries {
         match entry.model.as_str() {
-            "CPU.ARMv7A" | "CPU.ARMv7R" => {}
+            "CPU.ARMv7A" | "CPU.ARMv7R" | "CPU.ARMv8R" => {}
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
                 map_memory(&mut machine, entry)?;
                 mapped = true;
             }
             "UART.PL011" => map_pl011(entry, controller, &mut machine.bus)?,
+            "Timers.ARM_GenericTimer" => map_timer(&mut machine, entry, controller, &affinities)?,
             "IRQControllers.ARM_GenericInterruptController" => {
                 map_gic(&mut machine, entry, &affinities)?
             }
@@ -90,6 +94,79 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
         return Err("ARMv7 platform has no mapped RAM".into());
     }
     Ok(machine)
+}
+
+fn map_timer(
+    machine: &mut Machine,
+    entry: &Entry,
+    controller: Option<&Entry>,
+    affinities: &[u32],
+) -> Result<(), String> {
+    let parent = entry
+        .registration
+        .as_deref()
+        .ok_or_else(|| entry.error("generic timer requires a CPU"))?;
+    let slot = machine
+        .bus
+        .scoped_cpu_index(parent)
+        .map_err(|error| entry.error(&error))?;
+    let mut frequency = None;
+    let mut default_frequency = None;
+    let mut interrupts = [None; 3];
+    for (_, line) in &entry.body {
+        if let Some((signal, destination)) = line.split_once("->") {
+            let channel = match signal.trim() {
+                "EL1PhysicalTimerIRQ" => 0,
+                "EL1VirtualTimerIRQ" => 1,
+                "NonSecureEL2PhysicalTimerIRQ" => 2,
+                _ => return Err(entry.error("unsupported generic timer output")),
+            };
+            let (target, input) = destination
+                .trim()
+                .split_once('@')
+                .ok_or_else(|| entry.error("timer output requires a GIC interrupt"))?;
+            let (name, affinity) = target
+                .split_once('#')
+                .ok_or_else(|| entry.error("timer interrupt requires a CPU affinity"))?;
+            let affinity = number(affinity.trim()).map_err(|error| entry.error(&error))?;
+            let input = number(input.trim()).map_err(|error| entry.error(&error))?;
+            if !controller.is_some_and(|controller| controller.name == name.trim())
+                || affinities.get(slot) != Some(&affinity)
+                || !(16..32).contains(&input)
+                || interrupts[channel].replace(input as usize).is_some()
+            {
+                return Err(entry.error("invalid generic timer interrupt connection"));
+            }
+            continue;
+        }
+        let (key, value) = line
+            .split_once(':')
+            .ok_or_else(|| entry.error("invalid generic timer property"))?;
+        let value = number(value.trim()).map_err(|error| entry.error(&error))?;
+        match key.trim() {
+            "frequency" if frequency.is_none() && value != 0 => frequency = Some(value),
+            "defaultCounterFrequencyRegister" if default_frequency.is_none() => {
+                default_frequency = Some(value)
+            }
+            _ => return Err(entry.error("unsupported or duplicate generic timer property")),
+        }
+    }
+    let frequency =
+        frequency.ok_or_else(|| entry.error("generic timer requires a positive frequency"))?;
+    let cpu = machine
+        .hart_mut(slot)
+        .arm32
+        .as_mut()
+        .ok_or_else(|| entry.error("generic timer requires an AArch32 CPU"))?;
+    if cpu.timer.is_some() {
+        return Err(entry.error("CPU already has a generic timer"));
+    }
+    cpu.timer = Some(GenericTimer::new(
+        frequency,
+        default_frequency.unwrap_or(0),
+        interrupts,
+    ));
+    Ok(())
 }
 
 fn map_gic(machine: &mut Machine, entry: &Entry, affinities: &[u32]) -> Result<(), String> {
