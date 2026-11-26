@@ -40,6 +40,22 @@ impl RiscvMachineTimer {
         self.interrupt_pending()
     }
 
+    pub(crate) fn quiet_steps(&self, rate: u32) -> u64 {
+        if self.interrupt_pending() {
+            return 0;
+        }
+        let ticks_until_compare = u128::from(self.compare - self.time);
+        let units = (ticks_until_compare * u128::from(rate)).saturating_sub(u128::from(self.fractional_ticks));
+        let steps = units.div_ceil(u128::from(self.frequency)).saturating_sub(1);
+        u64::try_from(steps).unwrap_or(u64::MAX)
+    }
+
+    pub(crate) fn advance_quiet(&mut self, rate: u32, steps: u64) {
+        let units = u128::from(self.fractional_ticks) + u128::from(self.frequency) * u128::from(steps);
+        self.time = self.time.wrapping_add((units / u128::from(rate)) as u64);
+        self.fractional_ticks = (units % u128::from(rate)) as u64;
+    }
+
     pub fn interrupt_pending(&self) -> bool {
         self.time >= self.compare
     }
@@ -85,6 +101,20 @@ impl RiscvMachineTimer {
 #[cfg(test)]
 mod tests {
     use super::RiscvMachineTimer;
+
+    #[test]
+    fn quiet_advance_preserves_fraction_and_stops_before_the_interrupt() {
+        let mut timer = RiscvMachineTimer::new(0, 0, true, 3);
+        timer.write(8, 8, 13).unwrap();
+        assert!(!timer.tick(7));
+        let quiet = timer.quiet_steps(7);
+        assert_eq!(quiet, 29);
+        timer.advance_quiet(7, quiet);
+        assert_eq!(timer.time(), 12);
+        assert!(!timer.interrupt_pending());
+        assert!(timer.tick(7));
+        assert_eq!(timer.time(), 13);
+    }
 
     #[test]
     fn split_register_access_preserves_other_half_and_sets_interrupt_at_compare() {

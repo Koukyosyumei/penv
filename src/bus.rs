@@ -5984,6 +5984,33 @@ impl Bus {
         }
     }
 
+    pub(crate) fn egis_quiet_steps(&mut self, now: u64, budget: u64) -> u64 {
+        if self.andes_reset_requested.is_some() || self.clint.is_some() || self.has_litex_irq()
+            || self.nvic.is_some() || self.uart.is_some() || self.timer.is_some()
+            || !self.ethernet.is_empty() || self.has_rv64_ethernet_link()
+            || self.andes_watchdogs.iter().any(|watchdog| watchdog.can_advance())
+            || self.andes_pit.iter().any(|pit| pit.can_advance())
+            || self.andes_rtc.iter().any(|rtc| rtc.can_advance())
+            || self.tick_plic() != 0
+        {
+            return 0;
+        }
+        let rate = self.step_hz();
+        let quiet_timer = self.riscv_machine_timer.as_ref().map_or(0, |timer| timer.quiet_steps(rate));
+        let quiet_uart = self.scheduled_ns16550_input.front().map_or(u64::MAX, |(deadline, _)| {
+            deadline.saturating_sub(now).saturating_sub(1)
+        });
+        budget.min(quiet_timer).min(quiet_uart)
+    }
+
+    pub(crate) fn advance_egis_quiet_steps(&mut self, steps: u64) -> Option<u64> {
+        let rate = self.step_hz();
+        self.h7_step = self.h7_step.wrapping_add(steps);
+        let timer = self.riscv_machine_timer.as_mut()?;
+        timer.advance_quiet(rate, steps);
+        timer.time_provider.then(|| timer.time())
+    }
+
     pub(crate) fn tick_andes_clocked_devices(&mut self) {
         let rate = self.step_hz();
         if let Some(timer) = &mut self.riscv_machine_timer {

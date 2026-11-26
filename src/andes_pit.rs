@@ -124,6 +124,10 @@ impl AndesPit {
         self.frequency = frequency;
     }
 
+    pub(crate) fn can_advance(&self) -> bool {
+        self.enable != 0
+    }
+
     pub fn tick(&mut self, steps_per_second: u32) {
         if self.enable == 0 {
             return;

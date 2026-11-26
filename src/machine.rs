@@ -1878,6 +1878,19 @@ impl Machine {
         Ok(false)
     }
 
+    fn egis_quiet_steps(&mut self, remaining: u64) -> u64 {
+        if remaining <= 1 || !self.is_egis_platform() || !self.primary.waiting_for_interrupt
+            || self.primary.monitor_paused || self.primary.csr.has_injected_interrupts()
+            || !self.secondary.is_empty() || self.pc_trace.is_some() || self.profile.is_some()
+            || !self.replay.is_empty() || !self.inputs.is_empty() || !self.reset_steps.is_empty()
+            || !self.button_events.is_empty() || !self.adc_events.is_empty() || !self.adxl_events.is_empty()
+            || !self.uart_device_events.is_empty() || self.frame_wait_trigger.is_some()
+        {
+            return 0;
+        }
+        self.bus.egis_quiet_steps(self.elapsed_steps, remaining)
+    }
+
     fn run_selected<W: Write>(
         &mut self,
         limit: u64,
@@ -1912,7 +1925,22 @@ impl Machine {
         }
         let mut retired = 0;
         let ethernet_link = self.bus.has_rv64_ethernet_link();
-        for _ in 0..limit {
+        let mut remaining = limit;
+        while remaining != 0 {
+            let quiet = if selected.is_none() { self.egis_quiet_steps(remaining) } else { 0 };
+            if quiet != 0 {
+                let timer = self.bus.advance_egis_quiet_steps(quiet);
+                self.elapsed_steps = self.elapsed_steps.wrapping_add(quiet);
+                self.time_source.grant_until(self.time_source.elapsed().saturating_add(quiet));
+                self.bus.uart_clock_step = self.elapsed_steps;
+                self.primary.csr.advance_sleep_counters(quiet, Some(timer.unwrap_or(self.elapsed_steps)));
+                remaining -= quiet;
+                if matched(&self.bus, output) {
+                    return Ok((Stop::OutputMatch, retired));
+                }
+                continue;
+            }
+            remaining -= 1;
             while self
                 .replay
                 .front()

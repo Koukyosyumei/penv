@@ -61,6 +61,10 @@ impl AndesRtc {
         }
     }
 
+    pub(crate) fn can_advance(&self) -> bool {
+        self.control & 1 != 0
+    }
+
     pub fn tick(&mut self, rate: u32) {
         if self.control & 1 == 0 {
             return;

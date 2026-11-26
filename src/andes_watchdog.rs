@@ -127,6 +127,10 @@ impl AndesWatchdog {
         self.frequency = frequency;
     }
 
+    pub(crate) fn can_advance(&self) -> bool {
+        self.control & Self::ENABLE != 0 && (!self.elapsed || self.reset_armed)
+    }
+
     pub fn tick(&mut self, rate: u32) -> bool {
         if self.control & Self::ENABLE == 0 || (self.elapsed && !self.reset_armed) {
             return false;
