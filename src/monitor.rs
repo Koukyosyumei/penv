@@ -3896,6 +3896,12 @@ fn execute(
         boot.quantum = Some(quantum);
         return Ok(());
     }
+    if let ["allowPrivates", allowed] = words
+        && !boot.started && boot.runtime.is_empty()
+    {
+        boot.session.allow_privates = parse_tester_bool(resolve(allowed)?)?;
+        return Ok(());
+    }
     let action = match words {
         ["DescribeMonitorSnapshotPlatform"] => Some(Action::DescribeSnapshotPlatform),
         ["pause" | "p"] => Some(Action::SetEmulationPaused(true)),
