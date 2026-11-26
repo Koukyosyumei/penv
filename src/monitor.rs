@@ -747,6 +747,8 @@ enum Action {
     CpuSecurityState(String, bool),
     CpuPreserveFp(String),
     CpuFpuEnabled(String, Option<bool>),
+    CpuMpuBackground(String, Option<bool>),
+    CpuTranslateAddress(String, u32, bool, bool),
     CpuSau(String, String, Option<u32>),
     CpuNonsecureVectorTable(String, u32),
     NvicLockup(String, bool),
@@ -1246,6 +1248,36 @@ fn run_commands<'a>(
                     writeln!(output.reply(), "{}", if nvic.fpu_access() { "True" } else { "False" })
                         .map_err(|error| error.to_string())?;
                 }
+                Ok(None)
+            }
+            Action::CpuMpuBackground(cpu, enabled) => {
+                machine.cortex_m_cpu(cpu)?;
+                let nvic = machine.bus.nvic.as_mut().ok_or("CPU has no configurable MPU")?;
+                let background = nvic.mpu_privileged_background(*enabled)?;
+                if enabled.is_none() {
+                    writeln!(output.reply(), "{}", if background { "True" } else { "False" })
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(None)
+            }
+            Action::CpuTranslateAddress(cpu, address, write, execute) => {
+                let unprivileged = machine.cortex_m_cpu(cpu)?.unprivileged();
+                let nvic = machine.bus.nvic.as_ref().ok_or("CPU has no NVIC")?;
+                let private = (0xe000_0000..0xe010_0000).contains(address);
+                let allowed = if unprivileged && private {
+                    *write && *address == 0xe000_ef00 && nvic.user_can_pend_interrupt()
+                } else {
+                    nvic.thumb_mpu_permits(*address, 1, *write, *execute, unprivileged, false)
+                };
+                if unprivileged && private && !allowed {
+                    let message = format!("{cpu}: Using incorrect MMU mode for translation of address 0x{address:08X}, current MMU mode is 1, mapping is for MMU mode 0");
+                    crate::monitor_log::record(2, &message);
+                    if machine.bus.monitor_log_enabled(2) {
+                        eprintln!("{message}");
+                    }
+                }
+                let translated = if allowed { *address } else { u32::MAX };
+                writeln!(output.reply(), "0x{translated:08X}").map_err(|error| error.to_string())?;
                 Ok(None)
             }
             Action::CpuSecurityState(cpu, secure) => {
@@ -5798,6 +5830,14 @@ fn execute(
             resolve(target)?.trim_start_matches("sysbus.").into(),
             values.first().map(|value| parse_tester_bool(resolve(value)?)).transpose()?,
         )),
+        [target, "MPUPrivdefena", values @ ..] if values.len() <= 1 => Some(Action::CpuMpuBackground(
+            resolve(target)?.trim_start_matches("sysbus.").into(),
+            values.first().map(|value| parse_tester_bool(resolve(value)?)).transpose()?,
+        )),
+        [target, "TranslateAddress", address, access @ ("Read" | "Write" | "Execute")] => Some(Action::CpuTranslateAddress(
+            resolve(target)?.trim_start_matches("sysbus.").into(),
+            crate::parse_address(resolve(address)?)?, *access == "Write", *access == "Execute",
+        )),
         [target, "SecureState", value] => Some(Action::CpuSecurityState(
             resolve(target)?.trim_start_matches("sysbus.").into(), parse_tester_bool(resolve(value)?)?,
         )),
@@ -5865,6 +5905,7 @@ fn execute(
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
                         | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuFpuEnabled(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
+                        | Action::CpuMpuBackground(..) | Action::CpuTranslateAddress(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)
                         | Action::AssertCpuValue(..)

@@ -2376,8 +2376,14 @@ fn load_platform(
         }
         machine
             .bus
-            .map_nrf_nvic(priority.unwrap_or(if cortex_m4f { 0xe0 } else { 0xc0 }), uart_irq, cortex_m4f)
+            .map_nrf_nvic(priority.unwrap_or(if cortex_m4f { 0xe0 } else { 0xc0 }), uart_irq,
+                cortex_m4f && stm32f4_rcc.is_none())
             .map_err(|e| entry.error(&e))?;
+        if cortex_m4f && stm32f4_rcc.is_some() {
+            let nvic = machine.bus.nvic.as_mut().unwrap();
+            nvic.enable_fpu();
+            nvic.configure_mpu(8);
+        }
         machine
             .bus
             .nvic

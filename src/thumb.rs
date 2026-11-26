@@ -47,6 +47,7 @@ struct SecurityBank {
     msp: u32,
     psp: u32,
     thread_uses_psp: bool,
+    thread_unprivileged: bool,
     interrupts_masked: bool,
     faultmask: bool,
     basepri: u8,
@@ -87,6 +88,7 @@ pub struct Thumb {
     instruction_lockup: bool,
     branch_exception: bool,
     thread_uses_psp: bool,
+    thread_unprivileged: bool,
     msp: u32,
     psp: u32,
 }
@@ -145,7 +147,8 @@ impl Thumb {
             u64::from(self.active_exception), u64::from(self.interrupts_masked), sleep,
             u64::from(self.event), self.system_pending, u64::from(self.invalid_thumb_state),
             u64::from(self.locked_up), u64::from(self.instruction_lockup), u64::from(self.branch_exception),
-            u64::from(self.thread_uses_psp), u64::from(self.msp), u64::from(self.psp),
+            u64::from(self.thread_uses_psp) | (u64::from(self.thread_unprivileged) << 1),
+            u64::from(self.msp), u64::from(self.psp),
         ])?;
         write_words(output, &self.fp.map(u64::from))?;
         write_words(output, &self.pending.map(u64::from))?;
@@ -185,7 +188,11 @@ impl Thumb {
         self.locked_up = read_bool(lockup)?;
         self.instruction_lockup = read_bool(instruction_lockup)?;
         self.branch_exception = read_bool(branch_exception)?;
-        self.thread_uses_psp = read_bool(use_psp)?;
+        if use_psp > 3 {
+            return Err(invalid("invalid Cortex-M CONTROL snapshot"));
+        }
+        self.thread_uses_psp = use_psp & 1 != 0;
+        self.thread_unprivileged = use_psp & 2 != 0;
         self.msp = word(msp)?;
         self.psp = word(psp)?;
         for state in &mut self.fp {
@@ -238,6 +245,7 @@ impl Thumb {
                 msp,
                 psp,
                 thread_uses_psp: self.thread_uses_psp,
+                thread_unprivileged: self.thread_unprivileged,
                 interrupts_masked: self.interrupts_masked,
                 faultmask: self.faultmask,
                 basepri: self.basepri,
@@ -246,6 +254,7 @@ impl Thumb {
             self.msp = bank.msp;
             self.psp = bank.psp;
             self.thread_uses_psp = bank.thread_uses_psp;
+            self.thread_unprivileged = bank.thread_unprivileged;
             self.interrupts_masked = bank.interrupts_masked;
             self.faultmask = bank.faultmask;
             self.basepri = bank.basepri;
@@ -477,6 +486,10 @@ impl Thumb {
         self.thread_uses_psp = use_psp;
     }
 
+    pub(crate) fn unprivileged(&self) -> bool {
+        self.active_exception == 0 && self.thread_unprivileged
+    }
+
     pub(crate) fn system_read(&self, register: u32, r: &[u32; 32]) -> Option<u32> {
         let ipsr = u32::from(self.active_exception);
         Some(match register {
@@ -504,7 +517,8 @@ impl Thumb {
             16 => u32::from(self.interrupts_masked),
             17 if self.thumb2 => u32::from(self.basepri),
             19 if self.thumb2 => self.faultmask.into(),
-            20 => (u32::from(self.fp_active) << 2) | (u32::from(self.uses_psp()) << 1),
+            20 => (u32::from(self.fp_active) << 2) | (u32::from(self.uses_psp()) << 1)
+                | u32::from(self.thread_unprivileged),
             _ => return None,
         })
     }
@@ -528,6 +542,9 @@ impl Thumb {
             19 if self.thumb2 => self.faultmask = value & 1 != 0,
             20 => {
                 self.select_thread_stack(value & 2 != 0, r);
+                if !self.unprivileged() {
+                    self.thread_unprivileged = value & 1 != 0;
+                }
                 if self.thumb2 {
                     self.fp_active = value & 4 != 0;
                 }
@@ -1528,9 +1545,29 @@ impl Thumb {
             let fault_pc = *pc;
             let fault_itstate = self.itstate;
             bus.thumb_negative_priority = self.faultmask || matches!(self.active_exception, NMI | HARDFAULT);
+            bus.thumb_unprivileged = self.unprivileged();
             bus.execute_thumb_block_hook(false, *pc, self.itstate)?;
             let step = bus.thumb_fetch(*pc).map_err(InstructionError::Host)
                 .and_then(|instruction| self.step_fetched(instruction, pc, r, bus, output));
+            if let Some((address, execute)) = bus.take_thumb_mpu_fault() {
+                const MEMMANAGE: u8 = 4;
+                self.itstate = fault_itstate;
+                let nvic = bus.nvic.as_mut().ok_or("MPU fault requires NVIC")?;
+                nvic.record_memory_fault(address, execute);
+                if bus.thumb_negative_priority {
+                    nvic.enter_lockup();
+                    *pc = self.lockup();
+                } else {
+                    let exception = if nvic.fault_enabled(MEMMANAGE) && self.can_take_sync_exception(MEMMANAGE, nvic) {
+                        MEMMANAGE
+                    } else {
+                        nvic.force_hard_fault()
+                    };
+                    bus.thumb_negative_priority = exception == HARDFAULT;
+                    *pc = self.exception_entry(exception, fault_pc, r, bus)?;
+                }
+                return Ok(ThumbStep::Exception);
+            }
             if let Some(address) = bus.take_thumb_data_fault() {
                 const BUSFAULT: u8 = 5;
                 self.itstate = fault_itstate;

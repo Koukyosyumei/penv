@@ -968,9 +968,6 @@ impl Machine {
         &mut self, name: &str, single_step: Option<bool>,
     ) -> Result<bool, String> {
         let hart = self.named_hart(name)?;
-        if hart.thumb.is_some() {
-            return Err("unsupported monitor ExecutionMode for Cortex-M".into());
-        }
         if let Some(single_step) = single_step {
             hart.monitor_single_step = single_step;
         }
@@ -2139,7 +2136,7 @@ impl Machine {
             let mut remaining = count;
             let mut missed = 0;
             while remaining != 0 {
-                match self.run(1, output)? {
+                match self.run_selected(1, Some(0), output, |_, _| false)? {
                     (Stop::Limit, 1) => {
                         remaining -= 1;
                         missed = 0;

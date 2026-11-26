@@ -124,6 +124,7 @@ pub struct Nvic {
     cpacr: u32,
     fault_enables: u32,
     cfsr: u32,
+    memory_fault_address: u32,
     hfsr: u32,
     mpu: Option<Mpu>,
     cache_selector: u32,
@@ -141,6 +142,40 @@ struct Mpu {
 }
 
 impl Mpu {
+    fn permits(&self, address: u32, width: usize, write: bool, execute: bool, unprivileged: bool, negative_priority: bool) -> bool {
+        if self.enabled & 1 == 0 || negative_priority && self.enabled & 2 == 0 {
+            return true;
+        }
+        (0..width).all(|offset| {
+            let Some(address) = address.checked_add(offset as u32) else { return false };
+            if (0xe000_0000..0xe010_0000).contains(&address) {
+                return !unprivileged && !execute;
+            }
+            for &[base, attrs] in self.regions[..usize::from(self.count)].iter().rev() {
+                let size_field = (attrs >> 1) & 31;
+                if attrs & 1 == 0 || size_field < 4 {
+                    continue;
+                }
+                let size = 1u64 << (size_field + 1);
+                let aligned = u64::from(base) & !(size - 1);
+                let offset = u64::from(address).wrapping_sub(aligned);
+                if offset >= size || size >= 256 && attrs & (1 << (8 + offset / (size / 8))) != 0 {
+                    continue;
+                }
+                return (!execute || attrs & (1 << 28) == 0) && match (attrs >> 24) & 7 {
+                    1 => !unprivileged,
+                    2 => !unprivileged || !write,
+                    3 => true,
+                    5 => !unprivileged && !write,
+                    6 | 7 => !write,
+                    _ => false,
+                };
+            }
+            !unprivileged && self.enabled & 4 != 0
+                && (!execute || address < 0x4000_0000 || (0x6000_0000..0xa000_0000).contains(&address))
+        })
+    }
+
     fn region(&self, offset: u32) -> Option<usize> {
         let alias = ((offset - 0xd9c) / 8) as u8;
         let region = if alias == 0 {
@@ -209,6 +244,7 @@ impl Nvic {
             cpacr: 0,
             fault_enables: 0,
             cfsr: 0,
+            memory_fault_address: 0,
             hfsr: 0,
             mpu: None,
             cache_selector: 0,
@@ -218,7 +254,7 @@ impl Nvic {
         }
     }
 
-    pub const RANGES: [(u32, u32); 12] = [
+    pub const RANGES: [(u32, u32); 13] = [
         (ENABLE, PRIORITY_END + 1),
         (VTOR, VTOR + 4),
         (AIRCR, AIRCR + 4),
@@ -227,6 +263,7 @@ impl Nvic {
         (BASE + 0xf34, BASE + 0xf38),
         (CPACR, CPACR + 4),
         (BASE + 0xd24, BASE + 0xd30),
+        (BASE + 0xd34, BASE + 0xd38),
         (BASE + 0xd90, BASE + 0xdbc),
         (BASE + 0xd78, BASE + 0xd88),
         (BASE + 0xf50, BASE + 0xf78),
@@ -261,7 +298,7 @@ impl Nvic {
             u64::from(self.active_system), u64::from(self.debug_status), u64::from(self.fpcar),
             u64::from(self.lazy_fp_full_frame), u64::from(self.bus_fault_status),
             u64::from(self.bus_fault_address), u64::from(self.ccr), u64::from(self.cpacr),
-            u64::from(self.fault_enables), u64::from(self.cfsr), u64::from(self.hfsr),
+            u64::from(self.fault_enables), u64::from(self.cfsr) | (u64::from(self.memory_fault_address) << 32), u64::from(self.hfsr),
             u64::from(self.cache_selector), u64::from(self.demcr), u64::from(self.mpu.is_some()), u64::from(self.nrf_mpu.is_some()),
         ])?;
         write_words(output, &self.enabled.map(u64::from))?;
@@ -310,7 +347,8 @@ impl Nvic {
         self.ccr = word(ccr)?;
         self.cpacr = word(cpacr)?;
         self.fault_enables = word(fault_enable)?;
-        self.cfsr = word(cfsr)?;
+        self.cfsr = cfsr as u32;
+        self.memory_fault_address = (cfsr >> 32) as u32;
         self.hfsr = word(hfsr)?;
         self.cache_selector = word(cache)?;
         self.demcr = word(demcr)?;
@@ -462,6 +500,19 @@ impl Nvic {
         }
     }
 
+    pub(crate) fn record_memory_fault(&mut self, address: u32, execute: bool) {
+        if execute {
+            self.cfsr |= 1;
+        } else {
+            self.cfsr |= (1 << 1) | (1 << 7);
+            self.memory_fault_address = address;
+        }
+    }
+
+    pub(crate) fn user_can_pend_interrupt(&self) -> bool {
+        self.ccr & 2 != 0
+    }
+
     pub fn set_hard_fault_pending(&mut self, pending: bool) {
         self.set_hardfault_pending(pending);
     }
@@ -544,10 +595,23 @@ impl Nvic {
         width: usize,
         write: bool,
         execute: bool,
+        unprivileged: bool,
+        negative_priority: bool,
     ) -> bool {
         self.nrf_mpu
             .as_ref()
             .is_none_or(|mpu| mpu.permits(address, width, write, execute))
+            && self.mpu.as_ref().is_none_or(|mpu| {
+                mpu.permits(address, width, write, execute, unprivileged, negative_priority)
+            })
+    }
+
+    pub(crate) fn mpu_privileged_background(&mut self, enabled: Option<bool>) -> Result<bool, String> {
+        let mpu = self.mpu.as_mut().ok_or("CPU has no configurable MPU")?;
+        if let Some(enabled) = enabled {
+            mpu.enabled = (mpu.enabled & !4) | (u32::from(enabled) << 2);
+        }
+        Ok(mpu.enabled & 4 != 0)
     }
 
     pub fn configure_mpu(&mut self, count: u8) {
@@ -817,6 +881,9 @@ impl Nvic {
             if address == BASE + 0xd38 {
                 return Some(self.bus_fault_address);
             }
+            if address == BASE + 0xd34 {
+                return Some(self.memory_fault_address);
+            }
             if address == BASE + 0xd28 {
                 return Some(self.bus_fault_status | self.cfsr);
             }
@@ -976,6 +1043,10 @@ impl Nvic {
         if width == 4 && address == BASE + 0xd28 {
             self.cfsr &= !value;
             self.bus_fault_status &= !value;
+            return true;
+        }
+        if width == 4 && address == BASE + 0xd34 {
+            self.memory_fault_address = value;
             return true;
         }
         if width == 4 && address == BASE + 0xd2c {

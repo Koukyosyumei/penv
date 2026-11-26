@@ -447,6 +447,7 @@ pub struct Bus {
     ram_io_logs: Vec<RamIoRead>,
     faulting_peripherals: Vec<FaultingPeripheral>,
     thumb_data_fault: Option<u32>,
+    thumb_mpu_fault: Option<(u32, bool)>,
     pub thumb_negative_priority: bool,
     pub thumb_unprivileged: bool,
     pub fault_on_unmapped_thumb_data: bool,
@@ -3877,6 +3878,9 @@ impl Bus {
     }
 
     pub(crate) fn named_word_register(&self, name: &str, offset: u32) -> Option<u32> {
+        if let Ok(address) = self.nvic_register_address(name, offset) {
+            return Some(address);
+        }
         let name = name.strip_prefix("sysbus.").unwrap_or(name);
         if let Some(watchdog) = self.andes_watchdogs.iter().find(|watchdog| watchdog.name == name) {
             return (offset < crate::andes_watchdog::AndesWatchdog::SIZE).then(|| watchdog.base + offset);
@@ -7367,11 +7371,25 @@ impl Bus {
         if self
             .nvic
             .as_ref()
-            .is_some_and(|nvic| !nvic.thumb_mpu_permits(address, width, write, execute))
+            .is_some_and(|nvic| !nvic.thumb_mpu_permits(
+                address, width, write, execute, self.thumb_unprivileged, self.thumb_negative_priority,
+            ))
         {
             return Err(format!("Cortex-M MPU denied access at {address:#010x}"));
         }
         Ok(())
+    }
+
+    fn check_thumb_instruction_access(
+        &mut self, address: u32, width: usize, write: bool, execute: bool,
+    ) -> Result<(), String> {
+        self.check_thumb_access(address, width, write, execute).inspect_err(|_| {
+            self.thumb_mpu_fault = Some((address, execute));
+        })
+    }
+
+    pub(crate) fn take_thumb_mpu_fault(&mut self) -> Option<(u32, bool)> {
+        self.thumb_mpu_fault.take()
     }
 
     fn check_thumb_bus_context(&self, address: u32, width: usize) -> Result<(), String> {
@@ -7422,16 +7440,16 @@ impl Bus {
         Ok(false)
     }
 
-    pub fn thumb_fetch(&self, address: u32) -> Result<u32, String> {
+    pub fn thumb_fetch(&mut self, address: u32) -> Result<u32, String> {
         self.check_thumb_bus_context(address, 2)?;
-        self.check_thumb_access(address, 2, false, true)?;
+        self.check_thumb_instruction_access(address, 2, false, true)?;
         self.read_ram::<2>(address)
             .map_err(|error| error.to_string())
     }
 
     pub fn thumb_read<const N: usize>(&mut self, address: u32) -> Result<u32, String> {
         self.check_thumb_bus_context(address, N)?;
-        self.check_thumb_access(address, N, false, false)?;
+        self.check_thumb_instruction_access(address, N, false, false)?;
         if N == 4
             && address == crate::nvic::DHCSR
             && self.nvic.as_ref().is_some_and(Nvic::has_debug_status)
@@ -7462,7 +7480,7 @@ impl Bus {
         uart: &mut impl Write,
     ) -> Result<(), String> {
         self.check_thumb_bus_context(address, width)?;
-        self.check_thumb_access(address, width, true, false)?;
+        self.check_thumb_instruction_access(address, width, true, false)?;
         if address as usize & (width - 1) != 0
             && self.nvic.as_ref().is_some_and(Nvic::allows_unaligned_data)
             && let Ok(bytes) = self.memory(address, width)
