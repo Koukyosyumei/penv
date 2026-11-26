@@ -2988,7 +2988,10 @@ pub fn serve(
                     }
                 }
             }
-            (Err(error), _) if session.python.is_some() && error.starts_with("unsupported monitor command ") => {
+            (Err(error), _) if session.python.is_some()
+                && (error.starts_with("unsupported monitor command ")
+                    || error == "commands after start are unsupported in a boot script") =>
+            {
                 match session.execute_named_python(machine, text, path, root) {
                     Ok(Some(reply)) => frame(&mut output, "OK", reply.as_bytes()),
                     Ok(None) => frame(&mut output, "UNSUPPORTED", error.as_bytes()),
