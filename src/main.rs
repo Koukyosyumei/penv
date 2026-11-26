@@ -190,6 +190,7 @@ pub mod time_source;
 mod tmp108;
 pub mod type_extensions;
 pub mod tracked_register_bytes;
+mod miv;
 mod uart;
 mod uart_check;
 mod uart_transcript;

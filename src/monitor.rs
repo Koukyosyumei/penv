@@ -768,6 +768,7 @@ enum Action {
     WriteBytes(u32, Vec<u8>),
     Button(String, bool),
     ButtonPulse(String),
+    ToggleButton(String),
     UnregisterGpio(String),
     NvicGpio(String, u8, bool),
     NvicPending(String, u32),
@@ -1842,6 +1843,10 @@ fn run_commands<'a>(
             Action::ButtonPulse(name) => machine
                 .external_event(ExternalEvent::Button(name.clone(), true))
                 .and_then(|()| machine.external_event(ExternalEvent::Button(name.clone(), false)))
+                .map(|()| None),
+            Action::ToggleButton(name) => machine.bus
+                .set_miv_button(name, crate::litex_panel::ButtonAction::Toggle)
+                .or_else(|_| machine.bus.set_litex_button(name, crate::litex_panel::ButtonAction::Toggle))
                 .map(|()| None),
             Action::NvicGpio(target, line, high) => machine
                 .bus
@@ -5741,6 +5746,7 @@ fn execute(
             Some(Action::UnregisterGpio(resolve(target)?.to_owned()))
         }
         [device, "PressAndRelease"] => Some(Action::ButtonPulse(resolve(device)?.to_owned())),
+        [device, "Toggle"] if boot.started => Some(Action::ToggleButton(resolve(device)?.to_owned())),
         [device, state @ ("Press" | "Release")] => Some(Action::Button(
             resolve(device)?.to_owned(),
             *state == "Press",

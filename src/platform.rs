@@ -630,6 +630,8 @@ fn load_platform(
     let mut riscv_machine_timer = None;
     let mut andes_pits = Vec::new();
     let mut andes_gpios = Vec::new();
+    let mut miv_gpios = Vec::new();
+    let mut miv_timers = Vec::new();
     let mut andes_watchdogs = Vec::new();
     let mut andes_spis = Vec::new();
     let mut andes_rtcs = Vec::new();
@@ -694,7 +696,7 @@ fn load_platform(
             continue;
         }
         if entry.model.is_empty() && entry.registration.is_none()
-            && andes_gpios.iter().any(|gpio: &&Entry| gpio.name == entry.name)
+            && andes_gpios.iter().chain(&miv_gpios).any(|gpio: &&Entry| gpio.name == entry.name)
         {
             continue;
         }
@@ -835,6 +837,7 @@ fn load_platform(
             "Miscellaneous.LED" | "Miscellaneous.Button" if !cortex_m => panel_parts.push(entry),
             "GPIOPort.LiteX_GPIO" => litex_gpios.push(entry),
             "Timers.AndesATCPIT100" => andes_pits.push(entry),
+            "Timers.MiV_CoreTimer" => miv_timers.push(entry),
             "Timers.AndesATCRTC100" => andes_rtcs.push(entry),
             "Miscellaneous.EgisET171_SMU2" | "Miscellaneous.EgisET171_Crypto" => {
                 keys(entry, &[])?;
@@ -853,6 +856,7 @@ fn load_platform(
             }
             "Timers.AndesATCWDT200_Watchdog" => andes_watchdogs.push(entry),
             "GPIOPort.AndesATCGPIO100" => andes_gpios.push(entry),
+            "GPIOPort.MiV_CoreGPIO" => miv_gpios.push(entry),
             "Timers.RiscVMachineTimer" => {
                 if riscv_machine_timer.replace(entry).is_some() {
                     return Err(entry.error("only one RISC-V machine timer is supported"));
@@ -3557,6 +3561,78 @@ fn load_platform(
                 entry.model == "Network.LiteX_Ethernet_CSR32",
             )
             .map_err(|e| entry.error(&e))?;
+    }
+    let miv_interrupt = |entry: &Entry, destination: &str, bus: &Bus| {
+        let (target, source) = destination.trim().split_once('@')
+            .ok_or_else(|| entry.error("expected Mi-V PLIC interrupt destination"))?;
+        let source = number(source.trim()).map_err(|error| entry.error(&error))?;
+        let (_, sources) = plic_config.filter(|(plic, _)| plic.name == target.trim())
+            .ok_or_else(|| entry.error("unknown Mi-V PLIC destination"))?;
+        if !(1..=sources).contains(&source) {
+            return Err(entry.error("invalid Mi-V PLIC source"));
+        }
+        let index = bus.plic_index(target.trim()).ok_or_else(|| entry.error("unmapped Mi-V PLIC"))?;
+        Ok((index, source))
+    };
+    for entry in miv_timers {
+        let mut frequency = None;
+        let mut irq = None;
+        for (_, line) in &entry.body {
+            if let Some((pin, target)) = line.split_once("->")
+                && matches!(pin.trim(), "" | "IRQ") && irq.is_none()
+            {
+                irq = Some(miv_interrupt(entry, target, &machine.bus)?);
+            } else if let Some(value) = line.strip_prefix("clockFrequency:") && frequency.is_none() {
+                frequency = Some(number(value.trim()).map_err(|error| entry.error(&error))?);
+            } else {
+                return Err(entry.error("invalid Mi-V timer declaration"));
+            }
+        }
+        let frequency = frequency.filter(|frequency| *frequency != 0)
+            .ok_or_else(|| entry.error("Mi-V timer requires a positive clockFrequency"))?;
+        let timer = crate::miv::Timer::new(entry.address()?, u64::from(frequency), irq);
+        machine.bus.map_miv_timer(timer).map_err(|error| entry.error(&error))?;
+    }
+    for entry in miv_gpios {
+        let parts = take_gpio_parts(&mut panel_parts, &entry.name);
+        let overlays = entries.iter().filter(|other| other.name == entry.name && other.model.is_empty());
+        let mut wires = Vec::new();
+        let mut irq = None;
+        for declaration in std::iter::once(entry).chain(overlays) {
+            for (_, line) in &declaration.body {
+                let (pin, target) = line.split_once("->")
+                    .ok_or_else(|| declaration.error("expected Mi-V GPIO wire"))?;
+                if matches!(pin.trim(), "" | "IRQ") && irq.is_none() {
+                    irq = Some(miv_interrupt(declaration, target, &machine.bus)?);
+                } else if let Some((led, "0")) = target.trim().split_once('@') {
+                    wires.push((irq_index(pin, 32).map_err(|error| declaration.error(&error))?, led));
+                } else {
+                    return Err(declaration.error("invalid Mi-V GPIO wire"));
+                }
+            }
+        }
+        let base = entry.address()?;
+        machine.bus.map_miv_gpio(crate::miv::Gpio::new(base, irq)).map_err(|error| entry.error(&error))?;
+        for part in parts {
+            let pin = gpio_attachment(part, entry, 32)?;
+            if part.model == "Miscellaneous.Button" {
+                let button = parse_gpio_button(part, entry, pin)?;
+                machine.bus.attach_miv_button(format!("{}.{}", entry.name, part.name), base, button);
+            } else {
+                if !wires.contains(&(pin, part.name.as_str())) {
+                    return Err(part.error("Mi-V LED requires a GPIO wire"));
+                }
+                let fields = keys(part, &["invert"])?;
+                let invert = match fields.as_slice() {
+                    [] => false,
+                    [("invert", value)] => boolean_value(value).ok_or_else(|| part.error("invalid LED invert value"))?,
+                    _ => return Err(part.error("invalid LED properties")),
+                };
+                let mut led = GpioLed::new(part.name.clone(), pin, invert);
+                led.parent = Some(entry.name.clone());
+                machine.bus.add_gpio_led(base, led);
+            }
+        }
     }
     for gpio in litex_gpios {
         let parts = take_gpio_parts(&mut panel_parts, &gpio.name);

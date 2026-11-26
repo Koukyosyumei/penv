@@ -460,6 +460,9 @@ pub struct Bus {
     named_stm32_gpios: Vec<(String, u32)>,
     pub uart: Option<MuraxUart>,
     miv_uart: Option<crate::uart::MiVUart>,
+    miv_gpios: Vec<crate::miv::Gpio>,
+    miv_timers: Vec<crate::miv::Timer>,
+    miv_buttons: Vec<(String, usize, crate::litex_panel::Button)>,
     ns16550: Option<Ns16550>,
     ns16550_name: Option<String>,
     scheduled_ns16550_input: std::collections::VecDeque<(u64, Vec<u8>)>,
@@ -3212,6 +3215,11 @@ impl Bus {
         if self.andes_gpio.iter().any(|gpio| overlaps_range(start, end, gpio.base, crate::andes_gpio::AndesGpio::SIZE)) {
             return true;
         }
+        if self.miv_gpios.iter().any(|gpio| overlaps_range(start, end, gpio.base, crate::miv::Gpio::SIZE))
+            || self.miv_timers.iter().any(|timer| overlaps_range(start, end, timer.base, crate::miv::Timer::SIZE))
+        {
+            return true;
+        }
         if self.andes_pit.iter().any(|pit| overlaps_range(start, end, pit.base, crate::andes_pit::AndesPit::SIZE)) {
             return true;
         }
@@ -3646,6 +3654,36 @@ impl Bus {
             return Err("invalid or overlapping Mi-V UART".into());
         }
         self.miv_uart = Some(crate::uart::MiVUart::new(base, name.to_owned()));
+        Ok(())
+    }
+
+    pub(crate) fn map_miv_gpio(&mut self, gpio: crate::miv::Gpio) -> Result<(), String> {
+        self.check_peripheral_range(gpio.base, crate::miv::Gpio::SIZE)?;
+        self.miv_gpios.push(gpio);
+        Ok(())
+    }
+
+    pub(crate) fn map_miv_timer(&mut self, timer: crate::miv::Timer) -> Result<(), String> {
+        self.check_peripheral_range(timer.base, crate::miv::Timer::SIZE)?;
+        self.miv_timers.push(timer);
+        Ok(())
+    }
+
+    pub(crate) fn attach_miv_button(&mut self, path: String, base: u32, mut button: crate::litex_panel::Button) {
+        let index = self.miv_gpios.iter().position(|gpio| gpio.base == base)
+            .expect("Mi-V GPIO must be mapped before attaching its button");
+        let level = button.apply(ButtonAction::Release);
+        self.miv_gpios[index].drive_input(button.pin, level);
+        self.miv_buttons.push((path, index, button));
+    }
+
+    pub(crate) fn set_miv_button(&mut self, path: &str, action: ButtonAction) -> Result<(), String> {
+        let path = path.strip_prefix("sysbus.").unwrap_or(path);
+        let (_, index, button) = self.miv_buttons.iter_mut()
+            .find(|(name, _, button)| name == path || button.name == path)
+            .ok_or_else(|| format!("unknown Mi-V GPIO button {path:?}"))?;
+        let level = button.apply(action);
+        self.miv_gpios[*index].drive_input(button.pin, level);
         Ok(())
     }
 
@@ -6433,6 +6471,7 @@ impl Bus {
             || !self.ethernet.is_empty() || self.has_rv64_ethernet_link()
             || self.andes_watchdogs.iter().any(|watchdog| watchdog.can_advance())
             || self.andes_pit.iter().any(|pit| pit.can_advance())
+            || !self.miv_timers.is_empty()
             || self.andes_rtc.iter().any(|rtc| rtc.can_advance())
             || self.tick_plic() != 0
         {
@@ -6456,6 +6495,9 @@ impl Bus {
 
     pub(crate) fn tick_andes_clocked_devices(&mut self) {
         let rate = self.step_hz();
+        for timer in &mut self.miv_timers {
+            timer.tick(rate);
+        }
         if let Some(timer) = &mut self.riscv_machine_timer {
             timer.tick(rate);
         }
@@ -6473,6 +6515,11 @@ impl Bus {
     }
 
     pub fn tick_plic(&mut self) -> u32 {
+        let gpio = self.miv_gpios.iter().filter_map(|device| Some((device.irq?, device.interrupt())));
+        let timers = self.miv_timers.iter().filter_map(|device| Some((device.irq?, device.interrupt())));
+        for ((controller, source), level) in gpio.chain(timers) {
+            self.plics[controller].1.set_line(source, level);
+        }
         if let Some(uart) = self.ns16550.as_ref()
             && let Some(source) = uart.source
             && let Some(plic) = self.plics.first_mut().map(|(_, plic)| plic)
@@ -7643,6 +7690,12 @@ impl Bus {
         {
             return Ok(uart.read(address));
         }
+        if matches!(N, 1 | 4) && let Some(gpio) = self.miv_gpios.iter().find(|gpio| gpio.contains(address)) {
+            return Ok(gpio.read(address));
+        }
+        if N == 4 && let Some(timer) = self.miv_timers.iter().find(|timer| timer.contains(address)) {
+            return Ok(timer.read(address));
+        }
         if matches!(N, 1 | 4)
             && let Some(clic) = self.clic.as_ref()
             && let Some(offset) = clic.offset(address, N)
@@ -8582,6 +8635,19 @@ impl Bus {
                 let console = self.monitor_log_enabled(1);
                 self.observe_uart_output(TesterPort::MiV, &[byte], console);
             }
+            return Ok(());
+        }
+        if matches!(width, 1 | 4) && let Some(gpio) = self.miv_gpios.iter_mut().find(|gpio| gpio.contains(address)) {
+            gpio.write(address, value);
+            let base = gpio.base;
+            let levels = gpio.output();
+            for (_, led) in self.gpio_leds.iter_mut().filter(|(parent, _)| *parent == base) {
+                led.sample_level(levels & (1 << led.pin) != 0, self.led_events);
+            }
+            return Ok(());
+        }
+        if width == 4 && let Some(timer) = self.miv_timers.iter_mut().find(|timer| timer.contains(address)) {
+            timer.write(address, value);
             return Ok(());
         }
         if matches!(width, 1 | 4)
