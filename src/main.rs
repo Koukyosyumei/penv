@@ -39,6 +39,7 @@ pub mod bus_translation;
 pub mod circular_buffer;
 mod clic;
 mod clint;
+mod riscv_machine_timer;
 mod collapsed_profile;
 mod compressed;
 mod constant_mmio;

@@ -588,6 +588,7 @@ fn load_platform(
     let mut cpus = Vec::new();
     let mut external_pmps = HashMap::new();
     let mut clint = None;
+    let mut riscv_machine_timer = None;
     let mut clic = None;
     let mut nvic = None;
     let mut exti = None;
@@ -752,6 +753,11 @@ fn load_platform(
             }
             "Miscellaneous.LED" | "Miscellaneous.Button" if !cortex_m => panel_parts.push(entry),
             "GPIOPort.LiteX_GPIO" => litex_gpios.push(entry),
+            "Timers.RiscVMachineTimer" => {
+                if riscv_machine_timer.replace(entry).is_some() {
+                    return Err(entry.error("only one RISC-V machine timer is supported"));
+                }
+            }
             "Timers.Murax_Timer" => {
                 if timer.replace(entry).is_some() {
                     return Err(entry.error("only one Murax timer is currently supported"));
@@ -2138,7 +2144,8 @@ fn load_platform(
                 ("timeProvider", name)
                     if clint
                         .or(litex_cpu_timer)
-                        .is_some_and(|timer| timer.name == name) => {}
+                        .is_some_and(|timer| timer.name == name)
+                        || riscv_machine_timer.is_some_and(|timer| timer.name == name) => {}
                 ("builtInIrqController", "true" | "false" | "True" | "False")
                     if entry.model == "CPU.VexRiscv" => {}
                 ("allowUnalignedAccesses", "true" | "false" | "True" | "False")
@@ -2501,6 +2508,36 @@ fn load_platform(
         if wires.is_empty() {
             machine.bus.clint.as_mut().unwrap().disconnect_interrupts();
         }
+    }
+    if let Some(entry) = riscv_machine_timer {
+        if configs.len() != 1 || cortex_m {
+            return Err(entry.error("RISC-V machine timer requires a single RISC-V CPU"));
+        }
+        let mut frequency = None;
+        let mut connected = false;
+        let expected = format!("->{}@7", cpu.name);
+        for (_, text) in &entry.body {
+            if let Some(value) = text.strip_prefix("frequency:") && frequency.is_none() {
+                frequency = Some(number(value.trim()).map_err(|error| entry.error(&error))?);
+                continue;
+            }
+            let wire: String = text.chars().filter(|character| !character.is_whitespace()).collect();
+            if connected || wire.strip_prefix("IRQ").unwrap_or(&wire) != expected {
+                return Err(entry.error(&format!("expected machine timer wiring {expected}")));
+            }
+            connected = true;
+        }
+        let frequency = frequency.filter(|frequency| *frequency != 0)
+            .ok_or_else(|| entry.error("machine timer requires a positive frequency"))?;
+        if !connected {
+            return Err(entry.error(&format!("expected machine timer wiring {expected}")));
+        }
+        let time_provider = cpu.body.iter().any(|(_, row)| {
+            row.strip_prefix("timeProvider:").is_some_and(|name| name.trim() == entry.name)
+        });
+        machine.bus.map_riscv_machine_timer(crate::riscv_machine_timer::RiscvMachineTimer::new(
+            entry.address()?, 0, time_provider, frequency,
+        )).map_err(|error| entry.error(&error))?;
     }
     if let Some(entry) = litex_cpu_timer {
         if configs.len() != 1 || clint.is_some() || !uses_vex_irq(cpu) {

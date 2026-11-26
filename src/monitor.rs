@@ -605,6 +605,18 @@ impl BusScalar {
         let address32 = u32::try_from(address)
             .ok()
             .filter(|&address| address.checked_add(width as u32 - 1).is_some());
+        if let Some(address) = address32
+            && width == 8
+            && let Some(timer) = bus.riscv_machine_timer.as_mut()
+        {
+            if let Some(value) = value {
+                if timer.write(address, width, value).is_some() {
+                    return Ok(());
+                }
+            } else if let Some(value) = timer.read(address, width) {
+                return number_mode.print(value, width, output);
+            }
+        }
         if let Some(value) = value {
             return match address32 {
                 Some(address) if width <= 4 => bus

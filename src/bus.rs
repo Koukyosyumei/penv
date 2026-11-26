@@ -558,6 +558,7 @@ pub struct Bus {
     nvic_name: Option<String>,
     external_nvic_levels: u32,
     pub clint: Option<Clint>,
+    pub(crate) riscv_machine_timer: Option<crate::riscv_machine_timer::RiscvMachineTimer>,
     pub(crate) clic: Option<crate::clic::Clic>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
@@ -2965,6 +2966,11 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.riscv_machine_timer.as_ref().is_some_and(|timer| {
+            overlaps_range(start, end, timer.base, crate::riscv_machine_timer::RiscvMachineTimer::SIZE)
+        }) {
+            return true;
+        }
         if self.sifive_gpios.iter().any(|gpio| {
             overlaps_range(start, end, gpio.base, crate::sifive_gpio::SiFiveGpio::SIZE)
         }) {
@@ -3292,6 +3298,21 @@ impl Bus {
                 .aliases
                 .iter()
                 .any(|alias| start < alias.base + alias.length as u64 && alias.base < end)
+    }
+
+    pub(crate) fn map_riscv_machine_timer(
+        &mut self,
+        timer: crate::riscv_machine_timer::RiscvMachineTimer,
+    ) -> Result<(), String> {
+        let start = u64::from(timer.base);
+        let end = start + u64::from(crate::riscv_machine_timer::RiscvMachineTimer::SIZE);
+        if timer.base & 7 != 0 || end > 1 << 32 || self.riscv_machine_timer.is_some()
+            || self.overlaps(start, end)
+        {
+            return Err("invalid or overlapping RISC-V machine timer".into());
+        }
+        self.riscv_machine_timer = Some(timer);
+        Ok(())
     }
 
     pub fn map_clint(&mut self, base: u32, targets: usize) -> Result<(), String> {
@@ -6638,6 +6659,11 @@ impl Bus {
         {
             return Ok(clic.read(offset, N));
         }
+        if N == 4 && let Some(timer) = &self.riscv_machine_timer
+            && let Some(value) = timer.read(address, N)
+        {
+            return Ok(value as u32);
+        }
         if N == 4
             && let Some(clint) = self.clint.as_ref()
             && address & 3 == 0
@@ -7507,6 +7533,11 @@ impl Bus {
             && let Some(offset) = clic.offset(address, width)
         {
             clic.write(offset, width, value);
+            return Ok(());
+        }
+        if width == 4 && let Some(timer) = &mut self.riscv_machine_timer
+            && timer.write(address, width, u64::from(value)).is_some()
+        {
             return Ok(());
         }
         if width == 4

@@ -2777,7 +2777,10 @@ impl Hart {
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));
         }
         let clint = bus.clint.as_mut().map_or(0, |clint| clint.tick(self.slot));
-        let mut pending = clint;
+        let rate = bus.step_hz();
+        let machine_timer_irq = bus.riscv_machine_timer.as_mut()
+            .is_some_and(|timer| self.slot == timer.hart && timer.tick(rate));
+        let mut pending = clint | (u32::from(machine_timer_irq) * crate::clint::TIMER);
         if let Some(clic) = bus.clic.as_mut() {
             clic.sample_clint(clint);
             if self.csr.clic_mode() {
@@ -2804,6 +2807,11 @@ impl Hart {
             .clint
             .as_ref()
             .map_or(elapsed_steps, |clint| clint.time());
+        if let Some(timer) = bus.riscv_machine_timer.as_ref()
+            && timer.time_provider && timer.hart == self.slot
+        {
+            time = timer.time();
+        }
         if let Some(timer) = bus.litex_cpu_timer.as_mut() {
             if timer.tick() {
                 pending |= crate::clint::TIMER;
