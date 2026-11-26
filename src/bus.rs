@@ -465,6 +465,8 @@ pub struct Bus {
     pub uart: Option<MuraxUart>,
     miv_uart: Option<crate::uart::MiVUart>,
     pl011_uarts: Vec<crate::pl011::Pl011>,
+    pub(crate) arm_gic: Option<crate::arm_gic::Gic>,
+    arm_gic_windows: Vec<crate::arm_gic::Window>,
     miv_gpios: Vec<crate::miv::Gpio>,
     miv_timers: Vec<crate::miv::Timer>,
     miv_buttons: Vec<(String, usize, crate::litex_panel::Button)>,
@@ -3390,6 +3392,7 @@ impl Bus {
             || self.pl011_uarts.iter().any(|uart| {
                 overlaps_range(start, end, uart.base, crate::pl011::Pl011::SIZE)
             })
+            || self.arm_gic_windows.iter().any(|window| overlaps_range(start, end, window.base, window.size))
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 uart.bases
                     .iter()
@@ -3769,6 +3772,35 @@ impl Bus {
         }
         self.pl011_uarts.push(uart);
         Ok(())
+    }
+
+    pub(crate) fn map_arm_gic(
+        &mut self, gic: crate::arm_gic::Gic, windows: Vec<crate::arm_gic::Window>,
+    ) -> Result<(), String> {
+        if self.arm_gic.is_some() || windows.is_empty() {
+            return Err("ARM GIC requires a unique instance with bus windows".into());
+        }
+        for (index, window) in windows.iter().enumerate() {
+            self.check_peripheral_range(window.base, window.size)?;
+            let start = u64::from(window.base);
+            let end = start + u64::from(window.size);
+            if window.size == 0 || windows[..index].iter().any(|other| overlaps_range(start, end, other.base, other.size)) {
+                return Err("invalid or overlapping ARM GIC windows".into());
+            }
+        }
+        self.arm_gic = Some(gic);
+        self.arm_gic_windows = windows;
+        Ok(())
+    }
+
+    pub(crate) fn refresh_arm_gic_inputs(&mut self) {
+        if let Some(gic) = &mut self.arm_gic {
+            for uart in &self.pl011_uarts {
+                if let Some(crate::pl011::InterruptRoute::Gic(input)) = uart.irq {
+                    gic.set_shared(usize::from(input), uart.interrupt());
+                }
+            }
+        }
     }
 
     pub(crate) fn map_miv_gpio(&mut self, gpio: crate::miv::Gpio) -> Result<(), String> {
@@ -4444,7 +4476,7 @@ impl Bus {
                 nvic.set_line(device.irq, device.pending(), active);
             }
             for uart in &self.pl011_uarts {
-                if let Some(line) = uart.irq {
+                if let Some(crate::pl011::InterruptRoute::Nvic(line)) = uart.irq {
                     nvic.set_line(line, uart.interrupt(), active);
                 }
             }
@@ -7886,6 +7918,15 @@ impl Bus {
         {
             return Ok(uart.read(address) & (u32::MAX >> (32 - N * 8)));
         }
+        if matches!(N, 1 | 2 | 4) && address.is_multiple_of(N as u32)
+            && let Some((kind, offset)) = self.arm_gic_windows.iter()
+                .find_map(|window| window.offset(address).map(|offset| (window.kind, offset)))
+            && let Some(gic) = &mut self.arm_gic
+        {
+            let cpu = self.guest_access.map_or(0, |(slot, _)| slot);
+            let value = gic.read_window(cpu, kind, offset & !3);
+            return Ok((value >> ((offset & 3) * 8)) & (u32::MAX >> (32 - N * 8)));
+        }
         if matches!(N, 1 | 4) && let Some(gpio) = self.miv_gpios.iter().find(|gpio| gpio.contains(address)) {
             return Ok(gpio.read(address));
         }
@@ -8834,6 +8875,27 @@ impl Bus {
                 uart.write_all(&[byte]).map_err(BusError::Output)?;
                 let console = self.monitor_log_enabled(1);
                 self.observe_uart_output(TesterPort::Pl011(index), &[byte], console);
+            }
+            return Ok(());
+        }
+        if matches!(width, 1 | 2 | 4) && address.is_multiple_of(width as u32)
+            && let Some((kind, offset)) = self.arm_gic_windows.iter()
+                .find_map(|window| window.offset(address).map(|offset| (window.kind, offset)))
+            && let Some(gic) = &mut self.arm_gic
+        {
+            let cpu = self.guest_access.map_or(0, |(slot, _)| slot);
+            let aligned = offset & !3;
+            if width == 4 {
+                gic.write_window(cpu, kind, aligned, value);
+            } else if matches!(kind, crate::arm_gic::WindowKind::Distributor)
+                && (0x400..0xc00).contains(&offset)
+                || matches!(kind, crate::arm_gic::WindowKind::Redistributor(_))
+                    && (0x1_0400..0x1_0420).contains(&offset)
+            {
+                let shift = (offset & 3) * 8;
+                let mask = u32::MAX >> (32 - width * 8);
+                let previous = gic.read_window(cpu, kind, aligned);
+                gic.write_window(cpu, kind, aligned, (previous & !(mask << shift)) | ((value & mask) << shift));
             }
             return Ok(());
         }

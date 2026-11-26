@@ -3,10 +3,16 @@ use std::collections::VecDeque;
 const RX_INTERRUPT: u16 = 1 << 4;
 const TX_INTERRUPT: u16 = 1 << 5;
 
+#[derive(Clone, Copy)]
+pub(crate) enum InterruptRoute {
+    Nvic(u8),
+    Gic(u16),
+}
+
 pub(crate) struct Pl011 {
     pub(crate) base: u32,
     pub(crate) name: String,
-    pub(crate) irq: Option<u8>,
+    pub(crate) irq: Option<InterruptRoute>,
     fifo_size: u32,
     receive: VecDeque<u8>,
     control: u16,
@@ -58,7 +64,7 @@ impl Pl011 {
         base: u32,
         fifo_size: u32,
         sbsa: bool,
-        irq: Option<u8>,
+        irq: Option<InterruptRoute>,
     ) -> Self {
         let mut uart = Self {
             base,

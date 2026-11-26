@@ -1,5 +1,6 @@
-use super::{Entry, keys, map_pl011, object_fields};
+use super::{Entry, keys, map_pl011, multi_registration, number, object_fields};
 use crate::{
+    arm_gic::{Gic, Version, Window, WindowKind},
     arm32::{Cpu, Profile},
     machine::Machine,
 };
@@ -20,11 +21,39 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
         return Err("too many ARMv7 CPUs".into());
     }
     machine.configure_harts(cpus.len());
+    let controller = entries
+        .iter()
+        .find(|entry| entry.model == "IRQControllers.ARM_GenericInterruptController");
+    let mut affinities = Vec::new();
     for (hart, entry) in cpus.iter().enumerate() {
         if entry.registration.as_deref() != Some("sysbus") {
             return Err(entry.error("ARMv7 CPU must be registered on sysbus"));
         }
-        let fields = keys(entry, &["cpuType", "numberOfMPURegions", "cpuId"])?;
+        let fields = keys(
+            entry,
+            &[
+                "cpuType",
+                "numberOfMPURegions",
+                "cpuId",
+                "genericInterruptController",
+            ],
+        )?;
+        let mut affinity = hart as u32;
+        for &(key, value) in &fields {
+            match key {
+                "cpuId" => affinity = number(value).map_err(|error| entry.error(&error))?,
+                "genericInterruptController"
+                    if !controller.is_some_and(|gic| gic.name == value) =>
+                {
+                    return Err(entry.error("unknown ARM interrupt controller"));
+                }
+                _ => {}
+            }
+        }
+        if affinities.contains(&affinity) {
+            return Err(entry.error("duplicate ARM CPU affinity"));
+        }
+        affinities.push(affinity);
         let model = fields
             .iter()
             .find(|(key, _)| *key == "cpuType")
@@ -50,7 +79,10 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
                 map_memory(&mut machine, entry)?;
                 mapped = true;
             }
-            "UART.PL011" => map_pl011(entry, None, &mut machine.bus)?,
+            "UART.PL011" => map_pl011(entry, controller, &mut machine.bus)?,
+            "IRQControllers.ARM_GenericInterruptController" => {
+                map_gic(&mut machine, entry, &affinities)?
+            }
             _ => return Err(entry.error("unsupported ARMv7 platform peripheral")),
         }
     }
@@ -58,6 +90,80 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
         return Err("ARMv7 platform has no mapped RAM".into());
     }
     Ok(machine)
+}
+
+fn map_gic(machine: &mut Machine, entry: &Entry, affinities: &[u32]) -> Result<(), String> {
+    let mut version = Version::V2;
+    let mut shared = 960;
+    for (key, value) in keys(
+        entry,
+        &[
+            "architectureVersion",
+            "sharedPeripheralCount",
+            "supportsTwoSecurityStates",
+        ],
+    )? {
+        match (key, value) {
+            ("architectureVersion", ".GICv1" | ".GICv2") => version = Version::V2,
+            ("architectureVersion", ".GICv3") => version = Version::V3,
+            ("sharedPeripheralCount", value) => {
+                shared = number(value).map_err(|error| entry.error(&error))? as usize
+            }
+            ("supportsTwoSecurityStates", "false") => {}
+            _ => return Err(entry.error("unsupported ARM GIC configuration")),
+        }
+    }
+    let registrations = entry
+        .registration_list()
+        .ok_or_else(|| entry.error("ARM GIC requires bus registrations"))?;
+    let mut windows = Vec::new();
+    for registration in registrations {
+        if let Some((base, size, region)) = multi_registration(entry, registration)? {
+            let kind = match region {
+                "distributor" => WindowKind::Distributor,
+                "cpuInterface" => WindowKind::CpuInterface,
+                _ => return Err(entry.error("unknown ARM GIC bus region")),
+            };
+            windows.push(Window { base, size, kind });
+            continue;
+        }
+        let body = registration
+            .strip_prefix("sysbus new IRQControllers.ArmGicRedistributorRegistration")
+            .and_then(|properties| properties.trim().strip_prefix('{'))
+            .and_then(|properties| properties.strip_suffix('}'))
+            .ok_or_else(|| entry.error("unsupported ARM GIC registration"))?;
+        let mut base = None;
+        let mut cpu = None;
+        for (key, value) in object_fields(body).map_err(|error| entry.error(error))? {
+            match key {
+                "address" if base.is_none() => {
+                    base = Some(number(value).map_err(|error| entry.error(&error))?)
+                }
+                "attachedCPU" if cpu.is_none() => {
+                    cpu = Some(
+                        machine
+                            .bus
+                            .scoped_cpu_index(value)
+                            .map_err(|error| entry.error(&error))?,
+                    )
+                }
+                _ => return Err(entry.error("invalid ARM GIC redistributor property")),
+            }
+        }
+        let (Some(base), Some(cpu)) = (base, cpu) else {
+            return Err(entry.error("ARM GIC redistributor requires an address and CPU"));
+        };
+        windows.push(Window {
+            base,
+            size: 0x2_0000,
+            kind: WindowKind::Redistributor(cpu),
+        });
+    }
+    let gic = Gic::new(version, shared, affinities).map_err(|error| entry.error(&error))?;
+    machine
+        .bus
+        .map_arm_gic(gic, windows)
+        .map_err(|error| entry.error(&error))
 }
 
 fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {

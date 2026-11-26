@@ -3728,10 +3728,18 @@ fn map_pl011(entry: &Entry, nvic: Option<&Entry>, bus: &mut Bus) -> Result<(), S
         {
             let (target, input) = destination.trim().split_once('@')
                 .ok_or_else(|| entry.error("expected PL011 interrupt destination"))?;
-            if nvic.is_none_or(|controller| controller.name != target.trim()) {
-                return Err(entry.error("unsupported PL011 interrupt controller"));
-            }
-            irq = Some(irq_index(input, 256).map_err(|error| entry.error(&error))?);
+            let controller = nvic.filter(|controller| controller.name == target.trim())
+                .ok_or_else(|| entry.error("unsupported PL011 interrupt controller"))?;
+            irq = Some(match controller.model.as_str() {
+                "IRQControllers.NVIC" => crate::pl011::InterruptRoute::Nvic(
+                    irq_index(input, 256).map_err(|error| entry.error(&error))?,
+                ),
+                "IRQControllers.ARM_GenericInterruptController" => crate::pl011::InterruptRoute::Gic(
+                    u16::try_from(number(input.trim()).map_err(|error| entry.error(&error))?)
+                        .ok().filter(|line| *line < 988).ok_or_else(|| entry.error("invalid GIC source"))?,
+                ),
+                _ => return Err(entry.error("unsupported PL011 interrupt controller")),
+            });
             continue;
         }
         let (key, value) = line.split_once(':').ok_or_else(|| entry.error("invalid PL011 declaration"))?;

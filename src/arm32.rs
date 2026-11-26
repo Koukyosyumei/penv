@@ -12,12 +12,79 @@ const Z: u32 = 1 << 30;
 const C: u32 = 1 << 29;
 const V: u32 = 1 << 28;
 const T: u32 = 1 << 5;
+const I: u32 = 1 << 7;
 const FLAGS: u32 = N | Z | C | V;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Profile {
     Application,
     RealTime,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arm_gic::{Gic, Version, Window, WindowKind};
+
+    #[test]
+    fn arm_gic_irq_uses_vector_base_and_banked_return_address() {
+        let mut cpu = Cpu::new(Profile::Application);
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        let mut output = Vec::new();
+        let mut registers = [0; 32];
+        let mut pc = 0;
+        bus.map_arm_gic(
+            Gic::new(Version::V2, 32, &[0]).unwrap(),
+            vec![
+                Window {
+                    base: 0x1000,
+                    size: 0x1000,
+                    kind: WindowKind::Distributor,
+                },
+                Window {
+                    base: 0x2000,
+                    size: 0x1000,
+                    kind: WindowKind::CpuInterface,
+                },
+            ],
+        )
+        .unwrap();
+        for (address, value) in [
+            (0x0000, 0xee0c_0f10), // MCR p15, 0, r0, c12, c0, 0
+            (0x0004, 0xf108_0080), // CPSIE i
+            (0x0118, 0xe25e_f004), // SUBS pc, lr, #4
+            (0x1000, 1),
+            (0x1104, 1 << 5),
+            (0x2000, 1),
+            (0x2004, 0xff),
+        ] {
+            bus.write(address, 4, value, &mut output).unwrap();
+        }
+        registers[0] = 0x100;
+        registers[14] = 0x444;
+        bus.arm_gic.as_mut().unwrap().set_shared(5, true);
+        assert!(matches!(
+            cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output)
+                .unwrap(),
+            Step::Retired
+        ));
+        assert!(matches!(
+            cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output)
+                .unwrap(),
+            Step::Retired
+        ));
+        assert!(matches!(
+            cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output)
+                .unwrap(),
+            Step::Trap
+        ));
+        assert_eq!((pc, cpu.cpsr() & 31, registers[14]), (0x118, 0x12, 12));
+        assert_eq!(bus.read::<4>(0x200c).unwrap(), 37);
+        cpu.step(&mut pc, &mut registers, &mut bus, 0, &mut output)
+            .unwrap();
+        assert_eq!((pc, cpu.cpsr() & 31, registers[14]), (8, 0x13, 0x444));
+    }
 }
 
 impl Profile {
@@ -44,6 +111,8 @@ pub(crate) struct Cpu {
     banks: [Bank; 8],
     shared_high: [u32; 5],
     fiq_high: [u32; 5],
+    sctlr: u32,
+    vbar: u32,
 }
 
 impl Cpu {
@@ -57,6 +126,8 @@ impl Cpu {
             banks: [Bank::default(); 8],
             shared_high: [0; 5],
             fiq_high: [0; 5],
+            sctlr: 0,
+            vbar: 0,
         }
     }
 
@@ -99,13 +170,30 @@ impl Cpu {
     }
 
     fn undefined(&mut self, return_address: u32, registers: &mut [u32; 32]) -> u32 {
+        self.exception(0x1b, 4, return_address, registers)
+    }
+
+    fn exception(
+        &mut self,
+        mode: u32,
+        offset: u32,
+        return_address: u32,
+        registers: &mut [u32; 32],
+    ) -> u32 {
         let status = self.cpsr;
-        let updated = (status & !(31 | T | (0b11 << 25) | (0x3f << 10))) | 0x9b;
+        let thumb_exceptions = (self.sctlr >> 25) & T;
+        let updated =
+            (status & !(31 | T | (0b11 << 25) | (0x3f << 10))) | mode | I | thumb_exceptions;
         self.set_cpsr(updated, registers)
-            .expect("valid Undefined mode");
-        self.banks[7].spsr = status;
+            .expect("valid exception mode");
+        self.banks[Self::bank_for(updated).unwrap()].spsr = status;
         registers[14] = return_address;
-        4
+        let base = if self.sctlr & (1 << 13) != 0 {
+            0xffff_0000
+        } else {
+            self.vbar
+        };
+        base | offset
     }
 
     fn exception_return(
@@ -303,6 +391,13 @@ impl Cpu {
             _ => logic(!rb),
         };
         let test = matches!(opcode, 8..=11);
+        if !test && rd == 15 && instruction & (1 << 20) != 0 {
+            let bank = Self::bank_for(self.cpsr).unwrap();
+            if bank != 0 && self.set_cpsr(self.banks[bank].spsr, registers).is_ok() {
+                return Some(value & if self.cpsr & T != 0 { !1 } else { !3 });
+            }
+            return Some(self.undefined(pc.wrapping_add(4), registers));
+        }
         if test || instruction & (1 << 20) != 0 {
             self.cpsr = (self.cpsr & !FLAGS)
                 | (value & N)
@@ -359,6 +454,15 @@ impl Cpu {
         slot: usize,
         output: &mut impl Write,
     ) -> Result<Step, String> {
+        bus.refresh_arm_gic_inputs();
+        if self.cpsr & I == 0
+            && bus.arm_gic.as_ref().is_some_and(|gic| {
+                gic.highest_pending(slot, None) != crate::arm_gic::SPURIOUS_INTERRUPT
+            })
+        {
+            *pc = self.exception(0x12, 0x18, pc.wrapping_add(4), registers);
+            return Ok(Step::Trap);
+        }
         if self.cpsr & T != 0 {
             let raw = Self::load(bus, slot, *pc, 2)?;
             if raw & 0xff07 == 0x4700 {
@@ -401,7 +505,20 @@ impl Cpu {
             registers[14] = next;
             next = self.exchange(address.wrapping_add(8).wrapping_add(offset) | 1);
         } else if condition == 15 {
-            if !matches!(
+            if instruction & 0xfff1_fe20 == 0xf100_0000 {
+                if self.cpsr & 31 != 0x10 {
+                    let mut status = self.cpsr;
+                    match (instruction >> 18) & 3 {
+                        2 => status &= !(instruction & 0x1c0),
+                        3 => status |= instruction & 0x1c0,
+                        _ => {}
+                    }
+                    if instruction & (1 << 17) != 0 {
+                        status = (status & !31) | (instruction & 31);
+                    }
+                    self.set_cpsr(status, registers)?;
+                }
+            } else if !matches!(
                 instruction & 0xffff_fff0,
                 0xf57f_f040 | 0xf57f_f050 | 0xf57f_f060
             ) {
@@ -413,6 +530,27 @@ impl Cpu {
             let rn = ((instruction >> 16) & 15) as usize;
             let rd = ((instruction >> 12) & 15) as usize;
             match instruction {
+                _ if instruction & 0x0f00_0f10 == 0x0e00_0f10 => {
+                    let key = instruction & 0x00ef_00ef;
+                    let register = match key {
+                        0x0001_0000 => Some(&mut self.sctlr),
+                        0x000c_0000 => Some(&mut self.vbar),
+                        _ => None,
+                    };
+                    if let Some(register) = register.filter(|_| self.cpsr & 31 != 0x10 && rd != 15)
+                    {
+                        if instruction & (1 << 20) != 0 {
+                            registers[rd] = *register;
+                        } else {
+                            *register = registers[rd];
+                            if key == 0x000c_0000 {
+                                *register &= !31;
+                            }
+                        }
+                    } else {
+                        next = self.undefined(address.wrapping_add(4), registers);
+                    }
+                }
                 _ if instruction & 0x0fbf_0fff == 0x010f_0000 && rd != 15 => {
                     registers[rd] = if instruction & (1 << 22) == 0 {
                         self.cpsr

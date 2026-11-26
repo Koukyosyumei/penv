@@ -129,6 +129,7 @@ mod rv64_vm;
 mod semihosting;
 mod snapshot;
 mod arm32;
+mod arm_gic;
 mod simulation;
 mod stm32_adc;
 mod stm32_can;
