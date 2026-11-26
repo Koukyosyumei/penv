@@ -1156,6 +1156,8 @@ impl Bus {
         self.guest_cpu_names.iter().map(String::as_str)
             .chain(self.traceable_memory.iter().map(|(name, ..)| name.as_str()))
             .chain(self.rv64_devices.uarts.iter().map(|uart| uart.name()))
+            .chain(self.renesas_ra_sci.iter().map(|uart| uart.name.as_str()))
+            .chain(self.renesas_ra_icu.iter().map(|icu| icu.name.as_str()))
     }
 
     pub(crate) fn scoped_cpu_index(&self, path: &str) -> Result<usize, String> {
@@ -4149,6 +4151,12 @@ impl Bus {
         }
         if let Some(uart) = self.pl011_uarts.iter().find(|uart| uart.name == name) {
             return (offset < crate::pl011::Pl011::SIZE).then(|| uart.base + offset);
+        }
+        if let Some(uart) = self.renesas_ra_sci.iter().find(|uart| uart.name == name) {
+            return (offset < crate::renesas_ra_sci::Sci::SIZE).then(|| uart.base + offset);
+        }
+        if let Some(icu) = self.renesas_ra_icu.as_ref().filter(|icu| icu.name == name) {
+            return (offset < crate::renesas_ra_icu::Icu::SIZE).then(|| icu.base + offset);
         }
         let (_, plic) = self.plics.iter().find(|(registered, _)| registered == name)?;
         (u64::from(offset) < plic.size).then(|| plic.base + offset)
@@ -10715,6 +10723,33 @@ mod tests {
             .watch_stm32_uart("usart1", "after", UartWaitMode::Lf)
             .unwrap();
         assert!(bus.stm32_uart_matched(direct));
+    }
+
+    #[test]
+    fn renesas_ra_sci_tester_observes_guest_tx_and_routes_input_by_name() {
+        let mut bus = Bus::default();
+        let mut output = Vec::new();
+        let sci0 = 0x4035_8000;
+        let sci1 = 0x4035_8100;
+        for (base, name) in [(sci0, "sci0"), (sci1, "sci1")] {
+            bus.map_renesas_ra_sci(crate::renesas_ra_sci::Sci::new(base, name.into(), [None; 3]))
+                .unwrap();
+            bus.write(base + 8, 4, 0x11, &mut output).unwrap();
+        }
+
+        let tester = bus.create_uart_tester("sysbus.sci1", false, None, false).unwrap();
+        let watch = bus.watch_uart_tester(Some(tester), "OK").unwrap();
+        bus.write(sci0 + 4, 4, b'N'.into(), &mut output).unwrap();
+        for &byte in b"OK\n" {
+            bus.write(sci1 + 4, 4, byte.into(), &mut output).unwrap();
+        }
+        assert!(bus.stm32_uart_matched(watch));
+        assert_eq!(output, b"NOK\n");
+        bus.finish_stm32_uart_watch(watch);
+
+        bus.write_uart_input("sysbus.sci1", [b'Z'].into_iter(), true).unwrap();
+        assert_eq!(bus.read::<4>(sci0).unwrap(), 0);
+        assert_eq!(bus.read::<4>(sci1).unwrap(), u32::from(b'Z'));
     }
 
     #[test]
