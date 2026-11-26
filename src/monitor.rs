@@ -886,10 +886,15 @@ fn run_commands<'a>(
             Action::CpuStep(cpu, steps) if !machine.is_cortex_m() => {
                 let chunk = (*steps).min(budget);
                 let start = machine.elapsed_steps();
-                machine.monitor_step_riscv(cpu, chunk, &mut output).map(|(stop, count)| {
+                machine.monitor_step_riscv(cpu, chunk, &mut output).and_then(|(stop, count)| {
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
-                    (stop != Stop::Limit || chunk < *steps).then_some(stop)
+                    if stop != Stop::Limit || chunk < *steps {
+                        return Ok(Some(stop));
+                    }
+                    let pc = machine.monitor_named_pc(cpu)?;
+                    writeln!(output.reply(), "0x{pc:08x}").map_err(|error| error.to_string())?;
+                    Ok(None)
                 })
             }
             Action::PhyRegister(target, value) => machine.bus.litex_phy_mut(target).map(|phy| {
