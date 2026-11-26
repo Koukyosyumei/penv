@@ -1544,6 +1544,20 @@ sysbus:
 }
 
 #[test]
+fn unregistered_cortex_m_nvic_does_not_reserve_mmio() {
+    let source = r#"
+nvic: IRQControllers.NVIC
+cpu: CPU.CortexM @ sysbus { cpuType: "cortex-m4"; nvic: nvic }
+mem: Memory.MappedMemory @ sysbus 0xe000e100 { size: 0x80 }
+"#;
+    let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
+    let mut machine = load_entries(Path::new("<platform string>"), &entries, false).unwrap();
+    assert!(machine.bus.nvic.is_some());
+    machine.bus.write(0xe000e100, 4, 0x1234, &mut std::io::sink()).unwrap();
+    assert_eq!(machine.bus.read::<4>(0xe000e100).unwrap(), 0x1234);
+}
+
+#[test]
 fn renode_init_merge_sysbus_dispatch() {
     assert_dispatched_script(
         "\nsysbus:\n    init:\n        WriteByte 0 1",

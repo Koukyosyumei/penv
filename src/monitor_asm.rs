@@ -40,6 +40,12 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<usize, String> {
     assemble_source(machine, &cpu, address, requested_triple, &source)
 }
 
+fn matches_triple(requested: &str, target: &str) -> bool {
+    requested == "default" || requested == target
+        || target.strip_suffix("-none-eabi") == Some(requested)
+        || requested == "thumb" && target.starts_with("thumb")
+}
+
 pub(crate) fn assemble_source(
     machine: &mut Machine,
     cpu: &str,
@@ -93,8 +99,7 @@ pub(crate) fn assemble_source(
     {
         return Err("monitor assembly requires instructions and optional local labels".into());
     }
-    if requested_triple != "default" && requested_triple != triple
-        && triple.strip_suffix("-none-eabi") != Some(requested_triple) {
+    if !matches_triple(requested_triple, triple) {
         return Err(format!(
             "assembler triple {requested_triple} is unavailable for {triple}"
         ));
@@ -475,8 +480,7 @@ pub(crate) fn disassemble_source(
     use std::fmt::Write;
 
     let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
-    if requested_triple != "default" && requested_triple != triple
-        && triple.strip_suffix("-none-eabi") != Some(requested_triple)
+    if !matches_triple(requested_triple, triple)
     {
         return Err(format!("disassembler triple {requested_triple} is unavailable for {triple}"));
     }

@@ -7904,10 +7904,12 @@ impl Bus {
     pub fn thumb_read<const N: usize>(&mut self, address: u32) -> Result<u32, String> {
         self.check_thumb_bus_context(address, N)?;
         self.check_thumb_instruction_access(address, N, false, false)?;
-        if let Some(value) = self.nvic.as_ref().and_then(|nvic| nvic.read_fault_status_part(address, N)) {
+        if self.nvic_mapped
+            && let Some(value) = self.nvic.as_ref().and_then(|nvic| nvic.read_fault_status_part(address, N))
+        {
             return Ok(value);
         }
-        if N == 4
+        if self.nvic_mapped && N == 4
             && address == crate::nvic::DHCSR
             && self.nvic.as_ref().is_some_and(Nvic::has_debug_status)
         {
