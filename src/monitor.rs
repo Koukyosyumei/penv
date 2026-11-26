@@ -1235,10 +1235,11 @@ fn run_commands<'a>(
                 }
             }
             Action::AssertCpuValue(cpu, register, expected) => {
+                let cpu = if cpu == "@default" { machine.monitor_single_cpu_name()?.to_owned() } else { cpu.clone() };
                 let actual = match register {
-                    Some(register) => machine.monitor_named_register(cpu, register, None)?
+                    Some(register) => machine.monitor_named_register(&cpu, register, None)?
                         .ok_or("register has no readable value")?,
-                    None => machine.monitor_named_pc(cpu)?,
+                    None => machine.monitor_named_pc(&cpu)?,
                 };
                 if actual == *expected {
                     Ok(None)

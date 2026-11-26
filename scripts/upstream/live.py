@@ -148,11 +148,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         options = self.log_options(args, set(positional), positional)
         if not self.rust_monitor:
             raise Unsupported("CPU assertion requires the Rust monitor")
-        cpu = options.get("cpuName") or "cpu"
-        if not re.fullmatch(r"[\w.]+", cpu):
+        cpu = options.get("cpuName")
+        if cpu and not re.fullmatch(r"[\w.]+", cpu):
             raise Unsupported("invalid CPU name")
         if machine := options.get("machine"):
             self.operation(f"mach set {self.literal(machine)}")
+        cpu = cpu or "@default"
         expected = int(str(value), 16 if str(value).lower().startswith("0x") else 10)
         command = (f"AssertMonitorPC {cpu} {expected}" if register is None else
                    f"AssertMonitorRegister {cpu} {self.literal(register)} {expected}")

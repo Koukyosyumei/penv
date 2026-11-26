@@ -626,6 +626,16 @@ impl Machine {
         Ok(())
     }
 
+    pub(crate) fn monitor_single_cpu_name(&self) -> Result<&str, String> {
+        if self.cpu_less {
+            return Err("This machine has no CPUs.".into());
+        }
+        if self.hart_count() != 1 {
+            return Err(format!("This machine has {} CPUs and no CPU name was specified", self.hart_count()));
+        }
+        self.primary.name.as_deref().ok_or_else(|| "the platform CPU has no monitor name".into())
+    }
+
     pub(crate) fn monitor_named_pc(&mut self, name: &str) -> Result<u64, String> {
         Ok(self.named_hart(name)?.program_counter())
     }

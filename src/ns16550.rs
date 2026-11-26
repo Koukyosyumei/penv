@@ -47,11 +47,10 @@ impl Ns16550 {
         if u64::from(offset) >= self.size() {
             return None;
         }
-        match (self.wide, width) {
-            (false, 1) => Some(offset),
-            (true, 4) if offset & 3 == 0 => Some(offset >> 2),
-            _ => None,
+        if !matches!(width, 1 | 2 | 4) {
+            return None;
         }
+        Some(if self.wide && offset & 3 == 0 { offset >> 2 } else { offset })
     }
 
     pub fn queue_input(&mut self, bytes: Vec<u8>) {
