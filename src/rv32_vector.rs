@@ -97,6 +97,20 @@ impl Rv32Vector {
         Ok(())
     }
 
+    fn register_group(&self, register: usize, multiplier: i32) -> Option<std::ops::Range<usize>> {
+        if !(-3..=3).contains(&multiplier) {
+            return None;
+        }
+        let count = 1 << multiplier.max(0);
+        if register % count != 0 || register + count > 32 {
+            return None;
+        }
+        let register_bytes = self.csrs.read(0xc22)? as usize;
+        let offset = register * register_bytes;
+        let size = (register_bytes << multiplier.max(0)) >> (-multiplier).max(0);
+        Some(offset..offset + size)
+    }
+
     pub(crate) fn widen_small_integer(&mut self, insn: u32, floating: bool) -> Option<()> {
         use crate::rv64_float::{Format, Integer, Rounding};
 
@@ -125,21 +139,8 @@ impl Rv32Vector {
         let rd = ((insn >> 7) & 31) as usize;
         let rs2 = ((insn >> 20) & 31) as usize;
         let masked = insn & (1 << 25) == 0;
-        let register_bytes = self.csrs.read(0xc22)? as usize;
-        let group = |register, multiplier: i32| {
-            if !(-3..=3).contains(&multiplier) {
-                return None;
-            }
-            let count = 1 << multiplier.max(0);
-            if register % count != 0 || register + count > 32 {
-                return None;
-            }
-            let offset = register * register_bytes;
-            let size = (register_bytes << multiplier.max(0)) >> (-multiplier).max(0);
-            Some(offset..offset + size)
-        };
-        let src = group(rs2, source_lmul)?;
-        let dst = group(rd, lmul)?;
+        let src = self.register_group(rs2, source_lmul)?;
+        let dst = self.register_group(rd, lmul)?;
         if (masked && rd == 0)
             || (src.start < dst.end && dst.start < src.end && !(source_lmul >= 0 && src.end == dst.end))
         {
@@ -297,22 +298,9 @@ impl Rv32Vector {
         if masked && rd == 0 {
             return None;
         }
-        let register_bytes = self.csrs.read(0xc22)? as usize;
-        let group = |register, multiplier: i32| {
-            if !(-3..=3).contains(&multiplier) {
-                return None;
-            }
-            let count = 1 << multiplier.max(0);
-            if register % count != 0 || register + count > 32 {
-                return None;
-            }
-            let offset = register * register_bytes;
-            let size = (register_bytes << multiplier.max(0)) >> (-multiplier).max(0);
-            Some(offset..offset + size)
-        };
-        let dst = group(rd, lmul + 2)?;
-        let src2 = group(rs2, lmul)?;
-        let src1 = if form == 0 { Some(group(rs1, lmul)?) } else { None };
+        let dst = self.register_group(rd, lmul + 2)?;
+        let src2 = self.register_group(rs2, lmul)?;
+        let src1 = if form == 0 { Some(self.register_group(rs1, lmul)?) } else { None };
         for src in src1.iter().chain(std::iter::once(&src2)) {
             if src.start < dst.end && dst.start < src.end && !(lmul >= 0 && src.end == dst.end) {
                 return None;
@@ -361,21 +349,8 @@ impl Rv32Vector {
         } else {
             (Format::BFloat16, Format::Single, Rounding::NearestEven)
         };
-        let register_bytes = self.csrs.read(0xc22)? as usize;
-        let group = |register, multiplier: i32| {
-            if !(-3..=3).contains(&multiplier) {
-                return None;
-            }
-            let count = 1 << multiplier.max(0);
-            if register % count != 0 || register + count > 32 {
-                return None;
-            }
-            let offset = register * register_bytes;
-            let size = (register_bytes << multiplier.max(0)) >> (-multiplier).max(0);
-            Some(offset..offset + size)
-        };
-        let src = group(((insn >> 20) & 31) as usize, lmul + i32::from(narrow))?;
-        let dst = group(((insn >> 7) & 31) as usize, lmul + i32::from(!narrow))?;
+        let src = self.register_group(((insn >> 20) & 31) as usize, lmul + i32::from(narrow))?;
+        let dst = self.register_group(((insn >> 7) & 31) as usize, lmul + i32::from(!narrow))?;
         if src.start < dst.end && dst.start < src.end
             && !(if narrow { src.start == dst.start } else { lmul >= 0 && src.end == dst.end })
         {
