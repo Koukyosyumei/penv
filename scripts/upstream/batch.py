@@ -28,17 +28,28 @@ def write_case(case, record, directory):
     write_json(directory / "case.json", dict(case, engine="penv", **record))
 
 
-def expected_keyword_errors(result):
-    expected = []
-    for item in getattr(result, "body", ()):
-        if getattr(item, "name", None) == "BuiltIn.Run Keyword And Expect Error" and item.status == "PASS":
-            for child in item.body:
-                if getattr(child, "status", None) != "FAIL" or not getattr(child, "kwname", None):
-                    continue
-                expected.extend((child.kwname, message.message) for message in child.body
-                                if getattr(message, "level", None) == "FAIL")
-        expected.extend(expected_keyword_errors(item))
-    return expected
+def verifies_expected_monitor_errors(node, remote_calls):
+    expected = Counter()
+    for wrapper in node.iter("kw"):
+        if wrapper.get("name") != "Run Keyword And Expect Error" or wrapper.get("library") != "BuiltIn":
+            continue
+        if wrapper.find("status").get("status") != "PASS":
+            continue
+        for child in wrapper.findall("kw"):
+            if child.find("status").get("status") == "FAIL":
+                expected.update((child.get("name"), msg.text)
+                                for msg in child.findall("msg") if msg.get("level") == "FAIL")
+    verified = 0
+    for call in remote_calls:
+        monitor = call.get("monitor", {})
+        if call.get("status") == "ok" or monitor.get("reply") == "REJECTED":
+            continue
+        key = call.get("keyword"), call.get("message")
+        if monitor.get("result") != "fail" or expected[key] == 0:
+            return False
+        expected[key] -= 1
+        verified += 1
+    return verified > 0
 
 
 def assess(test, endpoint):
@@ -47,20 +58,7 @@ def assess(test, endpoint):
     if test.status == "PASS":
         # A typed rejection came from an actual monitor lookup. Robot's
         # successful error assertion supplies the expected-outcome check.
-        expected_errors = expected_keyword_errors(test)
-        unverified = []
-        for call in failures:
-            observation = call.get("monitor", {})
-            if observation.get("reply") == "REJECTED":
-                continue
-            if observation.get("result") == "fail":
-                match = next((entry for entry in expected_errors
-                              if entry[0] == call["keyword"] and call["message"] in entry[1]), None)
-                if match:
-                    expected_errors.remove(match)
-                    continue
-            unverified.append(call)
-        failures = unverified
+        failures = [call for call in failures if call.get("monitor", {}).get("reply") != "REJECTED"]
     in_flight = any("status" not in call for call in endpoint.calls)
     issue = next((call for call in failures if call["status"] == "unsupported"), None)
     if issue:
@@ -236,6 +234,11 @@ def run_suite(task, *, options, renode, binary, assets, host_case_timeout, rust_
                         measurements=[json.loads(line) for line in monitor.read_text().splitlines()]
                         if monitor.is_file() else [],
                     )
+                record = records[name]
+                if (record["status"] == "not_run" and record["robot_status"] == "PASS"
+                        and record.get("measurements") and verifies_expected_monitor_errors(node, record.get("remote_calls", []))):
+                    record.update(status="pass", category="passed",
+                                  reason="Robot verified the expected penv assertion failure")
                 missing = next((msg.text for msg in node.iter("msg") if msg.get("level") == "FAIL"
                                 and re.search(r"No keyword with name .* found", msg.text or "")), None)
                 if missing:
