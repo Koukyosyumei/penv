@@ -76,7 +76,7 @@ impl Rv64 {
         let rs2 = inst.rs2();
         if opcode == 0x07 {
             let address = self.registers[rs1].wrapping_add(inst.immediate());
-            self.trace_stack_access(inst, address, format.width(), false);
+            self.trace_stack_access(bus, inst, address, format.width(), false);
             let bits = self.load(bus, address, format.width())?;
             self.fp_write(rd, format, bits);
             return Ok(None);
@@ -84,7 +84,7 @@ impl Rv64 {
         if opcode == 0x27 {
             let immediate = ((inst.0 >> 25) << 5) | ((inst.0 >> 7) & 31);
             let address = self.registers[rs1].wrapping_add(sign(u64::from(immediate), 12));
-            self.trace_stack_access(inst, address, format.width(), true);
+            self.trace_stack_access(bus, inst, address, format.width(), true);
             self.store(bus, address, format.width(), self.floating[rs2], output)?;
             return Ok(None);
         }

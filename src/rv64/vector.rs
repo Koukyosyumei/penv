@@ -343,7 +343,7 @@ impl Rv64 {
         vector.group(register, multiplier).ok_or_else(illegal)?;
         for lane in vector.start as usize..vector.length as usize {
             let address = base.wrapping_add((lane as u64).wrapping_mul(stride));
-            self.trace_stack_access(inst, address, width, inst.opcode() == 0x27);
+            self.trace_stack_access(bus, inst, address, width, inst.opcode() == 0x27);
             self.privilege.vector.as_mut().expect("vector state").start = lane as u64;
             if !self.privilege.renode_vector_memory {
                 self.privilege.status |= VS;
