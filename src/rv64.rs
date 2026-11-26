@@ -1411,16 +1411,16 @@ mod tests {
             |operation: u32| Instruction((0x344 << 20) | (1 << 15) | (operation << 12) | (2 << 7));
 
         cpu.privilege.tick(seip, 0);
-        assert_eq!(cpu.csr(instruction(2), stip, 0), Some(seip));
-        assert_eq!(cpu.csr(instruction(3), stip, 0), Some(seip | stip));
+        assert_eq!(cpu.csr(&mut Bus::default(), instruction(2), stip, 0), Some(seip));
+        assert_eq!(cpu.csr(&mut Bus::default(), instruction(3), stip, 0), Some(seip | stip));
         cpu.privilege.tick(0, 0);
         assert_eq!(cpu.privilege.read(0x344, cpu.misa(), !3), Some(0));
 
         // A guest can still set or clear the software contribution explicitly.
         cpu.privilege.tick(seip, 0);
-        assert_eq!(cpu.csr(instruction(1), seip, 0), Some(seip));
+        assert_eq!(cpu.csr(&mut Bus::default(), instruction(1), seip, 0), Some(seip));
         cpu.privilege.tick(0, 0);
-        assert_eq!(cpu.csr(instruction(3), seip, 0), Some(seip));
+        assert_eq!(cpu.csr(&mut Bus::default(), instruction(3), seip, 0), Some(seip));
         assert_eq!(cpu.privilege.read(0x344, cpu.misa(), !3), Some(0));
     }
 }

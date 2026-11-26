@@ -768,7 +768,7 @@ fn vector_control_csrs_gate_on_vs_and_share_status() {
     let mut cpu = Rv64::new(Isa::parse("rv64gcv_zba_zbb_zbc_zbs_zfh_zacas_smepmp").unwrap());
     let mut bus = Bus::new(4096).unwrap();
     let write = Instruction(write_csr(0x00a, A0));
-    assert_eq!(cpu.csr(write, u64::MAX, 0), None);
+    assert_eq!(cpu.csr(&mut Bus::default(), write, u64::MAX, 0), None);
     assert_eq!(cpu.misa() & (1 << 21), 1 << 21);
     cpu.registers[A0] = 1 << 9;
     cpu.registers[A1] = u64::MAX;
@@ -791,11 +791,11 @@ fn vector_control_csrs_gate_on_vs_and_share_status() {
     );
     assert_eq!(cpu.privilege.read(0xc22, cpu.misa(), !1), Some(64));
     assert_eq!(cpu.privilege.read(0x100, cpu.misa(), !1).unwrap() >> 63, 1);
-    assert_eq!(cpu.csr(Instruction(write_csr(0xc22, A0)), 0, 0), None);
+    assert_eq!(cpu.csr(&mut Bus::default(), Instruction(write_csr(0xc22, A0)), 0, 0), None);
     let mut scalar = Rv64::new(Isa::parse("rv64gc").unwrap());
     assert!(scalar.privilege.write(0x300, 3 << 9, scalar.misa()));
     assert_eq!(scalar.privilege.status & (3 << 9), 0);
-    assert_eq!(scalar.csr(write, 0, 0), None);
+    assert_eq!(scalar.csr(&mut Bus::default(), write, 0, 0), None);
 }
 
 #[test]
