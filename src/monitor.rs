@@ -4975,7 +4975,8 @@ fn execute(
         return Ok(());
     }
     if boot.started || boot.runtime.iter().any(|entry|
-        !is_console_action(&entry.action) && !is_log_capture_setup(&entry.action))
+        !is_console_action(&entry.action) && !is_log_capture_setup(&entry.action)
+            && !matches!(entry.action, Action::AllowPrivates(_)))
     {
         if matches!(
             boot.runtime.last().map(|entry| &entry.action),
