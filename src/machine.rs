@@ -794,11 +794,12 @@ impl Machine {
             let value = value.map(u32::try_from).transpose().map_err(|_| "register value exceeds ARMv7 width")?;
             return hart.monitor_integer_register(index, value).map(|result| result.map(u64::from));
         }
-        if let Some(thumb) = hart.thumb.as_ref()
+        if let Some(thumb) = hart.thumb.as_mut()
             && matches!(register.as_str(), "cpsr" | "xpsr")
         {
-            if value.is_some() {
-                return Err("Cortex-M PSR writes are unsupported".into());
+            if let Some(value) = value {
+                thumb.set_apsr(u32::try_from(value).map_err(|_| "xPSR value exceeds 32 bits")?);
+                return Ok(None);
             }
             return Ok(Some(u64::from(thumb.xpsr())));
         }

@@ -264,9 +264,119 @@ impl Thumb {
         true
     }
 
+    fn select_or_minmax_kind(high: u32, low: u32) -> Option<u32> {
+        if !matches!(low & 0xf10, 0xa00 | 0xb00) {
+            return None;
+        }
+        if high & 0xff80 == 0xfe00 && low & 0x40 == 0 {
+            Some((high >> 4) & 3)
+        } else if high & 0xffb0 == 0xfe80 {
+            Some(4 + ((low >> 6) & 1))
+        } else {
+            None
+        }
+    }
+
+    fn select_or_minmax(&mut self, high: u32, low: u32, kind: u32) -> bool {
+        let double = low & 0x100 != 0;
+        let index = |position: u32, extension: u32| {
+            if double {
+                (2 * position + 32 * extension) as usize
+            } else {
+                (2 * position + extension) as usize
+            }
+        };
+        let destination = index(low >> 12, (high >> 6) & 1);
+        let left = index(high & 15, (low >> 7) & 1);
+        let right = index(low & 15, (low >> 5) & 1);
+        if [destination, left, right]
+            .into_iter()
+            .any(|register| register >= self.fp.len())
+        {
+            return false;
+        }
+        let read = |register: usize| {
+            let low = u64::from(self.fp[register]);
+            if double {
+                low | (u64::from(self.fp[register + 1]) << 32)
+            } else {
+                low
+            }
+        };
+        let left = read(left);
+        let right = read(right);
+        let result = if kind < 4 {
+            let flags = self.apsr();
+            let negative = flags >> 31 != 0;
+            let zero = flags & (1 << 30) != 0;
+            let overflow = flags & (1 << 28) != 0;
+            let take_left = match kind {
+                0 => zero,
+                1 => overflow,
+                2 => negative == overflow,
+                _ => !zero && negative == overflow,
+            };
+            if take_left { left } else { right }
+        } else {
+            self.fp_minmax_bits(left, right, double, kind == 5)
+        };
+        self.fp[destination] = result as u32;
+        if double {
+            self.fp[destination + 1] = (result >> 32) as u32;
+        }
+        true
+    }
+
+    fn fp_minmax_bits(&mut self, left: u64, right: u64, double: bool, minimum: bool) -> u64 {
+        let (exp, quiet, sign) = if double {
+            (0x7ff0_0000_0000_0000, 1 << 51, 1 << 63)
+        } else {
+            (0x7f80_0000, 1 << 22, 1 << 31)
+        };
+        let nan = |bits| bits & exp == exp && bits & (quiet * 2 - 1) != 0;
+        let signaling = |bits| nan(bits) && bits & quiet == 0;
+        if let Some(bits) = [left, right].into_iter().find(|&bits| signaling(bits)) {
+            self.fpscr |= 1;
+            return if self.fpscr & (1 << 25) != 0 {
+                exp | quiet
+            } else {
+                bits | quiet
+            };
+        }
+        match (nan(left), nan(right)) {
+            (true, true) => {
+                return if self.fpscr & (1 << 25) != 0 {
+                    exp | quiet
+                } else {
+                    left
+                };
+            }
+            (true, false) => return right,
+            (false, true) => return left,
+            _ => {}
+        }
+        if (left | right) & !sign == 0 {
+            return if minimum { left | right } else { left & right };
+        }
+        let number = |bits| {
+            if double {
+                f64::from_bits(bits)
+            } else {
+                f64::from(f32::from_bits(bits as u32))
+            }
+        };
+        if (minimum && number(left) <= number(right)) || (!minimum && number(left) >= number(right))
+        {
+            left
+        } else {
+            right
+        }
+    }
+
     pub(crate) fn is_fpu_instruction(high: u32, low: u32) -> bool {
         Self::fp_round_kind(high, low).is_some()
             || Self::fp_convert_kind(high, low).is_some()
+            || Self::select_or_minmax_kind(high, low).is_some()
             || matches!(high & 0xff00, 0xec00 | 0xed00 | 0xee00)
                 && matches!(low & 0xf00, 0xa00 | 0xb00)
     }
@@ -294,6 +404,10 @@ impl Thumb {
             }
         } else if let Some(kind) = Self::fp_convert_kind(high, low) {
             if !(self.armv81m || self.cortex_m33) || !self.convert_fp_to_integer(high, low, kind) {
+                return Ok(false);
+            }
+        } else if let Some(kind) = Self::select_or_minmax_kind(high, low) {
+            if !(self.armv81m || self.cortex_m33) || !self.select_or_minmax(high, low, kind) {
                 return Ok(false);
             }
         } else if high & 0xffe0 == 0xec40 && low & 0xd0 == 0x10 {
