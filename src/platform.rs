@@ -470,6 +470,21 @@ fn apply_repl_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
             });
             merged[index].body.extend(entry.body);
         } else if entry.model.is_empty()
+            && entry.registration.is_none()
+            && !entry.body.is_empty()
+            && let Some(&index) = declarations.get(&entry.name)
+            && matches!(
+                merged[index].model.as_str(),
+                "Timers.STM32_Timer" | "GPIOPort.STM32_GPIOPort"
+            )
+            && entry.body.iter().all(|(_, text)| {
+                text.split_once("->").is_some_and(|(source, _)| {
+                    source.trim().parse::<u8>().is_ok()
+                })
+            })
+        {
+            merged[index].body.extend(entry.body);
+        } else if entry.model.is_empty()
             && entry.name != "sysbus"
             && entry.registration.is_none()
             && let Some(&index) = declarations.get(&entry.name)
@@ -1885,8 +1900,8 @@ fn load_platform(
                     }
                 }
             }
-            if series != Some("STM32Series.F0") || capacity == Some(0) {
-                return Err(spi.error("expected STM32Series.F0 SPI with positive bufferCapacity"));
+            if !matches!(series, Some("STM32Series.F0" | "STM32Series.L0")) || capacity == Some(0) {
+                return Err(spi.error("expected STM32Series.F0 or L0 SPI with positive bufferCapacity"));
             }
             let mut device = Stm32F0Spi::new(spi.address()?, capacity.unwrap_or(4));
             device.irq = irq;
