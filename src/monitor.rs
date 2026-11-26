@@ -4355,6 +4355,15 @@ fn execute(
                 None,
             ))
         }
+        [target, "SP", value @ ..]
+            if (boot.started || boot.has_platform()) && value.len() <= 1 =>
+        {
+            let value = value.first()
+                .map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
+            Some(Action::CpuRegister(
+                resolve(target)?.trim_start_matches("sysbus.").into(), "sp".into(), value,
+            ))
+        }
         [target, "ResetVector", value @ ..]
             if (boot.started || !boot.runtime.is_empty()) && value.len() <= 1 =>
         {
