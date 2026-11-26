@@ -389,9 +389,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     if reply == "OK":
                         self.commands.append(command)
                         return value
-                # These operations can return a result or raise an error on this call.
-                if re.match(r"[\w.]+\s+(?:AssembleBlock|Step|Reset|SetRegister)(?:\s|$)", command):
-                    return self.operation(command)
+                # Assembly must execute immediately because its byte count is a command result.
+                if re.match(r"[\w.]+\s+AssembleBlock(?:\s|$)", command):
+                    return self.operation(command, assertion=True)
                 # Rust parses and evaluates these read-only startup queries.
                 if (re.match(r"(?:echo|lastLog|printenv)(?:\s|$)", command)
                         or re.fullmatch(r"emulation\s+IsStarted", command)):
