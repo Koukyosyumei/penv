@@ -571,6 +571,9 @@ impl Cpu {
             "ifsr" => 0x0005_0020,
             "hsr" => 0x0085_0002,
             "dfar" => 0x0006_0000,
+            "ctr" => 0x0000_0020,
+            "clidr" => 0x0020_0020,
+            "revidr" => 0x0000_00c0,
             "id_pfr0" => 0x0000_0001,
             "id_pfr1" => 0x0000_0021,
             "id_mmfr0" => 0x0000_0081,
@@ -621,6 +624,9 @@ impl Cpu {
         if v8r {
             let read_only = match key {
                 0x0000_0000 => Some(0x411f_d132),
+                0x0000_0020 => Some(0x8144_c004),
+                0x0020_0020 => Some(0x0900_0003),
+                0x0000_00c0 => Some(0),
                 0x0000_0001 => Some(0x0000_0131),
                 0x0000_0021 => Some(0x0011_1001 | (u32::from(self.gic_system_registers) << 28)),
                 0x0000_0081 => Some(0x0021_1040),
