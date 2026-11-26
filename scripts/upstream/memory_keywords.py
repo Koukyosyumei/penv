@@ -1,20 +1,18 @@
 """Synchronous Renode Robot memory keywords on the live penv system bus."""
 
-import operator
-
-from penv_robot import AssertionFailed, Unsupported
+from penv_robot import Unsupported
 
 
 WIDTHS = {"Byte": 1, "Word": 2, "DoubleWord": 4, "QuadWord": 8}
 COMPARISONS = {
-    "Should Be Equal": (operator.eq, "equal to"),
-    "Should Not Be Equal": (operator.ne, "unequal to"),
-    "Should Be Less Than": (operator.lt, "less than"),
-    "Should Be Less Or Equal": (operator.le, "less or equal"),
-    "Should Be Greater Than": (operator.gt, "greater than"),
-    "Should Be Greater Or Equal": (operator.ge, "greater or equal"),
-    "Should Be Zero": (operator.eq, "equal to"),
-    "Should Be Nonzero": (operator.ne, "unequal to"),
+    "Should Be Equal": "eq",
+    "Should Not Be Equal": "ne",
+    "Should Be Less Than": "lt",
+    "Should Be Less Or Equal": "le",
+    "Should Be Greater Than": "gt",
+    "Should Be Greater Or Equal": "ge",
+    "Should Be Zero": "eq",
+    "Should Be Nonzero": "ne",
 }
 FAMILIES = ("Memory", "Symbol", "All Symbols", "Any Symbol")
 
@@ -61,32 +59,38 @@ class MemoryKeywords:
         start, size = integer(start), integer(size)
         if not 0 <= start < (1 << 64) or not 0 <= size <= (1 << 64) - start:
             raise Unsupported("symbol range exceeds the address space")
-        self.ensure_running()
-        self.memory_symbols.setdefault(name, set()).add((start, size))
+        self.operation(f"addMemorySymbol {self.literal(name)} {start:#x} {size:#x}")
 
-    def symbol_addresses(self, name):
-        entries = sorted(self.memory_symbols.get(name, ()))
-        if not entries:
-            raise Unsupported(f"symbol {name} is not registered in the Robot monitor symbol table")
-        return [start for start, _ in entries]
+    def symbol_addresses(self, name, single):
+        mode = "single" if single else "all"
+        addresses = self.operation(f"resolveMemorySymbols {self.literal(name)} {mode}")
+        return [integer(value) for value in addresses.split()]
 
     def store_monitor_value(self, target, value, *args):
         width = current_keyword(self).removeprefix("Store ").replace(" ", "")
         size = WIDTHS[width]
         options = self.log_options(args, {"offset", "index"}, ("offset", "index"))
-        try:
+        kind, _, specified = target.partition("=")
+        if kind in {"address", "symbol"}:
+            target = specified
+        if kind == "symbol":
+            address = None
+        elif kind == "address":
             address = integer(target)
-        except ValueError:
-            addresses = self.symbol_addresses(target)
-            if len(addresses) > 1 and "index" not in options:
-                raise Unsupported(f"multiple symbols named {target} require an index")
+        else:
+            try:
+                address = integer(target)
+            except ValueError:
+                address = None
+        if address is None:
+            addresses = self.symbol_addresses(target, "index" not in options)
             index = integer(options.get("index", 0))
             if index < 0 or index >= len(addresses):
                 raise Unsupported("symbol index outside the registered table")
             address = addresses[index] + integer(options.get("offset", 0)) * size
-        else:
-            if options:
-                raise Unsupported("offset and index require a symbol")
+        elif options:
+            raise Unsupported("offset and index require a symbol")
+        value = value.removeprefix("value=")
         bits = 8 * size
         value = integer(value)
         if not -(1 << (bits - 1)) <= value < (1 << bits):
@@ -98,7 +102,7 @@ class MemoryKeywords:
         family, comparison = current_keyword(self).split(" Should", 1)
         independent = comparison.startswith(" Independently ")
         comparison = "Should" + comparison.replace(" Independently ", " ", 1)
-        compare, description = COMPARISONS[comparison]
+        relation = COMPARISONS[comparison]
         if comparison in {"Should Be Zero", "Should Be Nonzero"}:
             expected = 0
         elif args:
@@ -122,36 +126,17 @@ class MemoryKeywords:
         signed = self.log_bool(options.get("signed", "false"))
         offset = size * integer(options.get("offset", 0))
         if family == "Memory":
-            addresses = [integer(target)]
+            addresses = [integer(target.removeprefix("address="))]
         else:
-            addresses = self.symbol_addresses(target)
-            if family == "Symbol" and len(addresses) != 1:
-                raise Unsupported(f"symbol {target} is ambiguous")
+            addresses = self.symbol_addresses(target.removeprefix("symbol="), family == "Symbol")
 
         addresses = [(address + offset) & ((1 << 64) - 1) for address in addresses]
+        group = "independently" if independent else "any" if family == "Any Symbol" else "all"
+        attributes = f"{group} {relation} {size} {str(signed).lower()} {expected:#x}"
+        targets = " ".join(f"{address:#x}" for address in addresses)
         if "timeout" in options:
-            group = "independently" if independent else "any" if family == "Any Symbol" else "all"
-            relation = {operator.eq: "eq", operator.ne: "ne", operator.lt: "lt",
-                        operator.le: "le", operator.gt: "gt", operator.ge: "ge"}[compare]
             pause = str(self.log_bool(options.get("pauseEmulation", "false"))).lower()
             timeout = self.duration(options["timeout"])
-            targets = " ".join(f"{address:#x}" for address in addresses)
-            self.operation(f"waitForMemory {group} {relation} {size} {str(signed).lower()} "
-                           f"{expected & ((1 << 64) - 1):#x} {timeout} {pause} {targets}", assertion=True)
-            return
-
-        def normalize(value):
-            bits = 8 * size
-            value &= (1 << bits) - 1
-            if signed and value & (1 << (bits - 1)):
-                value -= 1 << bits
-            return value
-
-        def evaluate():
-            for address in addresses:
-                raw = self.operation(f"sysbus Read{width} {address:#x}", assertion=True)
-                yield compare(normalize(integer(raw.split(maxsplit=1)[0])), normalize(expected))
-
-        check = any if family == "Any Symbol" else all
-        if not check(evaluate()):
-            raise AssertionFailed(f"{family} {target} is not {description} {expected:#x}")
+            self.operation(f"waitForMemory {attributes} {timeout} {pause} {targets}", assertion=True)
+        else:
+            self.operation(f"checkMemory {attributes} {targets}", assertion=True)

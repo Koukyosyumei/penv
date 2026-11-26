@@ -101,22 +101,58 @@ impl MemoryWatch {
             {
                 continue;
             }
-            let value = value >> (offset * 8);
-            let shift = 64 - (self.width * 8);
-            let order = if self.signed {
-                ((value << shift) as i64).cmp(&((self.expected << shift) as i64))
-            } else {
-                (value << shift).cmp(&(self.expected << shift))
-            };
-            *matched = match self.comparison {
-                Comparison::Equal => order == Ordering::Equal,
-                Comparison::NotEqual => order != Ordering::Equal,
-                Comparison::Less => order == Ordering::Less,
-                Comparison::LessOrEqual => order != Ordering::Greater,
-                Comparison::Greater => order == Ordering::Greater,
-                Comparison::GreaterOrEqual => order != Ordering::Less,
-            };
+            *matched = Self::compare(
+                self.width,
+                self.signed,
+                self.comparison,
+                value >> (offset * 8),
+                self.expected,
+            );
         }
+    }
+
+    fn compare(
+        width: usize,
+        signed: bool,
+        comparison: Comparison,
+        value: u64,
+        expected: u64,
+    ) -> bool {
+        let shift = 64 - (width * 8);
+        let order = if signed {
+            ((value << shift) as i64).cmp(&((expected << shift) as i64))
+        } else {
+            (value << shift).cmp(&(expected << shift))
+        };
+        match comparison {
+            Comparison::Equal => order == Ordering::Equal,
+            Comparison::NotEqual => order != Ordering::Equal,
+            Comparison::Less => order == Ordering::Less,
+            Comparison::LessOrEqual => order != Ordering::Greater,
+            Comparison::Greater => order == Ordering::Greater,
+            Comparison::GreaterOrEqual => order != Ordering::Less,
+        }
+    }
+
+    pub(crate) fn check(
+        &self,
+        mut read: impl FnMut(u64, usize) -> Result<u64, String>,
+    ) -> Result<bool, String> {
+        let any = matches!(self.group, Group::Any);
+        for &(address, _) in &self.targets {
+            let value = read(address, self.width)?;
+            if Self::compare(
+                self.width,
+                self.signed,
+                self.comparison,
+                value,
+                self.expected,
+            ) == any
+            {
+                return Ok(any);
+            }
+        }
+        Ok(!any)
     }
 
     pub(crate) fn matched(&self) -> bool {

@@ -65,7 +65,6 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.log_capacity = None
         self.log_timeout = None
         self.log_pause = False
-        self.memory_symbols = {}
         self.monitor_input = MonitorInput(self.root, self.out, self.assets)
         self.replaying = False
         self.inline = []

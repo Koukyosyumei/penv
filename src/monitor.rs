@@ -80,6 +80,7 @@ pub struct Session {
     machine_cleared: bool,
     number_mode: NumberMode,
     allow_privates: bool,
+    memory_symbols: HashMap<String, std::collections::BTreeSet<(u64, u64)>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -606,6 +607,9 @@ enum Action {
     WriteRcc(u32, u32),
     WaitForLed(String, bool, u64, u64, bool),
     WaitForMemory(crate::memory_watch::MemoryWatch, u64, bool),
+    CheckMemory(crate::memory_watch::MemoryWatch),
+    AddMemorySymbol(String, u64, u64),
+    ResolveMemorySymbols(String, bool),
     PwmTester(String, String),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
@@ -641,6 +645,24 @@ struct BusScalar {
 }
 
 impl BusScalar {
+    fn read_value(bus: &mut crate::bus::Bus, address: u64, width: usize) -> Result<u64, String> {
+        let address32 = u32::try_from(address)
+            .ok()
+            .filter(|&address| address.checked_add(width as u32 - 1).is_some());
+        if let Some(address) = address32
+            && width == 8
+            && let Some(value) = bus.riscv_machine_timer.as_mut().and_then(|timer| timer.read(address, width))
+        {
+            return Ok(value);
+        }
+        match (address32, width) {
+            (Some(address), 1) => bus.read_scalar::<1>(address, true),
+            (Some(address), 2) => bus.read_scalar::<2>(address, true),
+            (Some(address), 4) => bus.read_scalar::<4>(address, true),
+            _ => return crate::memory_setup::read_ram(bus, address, width),
+        }.map(u64::from).map_err(|error| error.to_string())
+    }
+
     fn apply(&self, bus: &mut crate::bus::Bus, output: &mut impl Write) -> Result<(), String> {
         let Self {
             address,
@@ -651,43 +673,20 @@ impl BusScalar {
         let address32 = u32::try_from(address)
             .ok()
             .filter(|&address| address.checked_add(width as u32 - 1).is_some());
-        if let Some(address) = address32
-            && width == 8
-            && let Some(timer) = bus.riscv_machine_timer.as_mut()
-        {
-            if let Some(value) = value {
-                if timer.write(address, width, value).is_some() {
-                    return Ok(());
-                }
-            } else if let Some(value) = timer.read(address, width) {
-                return number_mode.print(value, width, output);
-            }
-        }
         if let Some(value) = value {
-            return match address32 {
-                Some(address) if width <= 4 => bus
-                    .write_scalar(address, width, value as u32, output, true)
+            if let Some(address) = address32 && width == 8
+                && bus.riscv_machine_timer.as_mut().and_then(|timer| timer.write(address, width, value)).is_some()
+            {
+                return Ok(());
+            }
+            match address32 {
+                Some(address) if width <= 4 => bus.write_scalar(address, width, value as u32, output, true)
                     .map_err(|error| error.to_string()),
                 _ => crate::memory_setup::write_ram(bus, address, width, value),
-            };
-        }
-        let result = match (address32, width) {
-            (Some(address), 1) => bus.read_scalar::<1>(address, true),
-            (Some(address), 2) => bus.read_scalar::<2>(address, true),
-            (Some(address), 4) => bus.read_scalar::<4>(address, true),
-            _ => {
-                return number_mode.print(
-                    crate::memory_setup::read_ram(bus, address, width)?,
-                    width,
-                    output,
-                );
             }
-        };
-        number_mode.print(
-            u64::from(result.map_err(|error| error.to_string())?),
-            width,
-            output,
-        )
+        } else {
+            number_mode.print(Self::read_value(bus, address, width)?, width, output)
+        }
     }
 }
 
@@ -1535,6 +1534,32 @@ fn run_commands<'a>(
                     }
                 })
             }
+            Action::AddMemorySymbol(name, address, size) => {
+                session.memory_symbols.entry(name.clone()).or_default().insert((*address, *size));
+                Ok(None)
+            }
+            Action::ResolveMemorySymbols(name, single) => {
+                if let Some(symbols) = session.memory_symbols.get(name) {
+                    if *single && symbols.len() != 1 {
+                        return Err(format!("Expected a single symbol for {name}. There are multiple symbols."));
+                    }
+                    for (address, _) in symbols {
+                        writeln!(output.reply(), "{address:#x}").map_err(|error| error.to_string())?;
+                    }
+                } else {
+                    let address = machine.monitor_symbol_address(name)
+                        .map_err(|_| format!("Symbol {name} not found"))?;
+                    writeln!(output.reply(), "{address:#x}").map_err(|error| error.to_string())?;
+                }
+                Ok(None)
+            }
+            Action::CheckMemory(watch) => {
+                if watch.check(|address, width| BusScalar::read_value(&mut machine.bus, address, width))? {
+                    Ok(None)
+                } else {
+                    Err("memory assertion did not match the current value".into())
+                }
+            }
             Action::WaitForMemory(watch, timeout, pause) => {
                 let limit = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?.min(budget);
                 machine.bus.memory_watch = Some(watch.clone());
@@ -2208,6 +2233,14 @@ pub fn serve(
                         && error.ends_with("register is read-only.") =>
                     {
                         frame(&mut output, "REJECTED", error.as_bytes())
+                    }
+                    Err(error) if matches!(commands, [RuntimeCommand { action: Action::ResolveMemorySymbols(..), .. }])
+                        && (error.contains("Expected a single symbol") || (error.starts_with("Symbol ") && error.ends_with(" not found"))) =>
+                    {
+                        frame(&mut output, "REJECTED", error.as_bytes())
+                    }
+                    Err(error) if error.starts_with("<monitor>:1: memory assertion did not match") => {
+                        frame(&mut output, "FAIL", error.as_bytes())
                     }
                     Err(error) if error.starts_with("<monitor>:1: Terminal tester failed!") => {
                         frame(&mut output, "FAIL", error.as_bytes())
@@ -3443,8 +3476,29 @@ const LAST_LOG_PARAMETERS: &str = "Bad parameters for command lastLog";
 const LOG_PARAMETERS: &str = "Bad parameters for command log";
 const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expected @snapshot-path or quoted path";
 
+const NEGATIVE_MEMORY_COMPARISON: &str = "Negative values require signed memory comparisons.";
+
+fn parse_memory_watch(
+    group: &str, comparison: &str, width: &str, signed: &str, expected: &str, addresses: &[&str],
+) -> Result<crate::memory_watch::MemoryWatch, String> {
+    let width = width.parse().map_err(|_| "expected a memory access width in bytes")?;
+    let signed = parse_tester_bool(signed)?;
+    let expected = if let Some(magnitude) = expected.strip_prefix('-') {
+        if !signed {
+            return Err(NEGATIVE_MEMORY_COMPARISON.into());
+        }
+        0u64.wrapping_sub(crate::parse_address64(magnitude)?)
+    } else {
+        crate::parse_address64(expected.strip_prefix('+').unwrap_or(expected))?
+    };
+    let addresses = addresses.iter().map(|address| crate::parse_address64(address))
+        .collect::<Result<Vec<_>, _>>()?;
+    crate::memory_watch::MemoryWatch::new(addresses, width, signed, comparison.parse()?, expected, group.parse()?)
+        .map_err(str::to_owned)
+}
+
 fn invalid_command_parameters(error: &str) -> bool {
-    matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | LAST_LOG_PARAMETERS | SNAPSHOT_PARAMETERS)
+    matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | LAST_LOG_PARAMETERS | SNAPSHOT_PARAMETERS | NEGATIVE_MEMORY_COMPARISON)
 }
 
 fn inspect_snapshot_destination(path: &Path) -> Option<String> {
@@ -4538,15 +4592,23 @@ fn execute(
                 .map_err(|_| "expected a byte for WriteChar")?;
             Some(Action::UsartWriteChar(resolve(target)?.into(), value))
         }
+        ["addMemorySymbol", name, address, size] => {
+            let name = unquote(resolve(name)?);
+            let address = crate::parse_address64(resolve(address)?)?;
+            let size = crate::parse_address64(resolve(size)?)?;
+            if name.is_empty() || (size != 0 && address.checked_add(size - 1).is_none()) {
+                return Err("invalid memory symbol range".into());
+            }
+            Some(Action::AddMemorySymbol(name.to_owned(), address, size))
+        }
+        ["resolveMemorySymbols", name, mode @ ("single" | "all")] => {
+            Some(Action::ResolveMemorySymbols(unquote(resolve(name)?).to_owned(), *mode == "single"))
+        }
+        ["checkMemory", group, comparison, width, signed, expected, addresses @ ..] => {
+            Some(Action::CheckMemory(parse_memory_watch(group, comparison, width, signed, resolve(expected)?, addresses)?))
+        }
         ["waitForMemory", group, comparison, width, signed, expected, timeout, pause, addresses @ ..] => {
-            let group = group.parse()?;
-            let comparison = comparison.parse()?;
-            let width = width.parse().map_err(|_| "expected a memory access width in bytes")?;
-            let signed = parse_tester_bool(signed)?;
-            let expected = crate::parse_address64(resolve(expected)?)?;
-            let addresses = addresses.iter().map(|address| crate::parse_address64(resolve(address)?))
-                .collect::<Result<Vec<_>, _>>()?;
-            let watch = crate::memory_watch::MemoryWatch::new(addresses, width, signed, comparison, expected, group)?;
+            let watch = parse_memory_watch(group, comparison, width, signed, resolve(expected)?, addresses)?;
             Some(Action::WaitForMemory(watch, duration_steps(resolve(timeout)?)?, parse_tester_bool(pause)?))
         }
         ["waitForLed", target, state, timeout, options @ ..] => {
@@ -5027,6 +5089,7 @@ fn execute(
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)
                         | Action::UsartWriteChar(..) | Action::WaitForMemory(..) | Action::BusFaultingProperty(..)
+                        | Action::CheckMemory(..) | Action::AddMemorySymbol(..) | Action::ResolveMemorySymbols(..)
                         | Action::PeripheralLog(..)
                         | Action::I2cAccelerationFeed(..) | Action::I2cAccelerationRead(..) | Action::I2cSampleRate(..) | Action::I2cAcceleration(..)
                         | Action::RunFor(_)
