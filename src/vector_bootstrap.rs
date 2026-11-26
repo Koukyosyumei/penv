@@ -28,6 +28,17 @@ impl VectorBootstrap {
         }
     }
 
+    pub(crate) fn set_length(&mut self, vlen: u64) -> Result<(), &'static str> {
+        if !(128..=1024).contains(&vlen) || !vlen.is_power_of_two() {
+            return Err("RV32 vector register length must be a power of two between 128 and 1024 bits");
+        }
+        self.vlen = vlen as u32;
+        self.start = 0;
+        self.length = 0;
+        self.kind = VILL;
+        Ok(())
+    }
+
     pub fn read(&self, address: u32) -> Option<u32> {
         Some(match address {
             0x008 => self.start,

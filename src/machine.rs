@@ -502,11 +502,14 @@ impl Machine {
             .ok_or_else(|| format!("unknown named RV64 CPU {name:?}"))
     }
 
-    pub(crate) fn configure_rv64_vlen(&mut self, name: &str, bits: u64) -> Result<(), String> {
-        let id = self.rv64_hart_by_name(name)?;
-        let vector = self.hart_mut(id).rv64.as_mut().expect("validated RV64 CPU")
-            .privilege.vector.as_mut().ok_or("VectorRegisterLength requires the V extension")?;
-        vector.set_length(bits).map_err(str::to_owned)
+    pub(crate) fn configure_monitor_vlen(&mut self, name: &str, bits: u64) -> Result<(), String> {
+        let hart = self.named_hart(name)?;
+        if let Some(cpu) = &mut hart.rv64 {
+            cpu.privilege.vector.as_mut().ok_or("VectorRegisterLength requires the V extension")?
+                .set_length(bits).map_err(str::to_owned)
+        } else {
+            hart.csr.set_vector_length(bits)
+        }
     }
 
     pub(crate) fn install_csr_hook(&mut self, name: &str, csr: u32, source: &str) -> Result<(), String> {

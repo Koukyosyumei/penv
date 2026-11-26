@@ -382,6 +382,12 @@ impl Csr {
         self.vector_bootstrap = Some(VectorBootstrap::default());
     }
 
+    pub(crate) fn set_vector_length(&mut self, bits: u64) -> Result<(), String> {
+        self.vector_bootstrap.as_mut()
+            .ok_or("VectorRegisterLength requires vector support")?
+            .set_length(bits).map_err(str::to_owned)
+    }
+
     pub fn vector_configured(&self) -> bool {
         self.vector_bootstrap.is_some()
     }

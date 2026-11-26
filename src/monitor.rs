@@ -918,7 +918,7 @@ fn run_commands<'a>(
                 writeln!(output.output, "{}", if state { "True" } else { "False" })
                     .map(|()| None).map_err(|error| error.to_string())
             }),
-            Action::VectorRegisterLength(cpu, bits) => machine.configure_rv64_vlen(cpu, *bits).map(|()| None),
+            Action::VectorRegisterLength(cpu, bits) => machine.configure_monitor_vlen(cpu, *bits).map(|()| None),
             Action::AddCsrHook(cpu, csr, source) => machine.install_csr_hook(cpu, *csr, source).map(|()| None),
             Action::AddStackAccessHook(cpu, source) => machine.install_stack_access_hook(cpu, source).map(|()| None),
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
