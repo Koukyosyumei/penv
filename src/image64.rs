@@ -258,6 +258,11 @@ fn double(bytes: &[u8], offset: usize) -> u64 {
 }
 
 pub fn symbol(bytes: &[u8], name: &str) -> Result<u64, String> {
+    symbols(bytes, name)?.into_iter().next()
+        .ok_or_else(|| format!("ELF64 symbol {name:?} not found"))
+}
+
+pub(crate) fn symbols(bytes: &[u8], name: &str) -> Result<Vec<u64>, String> {
     let header = bytes.get(..64).ok_or("short ELF64 symbol file")?;
     if header[..7] != *b"\x7fELF\x02\x01\x01" || half(header, 18) != 243 || half(header, 58) != 64 {
         return Err("expected a little-endian RISC-V ELF64 section table".into());
@@ -267,6 +272,7 @@ pub fn symbol(bytes: &[u8], name: &str) -> Result<u64, String> {
     };
     let sections = slice(double(header, 40), u64::from(half(header, 60)) * 64)
         .ok_or("invalid ELF64 section table")?;
+    let mut addresses = Vec::new();
     for symtab in sections
         .chunks_exact(64)
         .filter(|section| word(section, 4) == 2)
@@ -293,11 +299,11 @@ pub fn symbol(bytes: &[u8], name: &str) -> Result<u64, String> {
             if let Some(tail) = strings.get(word(entry, 0) as usize..)
                 && tail.split(|&byte| byte == 0).next() == Some(name.as_bytes())
             {
-                return Ok(double(entry, 8));
+                addresses.push(double(entry, 8));
             }
         }
     }
-    Err(format!("ELF64 symbol {name:?} not found"))
+    Ok(addresses)
 }
 
 #[cfg(test)]

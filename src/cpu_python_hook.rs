@@ -8,6 +8,7 @@ use std::{
 };
 
 const WORKER: &str = r#"
+import builtins
 import contextlib
 import io
 import sys
@@ -39,6 +40,13 @@ for name in ('Antmicro', 'Antmicro.Renode', 'Antmicro.Renode.Peripherals',
     module.__path__ = []
 sys.modules['Antmicro.Renode.Peripherals.Bus'].BusRangeRegistration = BusRangeRegistration
 
+class UnsignedAddress(int):
+    pass
+
+def monitor_hex(value):
+    result = builtins.hex(value)
+    return result + 'L' if isinstance(value, UnsignedAddress) else result
+
 class Bus:
     def WhatIsAt(self, address, cpu):
         name = bytes.fromhex(rpc(f'lookup {address} {cpu.path.encode().hex()}')).decode()
@@ -47,8 +55,9 @@ class Bus:
         if registration.cpu.path != cpu.path:
             raise ValueError('registration CPU does not match the context')
         rpc(f'move {peripheral.path.encode().hex()} {cpu.path.encode().hex()} {registration.address} {registration.size}')
-    def GetSymbolAddress(self, name):
-        return int(rpc('symbol ' + name.encode().hex()))
+    def GetSymbolAddress(self, name, index=None):
+        suffix = '' if index is None else ' ' + str(index)
+        return UnsignedAddress(rpc('symbol ' + name.encode().hex() + suffix))
     def ReadByte(self, address):
         return int(rpc('byte ' + str(address)))
 
@@ -89,7 +98,7 @@ class CPU(Credential):
 
 level = SimpleNamespace(Noisy=-1, Debug=0, Info=1, Warning=2, Error=3)
 cpu = CPU(sys.argv[2])
-scope = dict(machine=cpu.Machine, cpu=cpu, self=cpu, LogLevel=level)
+scope = dict(machine=cpu.Machine, cpu=cpu, self=cpu, LogLevel=level, hex=monitor_hex)
 request = SimpleNamespace(Value=0)
 program = compile(sys.argv[1], '<CPU hook>', 'exec')
 print('ready', flush=True)
@@ -142,19 +151,35 @@ pub(crate) struct Hook {
 }
 
 pub(crate) fn symbol(file: &Path, name: &str) -> Result<u64, String> {
+    symbol_addresses(file, name)?.into_iter().next()
+        .ok_or_else(|| format!("symbol {name:?} not found"))
+}
+
+pub(crate) fn symbol_at(file: &Path, name: &str, index: Option<i32>) -> Result<u64, String> {
+    let mut addresses = symbol_addresses(file, name)?;
+    addresses.sort_unstable();
+    addresses.dedup();
+    match (addresses.as_slice(), index) {
+        ([], _) => Err(format!("Could not find any address for symbol: {name}")),
+        ([address], None) => Ok(*address),
+        (_, Some(index)) => usize::try_from(index).ok().and_then(|index| addresses.get(index)).copied()
+            .ok_or_else(|| format!("Wrong index {index} for '{name}': {} address(es) available (0-based index)", addresses.len())),
+        (_, None) => Err(format!("Found {} possible addresses for the symbol. Select one by providing a 0-based index", addresses.len())),
+    }
+}
+
+fn symbol_addresses(file: &Path, name: &str) -> Result<Vec<u64>, String> {
     let mut source = File::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let mut ident = [0; 5];
     source.read_exact(&mut ident).map_err(|e| e.to_string())?;
     source.rewind().map_err(|e| e.to_string())?;
     match &ident {
-        b"\x7fELF\x01" => crate::image::find_symbols(source, &[name])?
-            .first()
-            .map(|(_, address)| u64::from(*address))
-            .ok_or_else(|| format!("symbol {name:?} not found")),
+        b"\x7fELF\x01" => Ok(crate::image::find_symbols(source, &[name])?
+            .into_iter().map(|(_, address)| u64::from(address)).collect()),
         b"\x7fELF\x02" => {
             let mut image = Vec::new();
             source.read_to_end(&mut image).map_err(|e| e.to_string())?;
-            crate::image64::symbol(&image, name)
+            crate::image64::symbols(&image, name)
         }
         _ => Err("CPU hook symbol lookup requires ELF".into()),
     }
@@ -283,9 +308,15 @@ impl Hook {
                     );
                     return Ok(None);
                 }
-                "symbol" => decode(argument)
-                    .and_then(|name| symbol(self.symbols.as_deref().ok_or("no firmware ELF for symbol lookup")?, &name))
-                    .map(|address| address.to_string()),
+                "symbol" => (|| {
+                    let (encoded, index) = match argument.split_once(' ') {
+                        Some((name, value)) => (name, Some(value.parse().map_err(|_| "invalid symbol index")?)),
+                        None => (argument, None),
+                    };
+                    let name = decode(encoded)?;
+                    let file = self.symbols.as_deref().ok_or("no firmware ELF for symbol lookup")?;
+                    symbol_at(file, &name, index).map(|address| address.to_string())
+                })(),
                 "byte" => argument
                     .parse::<u32>()
                     .map_err(|e| e.to_string())

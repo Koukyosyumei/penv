@@ -750,7 +750,7 @@ enum Action {
     CpuNonsecureVectorTable(String, u32),
     NvicLockup(String, bool),
     NvicSignal(String, String),
-    SymbolAddress(String),
+    SymbolAddress(String, Option<i32>),
     I2cSensorProperty(String, String, String),
     I2cAcceleration(String, usize, i32, bool),
     I2cAccelerationFeed(String, PathBuf, bool),
@@ -988,7 +988,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::LoadScopedHex(..) | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                     | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                    | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(_) | Action::ExecutionMode(..)
+                    | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(..) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::Stm32AdcSample(..) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
@@ -1761,10 +1761,12 @@ fn run_commands<'a>(
                 machine.bus.set_stm32l0_voltage(target, *voltage).map(|()| None),
             Action::I2cSensorProperty(target, property, value) =>
                 machine.bus.set_i2c_sensor_property(target, property, value).map(|()| None),
-            Action::SymbolAddress(symbol) => machine.monitor_symbol_address(symbol).and_then(|address| {
+            Action::SymbolAddress(symbol, index) => (|| {
+                let path = machine.monitor_firmware.as_deref().ok_or("no firmware ELF for symbol lookup")?;
+                let address = crate::cpu_python_hook::symbol_at(path, symbol, *index)?;
                 writeln!(output.reply(), "0x{address:x}").map_err(|error| error.to_string())?;
                 Ok(None)
-            }),
+            })(),
             Action::CpuSymbolVectorTable(cpu, symbol) => {
                 let address = u32::try_from(machine.monitor_symbol_address(symbol)?)
                     .map_err(|_| "vector table address exceeds Cortex-M address width")?;
@@ -5347,8 +5349,10 @@ fn execute(
         {
             Some(Action::I2cSensorProperty(resolve(target)?.into(), (*property).into(), resolve(value)?.into()))
         }
-        ["sysbus", "GetSymbolAddress", symbol] => {
-            Some(Action::SymbolAddress(unquote(resolve(symbol)?).to_owned()))
+        ["sysbus", "GetSymbolAddress", symbol, index @ ..] if index.len() <= 1 => {
+            let index = index.first().map(|value| resolve(value)?.parse()
+                .map_err(|_| "invalid symbol index".to_owned())).transpose()?;
+            Some(Action::SymbolAddress(unquote(resolve(symbol)?).to_owned(), index))
         }
         [target, "VectorTableOffset", expression] if expression.starts_with('`') && expression.ends_with('`') => {
             let expression = &expression[1..expression.len() - 1];
