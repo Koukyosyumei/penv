@@ -125,6 +125,109 @@ impl Ethernet {
         }
     }
 
+    pub(crate) fn supports_snapshot(&self) -> bool {
+        self.link.is_none()
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, write_words};
+        if !self.supports_snapshot() {
+            return Err(invalid("cannot snapshot Ethernet with an active host link"));
+        }
+        write_words(output, &[
+            u64::from(self.base), self.irq as u64, u64::from(self.tx_dropping), self.tx_frame.len() as u64,
+        ])?;
+        let registers = &self.registers;
+        write_words(output, &[
+            u64::from(registers.config),
+            u64::from(registers.filter),
+            u64::from(registers.mii_address),
+            u64::from(registers.mii_data),
+            u64::from(registers.mac_high),
+            u64::from(registers.mac_low),
+            u64::from(registers.bus_mode),
+            u64::from(registers.receive_list),
+            u64::from(registers.transmit_list),
+            u64::from(registers.current_tx),
+            u64::from(registers.current_rx),
+            u64::from(registers.status),
+            u64::from(registers.tx_state),
+            u64::from(registers.rx_state),
+            u64::from(registers.operation),
+            u64::from(registers.interrupt_enable),
+        ])?;
+        for phy in &self.phys {
+            write_words(output, &[u64::from(phy.is_some())])?;
+            if let Some(phy) = phy {
+                write_words(output, &phy.registers.map(u64::from))?;
+            }
+        }
+        output.write_all(&self.tx_frame)
+    }
+
+    pub(crate) fn read_snapshot(&self, input: &mut impl std::io::Read) -> std::io::Result<Self> {
+        use crate::snapshot::{invalid, read_bool, read_words};
+        let [base, irq, dropping, length] = read_words(input)?;
+        if base != u64::from(self.base) || irq != self.irq as u64 || length > (MAX_FRAME - 4) as u64 {
+            return Err(invalid("invalid Ethernet snapshot layout or frame length"));
+        }
+        let [
+            config,
+            filter,
+            mii_address,
+            mii_data,
+            mac_high,
+            mac_low,
+            bus_mode,
+            receive_list,
+            transmit_list,
+            current_tx,
+            current_rx,
+            status,
+            tx_state,
+            rx_state,
+            operation,
+            interrupt_enable,
+        ] = read_words(input)?;
+        let word = |value| u32::try_from(value).map_err(std::io::Error::other);
+        let registers = Registers {
+            config: word(config)?,
+            filter: word(filter)?,
+            mii_address: word(mii_address)?,
+            mii_data: u16::try_from(mii_data).map_err(std::io::Error::other)?,
+            mac_high: word(mac_high)?,
+            mac_low: word(mac_low)?,
+            bus_mode: word(bus_mode)?,
+            receive_list: word(receive_list)?,
+            transmit_list: word(transmit_list)?,
+            current_tx: word(current_tx)?,
+            current_rx: word(current_rx)?,
+            status: word(status)?,
+            tx_state: word(tx_state)?,
+            rx_state: word(rx_state)?,
+            operation: word(operation)?,
+            interrupt_enable: word(interrupt_enable)?,
+        };
+        let mut phys = [None; 32];
+        for (index, slot) in phys.iter_mut().enumerate() {
+            if read_bool(read_words::<1>(input)?[0])? != self.phys[index].is_some() {
+                return Err(invalid("Ethernet snapshot PHY layout differs from the platform"));
+            }
+            if self.phys[index].is_some() {
+                let saved: [u64; 32] = read_words(input)?;
+                let mut phy = Phy::default();
+                for (register, word) in phy.registers.iter_mut().zip(saved) {
+                    *register = u16::try_from(word).map_err(std::io::Error::other)?;
+                }
+                *slot = Some(phy);
+            }
+        }
+        let mut tx_frame = vec![0; length as usize];
+        input.read_exact(&mut tx_frame)?;
+        Ok(Self { base: self.base, irq: self.irq, registers, phys, link: None, tx_frame,
+            tx_dropping: read_bool(dropping)? })
+    }
+
     pub fn attach(&mut self, address: usize, phy: Phy) -> bool {
         let Some(slot) = self.phys.get_mut(address) else {
             return false;
@@ -589,6 +692,27 @@ mod tests {
                 .unwrap()
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn ethernet_snapshot_preserves_dma_and_phy_state() {
+        let mut ethernet = Ethernet::new(0x1002_0000, 5);
+        ethernet.attach(0, Phy::default());
+        ethernet.phys[0].as_mut().unwrap().registers[4] = 0x01e1;
+        ethernet.registers.current_rx = 0x8000_8000;
+        ethernet.registers.status = 0x10040;
+        ethernet.tx_frame.extend([1, 2, 3]);
+        let mut snapshot = Vec::new();
+        ethernet.save_snapshot(&mut snapshot).unwrap();
+
+        let mut initial = Ethernet::new(0x1002_0000, 5);
+        assert!(initial.read_snapshot(&mut snapshot.as_slice()).is_err());
+        initial.attach(0, Phy::default());
+        let restored = initial.read_snapshot(&mut snapshot.as_slice()).unwrap();
+        assert_eq!(restored.phys[0].unwrap().registers[4], 0x01e1);
+        assert_eq!(restored.registers.current_rx, 0x8000_8000);
+        assert_eq!(restored.registers.status, 0x10040);
+        assert_eq!(restored.tx_frame, [1, 2, 3]);
     }
 
     #[test]

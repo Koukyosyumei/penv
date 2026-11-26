@@ -1647,6 +1647,10 @@ impl Machine {
             if let Some(reset_pin) = reset_pin {
                 reset_pin.save_snapshot(output)?;
             }
+            write_words(output, &[self.bus.rv64_devices.ethernet.len() as u64])?;
+            for ethernet in &self.bus.rv64_devices.ethernet {
+                ethernet.save_snapshot(output)?;
+            }
             self.bus.save_rv64_memory_snapshot(output)
         };
         write().map_err(|error| error.to_string())
@@ -1707,7 +1711,14 @@ impl Machine {
             }
             let reset_pin = has_reset_pin.then(|| crate::rv64_starfive::StarLightResetPin::read_snapshot(input))
                 .transpose()?;
+            let ethernet_count = if version >= 6 { read_words::<1>(input)?[0] } else { 0 };
+            if ethernet_count != self.bus.rv64_devices.ethernet.len() as u64 {
+                return Err(invalid("Ethernet snapshot layout differs from the platform"));
+            }
+            let ethernet = self.bus.rv64_devices.ethernet.iter()
+                .map(|device| device.read_snapshot(input)).collect::<std::io::Result<Vec<_>>>()?;
             self.bus.load_rv64_memory_snapshot(input)?;
+            self.bus.rv64_devices.ethernet = ethernet;
             self.bus.rv64_devices.starlight_reset_pin = reset_pin;
             self.bus.clint = clint;
             self.bus.rv64_devices.plic = plic;
