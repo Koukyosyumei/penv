@@ -2216,7 +2216,7 @@ fn wait_for_uart(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CpuRegisterCommand {
     TrapVector(TrapVector, Option<u32>),
-    Integer(u32, Option<u32>),
+    Integer(u32, Option<u64>),
     ExternalPmp(String, bool, u32, Option<u32>),
 }
 
@@ -4876,7 +4876,7 @@ fn execute(
         }
         ["cpu" | "sysbus.cpu", "SetRegister", index, value] if boot.has_platform() => {
             let index = crate::parse_address(unquote(resolve(index)?))?;
-            let value = crate::parse_address(resolve(value)?)?;
+            let value = crate::parse_address64(resolve(value)?)?;
             boot.cpu_registers
                 .push(CpuRegisterCommand::Integer(index, Some(value)));
         }

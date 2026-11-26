@@ -1940,8 +1940,10 @@ fn run() -> Result<ExitCode, String> {
                 monitor::CpuRegisterCommand::Integer(index, value) => {
                     let readback = if machine.primary.rv64.is_some() {
                         let name = machine.primary.name.clone().ok_or("RV64 monitor CPU has no name")?;
-                        machine.monitor_named_register(&name, &format!("x{index}"), value.map(u64::from))?
+                        machine.monitor_named_register(&name, &format!("x{index}"), value)?
                     } else {
+                        let value = value.map(u32::try_from).transpose()
+                            .map_err(|_| "register value exceeds CPU width")?;
                         machine.primary.monitor_integer_register(index, value)?.map(u64::from)
                     };
                     if let Some(readback) = readback {
