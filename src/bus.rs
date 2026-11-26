@@ -451,7 +451,7 @@ pub struct Bus {
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
     ns16550_name: Option<String>,
-    scheduled_ns16550_input: VecDeque<(u64, Vec<u8>)>,
+    scheduled_ns16550_input: std::collections::VecDeque<(u64, Vec<u8>)>,
     litex_uart: Option<LiteXUart>,
     litex_timer: Option<LiteXTimer>,
     pub litex_cpu_timer: Option<litex::CpuTimer>,
