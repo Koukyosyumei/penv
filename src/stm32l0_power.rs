@@ -1,5 +1,6 @@
 pub(crate) struct Stm32l0Power {
     pub base: u32,
+    pub name: Option<String>,
     pub exti: Option<u8>,
     control: u32,
     voltage: f64,
@@ -13,6 +14,7 @@ impl Stm32l0Power {
     pub fn new(base: u32, exti: Option<u8>) -> Self {
         Self {
             base,
+            name: None,
             exti,
             control: 0x1000,
             voltage: 3.3,
@@ -22,7 +24,9 @@ impl Stm32l0Power {
     }
 
     pub fn reset(&mut self) {
+        let name = self.name.take();
         *self = Self::new(self.base, self.exti);
+        self.name = name;
     }
 
     pub fn contains(&self, address: u32) -> bool {

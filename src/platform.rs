@@ -1027,7 +1027,9 @@ fn load_platform(
             }
             _ => return Err(entry.error("unsupported power controller property")),
         };
-        machine.bus.map_stm32l0_power(crate::stm32l0_power::Stm32l0Power::new(entry.address()?, line))
+        let mut power = crate::stm32l0_power::Stm32l0Power::new(entry.address()?, line);
+        power.name = Some(entry.name.clone());
+        machine.bus.map_stm32l0_power(power)
             .map_err(|error| entry.error(&error))?;
     }
     for entry in stm32_rngs {

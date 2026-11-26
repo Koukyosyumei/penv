@@ -499,6 +499,7 @@ enum AssemblyAddress {
 enum Action {
     SetEmulationPaused(bool),
     MonitorLog(String),
+    Stm32SupplyVoltage(String, f64),
     AssembleBlock(String, AssemblyAddress, String, String, NumberMode),
     RunFor(u64),
     RunUntil(u64),
@@ -1319,6 +1320,8 @@ fn run_commands<'a>(
                 session.allow_privates = *allow;
                 Ok(None)
             }
+            Action::Stm32SupplyVoltage(target, voltage) =>
+                machine.bus.set_stm32l0_voltage(target, *voltage).map(|()| None),
             Action::I2cSensorProperty(target, property, value) =>
                 machine.bus.set_i2c_sensor_property(target, property, value).map(|()| None),
             Action::SymbolAddress(symbol) => machine.monitor_symbol_address(symbol).and_then(|address| {
@@ -4497,6 +4500,11 @@ fn execute(
                 _ => return Err("invalid LED wait options".into()),
             };
             Some(Action::WaitForLed(resolve(target)?.to_owned(), state, timeout, hold, pause))
+        }
+        [target, "Voltage", value] => {
+            let voltage = resolve(value)?.parse::<f64>().ok().filter(|voltage| voltage.is_finite() && *voltage >= 0.0)
+                .ok_or("expected a nonnegative supply voltage")?;
+            Some(Action::Stm32SupplyVoltage(resolve(target)?.into(), voltage))
         }
         [target, property @ ("Temperature" | "Humidity" | "Pressure" | "SerialNumber"), value]
             if target.trim_start_matches("sysbus.").contains('.') =>

@@ -3633,6 +3633,10 @@ impl Bus {
         if let Some(syscon) = self.egis_syscon.as_ref().filter(|syscon| syscon.name == name) {
             return (offset < crate::egis_syscon::EgisSyscon::SIZE).then(|| syscon.base + offset);
         }
+        if let Some((_, addresses, size)) = self.traceable_memory.iter().find(|(registered, ..)| registered == name) {
+            return offset.checked_add(4).filter(|end| *end <= *size)
+                .and_then(|_| addresses.first()?.checked_add(offset));
+        }
         let (_, plic) = self.plics.iter().find(|(registered, _)| registered == name)?;
         (u64::from(offset) < plic.size).then(|| plic.base + offset)
     }
@@ -4254,18 +4258,6 @@ impl Bus {
                     }
                 }
             }
-            if let Some(exti) = self.h7_exti.as_mut() {
-                for line in exti.sample(exti_inputs) {
-                    nvic.set_line(line, true, active);
-                }
-            }
-            if let Some(exti) = self.exti.as_mut() {
-                let mut pending = exti.sample(exti_inputs[0]);
-                while pending != 0 {
-                    nvic.set_line(pending.trailing_zeros() as u8, true, active);
-                    pending &= pending - 1;
-                }
-            }
             if let Some(rtc) = self.stm32_rtc.as_mut() {
                 let mut signals = rtc.tick();
                 while signals != 0 {
@@ -4278,6 +4270,18 @@ impl Bus {
                         }
                         None => {}
                     }
+                }
+            }
+            if let Some(exti) = self.h7_exti.as_mut() {
+                for line in exti.sample(exti_inputs) {
+                    nvic.set_line(line, true, active);
+                }
+            }
+            if let Some(exti) = self.exti.as_mut() {
+                let mut pending = exti.sample(exti_inputs[0]);
+                while pending != 0 {
+                    nvic.set_line(pending.trailing_zeros() as u8, true, active);
+                    pending &= pending - 1;
                 }
             }
             let mut irqs = timer_irqs | self.external_nvic_levels;
@@ -5183,6 +5187,14 @@ impl Bus {
         self.stm32_regular_adcs.iter_mut().find(|adc| adc.name == name)
             .ok_or_else(|| format!("unknown STM32 ADC {name:?}"))?
             .feed_sample(value, channel, repeat)
+    }
+
+    pub(crate) fn set_stm32l0_voltage(&mut self, target: &str, voltage: f64) -> Result<(), String> {
+        let target = target.strip_prefix("sysbus.").unwrap_or(target);
+        let power = self.stm32l0_power.as_mut().filter(|device| device.name.as_deref() == Some(target))
+            .ok_or_else(|| format!("unknown STM32 power controller {target:?}"))?;
+        power.set_voltage(voltage);
+        Ok(())
     }
 
     pub(crate) fn map_stm32l0_power(&mut self, power: crate::stm32l0_power::Stm32l0Power) -> Result<(), String> {
