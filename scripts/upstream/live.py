@@ -414,7 +414,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 or re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
                 or re.match(r"(?:sysbus\s+Read(?:Byte|Bytes|Word|DoubleWord|QuadWord)|[\w.]+\s+Get(?:SystemRegisterValue|Register))\s", command)
                 or re.fullmatch(r"[\w.]+\s+Read(?:DoubleWord|QuadWord|ByteUsingDoubleWord|WordUsingDoubleWord)\s+\S+", command)
-                or re.fullmatch(r"[\w.]+\s+(?:GetRiscvOpcodesEmbeddedResourceNames|GetAllOpcodesCounters|FaultStatus)", command)
+                or re.fullmatch(r"[\w.]+\s+(?:GetRiscvOpcodesEmbeddedResourceNames|GetAllOpcodesCounters|FaultStatus|DisableExecutionTracing)", command)
                 or re.match(r"[\w.]+\s+GetOpcodeCounter\s", command)
                 or re.fullmatch(r"[\w.]+\s+(?:APBClockFrequency|RootClockFrequency|IRQ\s+IsSet)", command)
                 or command == "sysbus Endianess"
@@ -438,7 +438,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 if re.match(r"emulation\s+(?:RunFor|RunUntil|RunToNearestSyncPoint)(?:\s|$)", command):
                     return self.operation(command)
                 # Preserve immediate command results and register write rejections.
-                if (re.match(r"[\w.]+\s+(?:AssembleBlock|SetRegister)(?:\s|$)", command)
+                if (re.match(r"[\w.]+\s+(?:AssembleBlock|SetRegister|CreateExecutionTracing(?:Synchronous)?)(?:\s|$)", command)
                         or re.fullmatch(r"(?:sysbus\.)?cpu[\w]* Reset", command)):
                     return self.operation(command, assertion=" AssembleBlock " in command)
                 # Rust parses and evaluates these read-only startup queries.

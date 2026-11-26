@@ -508,6 +508,9 @@ impl Rv64 {
             }
         });
         if let Ok((opcode, length)) = fetched.as_ref().copied() {
+            if !bus.execution_traces.is_empty() {
+                bus.trace_instruction(self.hart_id, self.pc, opcode, length as usize)?;
+            }
             if !bus.rv64_opcode_counters.is_empty()
                 && let Some(counters) = bus.rv64_opcode_counters.get_mut(&self.hart_id)
                 && counters.enabled

@@ -2582,7 +2582,7 @@ fn run() -> Result<ExitCode, String> {
     if let Stop::FrameMatched(step) = stop {
         eprintln!("penv: framebuffer matched at step {step}");
     }
-    if let Some(trace) = machine.bus.thumb_trace.take() {
+    for (_, trace) in machine.bus.execution_traces.drain() {
         trace.finish()?;
     }
     if stats {

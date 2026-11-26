@@ -1082,6 +1082,49 @@ impl Machine {
         Ok(hart.monitor_single_step)
     }
 
+    pub(crate) fn start_execution_trace(
+        &mut self, cpu: &str, path: &std::path::Path, format: &str, binary: bool,
+    ) -> Result<(), String> {
+        let (_, triple, features) = self.monitor_assembly_target(cpu)?;
+        let hart = self.named_hart(cpu)?;
+        let slot = hart.slot;
+        let (base, enabled) = if let Some(cpu) = &hart.rv64 {
+            let isa = cpu.isa();
+            ("rv64i", [isa.multiply, isa.atomic, isa.single, isa.double, isa.compressed, features.split(',').any(|name| name == "+v")])
+        } else {
+            ("rv32i", [hart.csr.m_extension, hart.csr.a_extension, hart.csr.f_extension,
+                hart.csr.d_extension, hart.csr.c_extension, hart.bitmanip.has_vector_execution()])
+        };
+        let model = if triple.starts_with("riscv") {
+            let mut model = base.to_owned();
+            for (enabled, extension) in enabled.into_iter().zip(['m', 'a', 'f', 'd', 'c', 'v']) {
+                if enabled {
+                    model.push(extension);
+                }
+            }
+            model
+        } else if let Some(thumb) = &hart.thumb {
+            if thumb.armv81m { "cortex-m55" } else if thumb.cortex_m33 { "cortex-m33" }
+            else if thumb.thumb2 { "cortex-m4" } else { "cortex-m0" }.to_owned()
+        } else {
+            return Err("execution tracing currently requires Cortex-M or RISC-V".into());
+        };
+        if self.bus.execution_traces.contains_key(&slot) {
+            return Err(format!("an execution tracer already exists for CPU {cpu:?}"));
+        }
+        let tracer = crate::thumb::trace::Trace::create(path, format, binary, (triple, features, &model))?;
+        self.bus.execution_traces.insert(slot, tracer);
+        Ok(())
+    }
+
+    pub(crate) fn finish_execution_trace(&mut self, cpu: &str) -> Result<(), String> {
+        let slot = self.named_hart(cpu)?.slot;
+        if let Some(trace) = self.bus.execution_traces.remove(&slot) {
+            trace.finish()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn opcode_counters(
         &mut self, cpu: &str,
     ) -> Result<&mut crate::thumb::opcode_counter::OpcodeCounters, String> {
@@ -4049,6 +4092,10 @@ impl Hart {
         let (encoded, width) = self
             .fetch(bus)
             .map_err(|error| Fault::Bus(Access::Fetch, error))?;
+        if !bus.execution_traces.is_empty() {
+            bus.trace_instruction(self.slot, u64::from(pc), u64::from(encoded), width as usize)
+                .map_err(Fault::Abort)?;
+        }
         if width == 4 && !bus.instruction_hooks.is_empty()
             && let Some(result) = bus.execute_instruction_hook(self.slot, pc, encoded)
         {

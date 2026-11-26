@@ -1103,6 +1103,8 @@ enum Action {
     ReadCpuPc(String),
     AssertCpuValue(String, Option<String>, u64),
     CpuRegister(String, String, Option<u64>),
+    CreateExecutionTrace(String, PathBuf, String, bool),
+    FinishExecutionTrace(String),
     InstallOpcodeCounter(String, String, String),
     EnableCustomOpcodeCounters(String),
     EnableOpcodeCounters(String, bool),
@@ -1394,6 +1396,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::SymbolAddress(..) | Action::ExecutionMode(..)
+                    | Action::CreateExecutionTrace(..) | Action::FinishExecutionTrace(..)
                     | Action::EnableOpcodeCatalog(..) | Action::OpcodeCatalogNames | Action::ListOpcodeCounters(..)
                     | Action::EnableCustomOpcodeCounters(..) | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
@@ -2301,6 +2304,14 @@ fn run_commands<'a>(
                 writeln!(output.reply(), "0x{pc:08x}")
                     .map_err(|error| error.to_string()).map(|()| None)
             }),
+            Action::CreateExecutionTrace(cpu, path, format, binary) => {
+                machine.start_execution_trace(cpu, path, format, *binary)?;
+                Ok(None)
+            }
+            Action::FinishExecutionTrace(cpu) => {
+                machine.finish_execution_trace(cpu)?;
+                Ok(None)
+            }
             Action::EnableCustomOpcodeCounters(cpu) => machine.enable_custom_opcode_counters(cpu).map(|()| None),
             Action::InstallOpcodeCounter(cpu, name, pattern) => {
                 machine.opcode_counters(cpu)?.install(name, pattern)?;
@@ -6716,6 +6727,14 @@ fn execute(
                 condition,
             ))
         }
+        [target, "CreateExecutionTracing" | "CreateExecutionTracingSynchronous", _name, filename, format, options @ ..] if options.len() <= 1 => {
+            let value = resolve(filename)?.trim_start_matches('@');
+            let path = script.parent().unwrap_or(Path::new(".")).join(unquote(value));
+            let binary = options.first().map(|option| parse_tester_bool(resolve(option)?)).transpose()?.unwrap_or(false);
+            Some(Action::CreateExecutionTrace(resolve(target)?.trim_start_matches("sysbus.").into(),
+                path, unquote(resolve(format)?).into(), binary))
+        }
+        [target, "DisableExecutionTracing"] => Some(Action::FinishExecutionTrace(resolve(target)?.trim_start_matches("sysbus.").into())),
         [_, "GetRiscvOpcodesEmbeddedResourceNames"] => Some(Action::OpcodeCatalogNames),
         [target, "GetAllOpcodesCounters"] => Some(Action::ListOpcodeCounters(
             resolve(target)?.trim_start_matches("sysbus.").into(),
@@ -7089,7 +7108,8 @@ fn execute(
                         | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                         | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..) | Action::ReadCpuMips(..)
                         | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
-                        | Action::EnableOpcodeCatalog(..) | Action::OpcodeCatalogNames | Action::ListOpcodeCounters(..)
+                        | Action::CreateExecutionTrace(..) | Action::FinishExecutionTrace(..)
+                    | Action::EnableOpcodeCatalog(..) | Action::OpcodeCatalogNames | Action::ListOpcodeCounters(..)
                     | Action::EnableCustomOpcodeCounters(..) | Action::InstallOpcodeCounter(..) | Action::EnableOpcodeCounters(..) | Action::ReadOpcodeCounter(..)
                         | Action::CpuRegister(..) | Action::AddCpuHook(..) | Action::PythonAddressHook(..) | Action::ArmSystemRegister(..) | Action::ArmExceptionState(..)
                         | Action::SetEmulationPaused(_)

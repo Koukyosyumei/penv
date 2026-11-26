@@ -464,7 +464,7 @@ pub struct Bus {
     pub cpu_hooks: BTreeMap<u32, Vec<CpuHook>>,
     pub thumb_block_pc_log: bool,
     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
-    pub thumb_trace: Option<crate::thumb::trace::Trace>,
+    pub(crate) execution_traces: std::collections::HashMap<usize, crate::thumb::trace::Trace>,
     pub thumb_opcodes: crate::thumb::opcode_counter::OpcodeCounters,
     pub thumb_opcode_hooks: crate::thumb::opcode_counter::OpcodeLogHooks,
     pub(crate) thumb_python_opcodes: Vec<(usize, crate::thumb::opcode_counter::HookPhase, u32, u32, usize)>,
@@ -8144,6 +8144,13 @@ impl Bus {
             for callback in callbacks {
                 worker.execute_opcode_callback(self, pc, opcode, callback)?;
             }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn trace_instruction(&mut self, hart: usize, pc: u64, opcode: u64, width: usize) -> Result<(), String> {
+        if let Some(trace) = self.execution_traces.get_mut(&hart) {
+            trace.record(pc, opcode, width)?;
         }
         Ok(())
     }
