@@ -743,6 +743,7 @@ enum Action {
     LoadScopedHex(Asset, String, PathBuf),
     LoadMonitorElf(Asset, bool, PathBuf),
     LoadMonitorBinary(Asset, u64, PathBuf),
+    LoadMonitorSymbols(Asset, PathBuf),
     DisassembleBlock(String, u64, usize),
     BusWhatIsAt(u64, Option<String>),
     ExecutePython(String),
@@ -1216,6 +1217,20 @@ fn run_commands<'a>(
             Action::LoadMonitorElf(asset, virtual_addresses, root) => {
                 let path = asset.input_path(root, machine.monitor_asset_dir.as_deref())?;
                 load_monitor_elf(machine, path, *virtual_addresses).map(|()| None)
+            }
+            Action::LoadMonitorSymbols(asset, root) => {
+                let path = asset.input_path(root, machine.monitor_asset_dir.as_deref())?;
+                let mut file = fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+                let mut ident = [0; 5];
+                std::io::Read::read_exact(&mut file, &mut ident)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                if !matches!(&ident, b"\x7fELF\x01" | b"\x7fELF\x02") {
+                    return Err(format!("{}: LoadSymbolsFrom requires ELF", path.display()));
+                }
+                if !machine.monitor_symbol_files.contains(&path) {
+                    machine.monitor_symbol_files.push(path);
+                }
+                Ok(None)
             }
             Action::LoadMonitorBinary(asset, address, root) => {
                 let path = asset.input_path(root, machine.monitor_asset_dir.as_deref())?;
@@ -1971,8 +1986,7 @@ fn run_commands<'a>(
             Action::I2cSensorProperty(target, property, value) =>
                 machine.bus.set_i2c_sensor_property(target, property, value).map(|()| None),
             Action::SymbolAddress(symbol, index) => (|| {
-                let path = machine.monitor_firmware.as_deref().ok_or("no firmware ELF for symbol lookup")?;
-                let address = crate::cpu_python_hook::symbol_at(path, symbol, *index)?;
+                let address = machine.monitor_indexed_symbol_address(symbol, *index)?;
                 writeln!(output.reply(), "0x{address:x}").map_err(|error| error.to_string())?;
                 Ok(None)
             })(),
@@ -5257,6 +5271,10 @@ fn execute(
             let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             Some(Action::LoadMonitorElf(Asset::new(file, script), load_elf_address_mode(options)?, root.to_owned()))
         }
+        ["sysbus", "LoadSymbolsFrom", value] if boot.started => {
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @symbol-path")?;
+            Some(Action::LoadMonitorSymbols(Asset::new(file, script), root.to_owned()))
+        }
         ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.started => {
             let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             Some(Action::LoadMonitorBinary(
@@ -6294,7 +6312,7 @@ fn execute(
                         | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
                         | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..)
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
-                        | Action::RamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..) | Action::LoadMonitorBinary(..)
+                        | Action::RamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..) | Action::LoadMonitorBinary(..) | Action::LoadMonitorSymbols(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuFpuEnabled(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::CpuMpuBackground(..) | Action::CpuTranslateAddress(..)
                         | Action::AssembleBlock(..)

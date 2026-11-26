@@ -197,7 +197,18 @@ pub(crate) fn symbol(file: &Path, name: &str) -> Result<u64, String> {
 }
 
 pub(crate) fn symbol_at(file: &Path, name: &str, index: Option<i32>) -> Result<u64, String> {
-    let mut addresses = symbol_addresses(file, name)?;
+    symbol_at_in_files(std::iter::once(file), name, index)
+}
+
+pub(crate) fn symbol_at_in_files<'a>(
+    files: impl IntoIterator<Item = &'a Path>,
+    name: &str,
+    index: Option<i32>,
+) -> Result<u64, String> {
+    let mut addresses = Vec::new();
+    for file in files {
+        addresses.extend(symbol_addresses(file, name)?);
+    }
     addresses.sort_unstable();
     addresses.dedup();
     match (addresses.as_slice(), index) {

@@ -145,6 +145,7 @@ pub struct Machine {
     elapsed_steps: u64,
     boot_memory_cleared: bool,
     pub(crate) monitor_firmware: Option<std::path::PathBuf>,
+    pub(crate) monitor_symbol_files: Vec<std::path::PathBuf>,
     pub(crate) monitor_platform: Option<std::path::PathBuf>,
     pub(crate) monitor_asset_dir: Option<std::path::PathBuf>,
     pub(crate) monitor_quantum: u64,
@@ -440,6 +441,7 @@ impl Machine {
             monitor_single_step_blocking: true,
             boot_memory_cleared: false,
             monitor_firmware: None,
+            monitor_symbol_files: Vec::new(),
             monitor_platform: None,
             monitor_asset_dir: None,
             monitor_quantum: DEFAULT_MONITOR_QUANTUM,
@@ -1092,8 +1094,23 @@ impl Machine {
     }
 
     pub(crate) fn monitor_symbol_address(&self, symbol: &str) -> Result<u64, String> {
-        let path = self.monitor_firmware.as_deref().ok_or("no firmware ELF for symbol lookup")?;
-        crate::cpu_python_hook::symbol(path, symbol)
+        if self.monitor_symbol_files.is_empty() {
+            let path = self.monitor_firmware.as_deref().ok_or("no firmware ELF for symbol lookup")?;
+            return crate::cpu_python_hook::symbol(path, symbol);
+        }
+        self.monitor_indexed_symbol_address(symbol, Some(0))
+    }
+
+    pub(crate) fn monitor_indexed_symbol_address(&self, symbol: &str, index: Option<i32>) -> Result<u64, String> {
+        if self.monitor_firmware.is_none() && self.monitor_symbol_files.is_empty() {
+            return Err("no firmware ELF for symbol lookup".into());
+        }
+        crate::cpu_python_hook::symbol_at_in_files(
+            self.monitor_firmware.as_deref().into_iter()
+                .chain(self.monitor_symbol_files.iter().map(|path| path.as_path())),
+            symbol,
+            index,
+        )
     }
 
     pub(crate) fn set_monitor_symbol_pc(&mut self, cpu: &str, symbol: &str) -> Result<(), String> {
