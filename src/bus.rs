@@ -6511,6 +6511,36 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn supports_cortex_snapshot(&self) -> bool {
+        let scs = u64::from(crate::nvic::BASE);
+        self.nvic.as_ref().is_some_and(Nvic::supports_snapshot) && self.systick.is_some()
+            && !self.peripheral_overlaps(0, scs) && !self.peripheral_overlaps(scs + 0x1000, 1 << 32)
+            && self.pydevs.is_empty() && self.policy_tags.is_empty()
+            && self.thumb_block_hooks.iter().all(Option::is_none) && self.cpu_hooks.is_empty()
+            && self.aliases.is_empty() && self.clint.is_none()
+            && self.regions.iter().all(|region| region.flash_pages.is_none())
+    }
+
+    pub(crate) fn save_cortex_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        crate::snapshot::write_words(output, &[u64::from(self.external_nvic_levels)])?;
+        self.nvic.as_ref().unwrap().save_snapshot(output)?;
+        self.systick.as_ref().unwrap().save_snapshot(output)?;
+        self.save_memory(output)
+    }
+
+    pub(crate) fn load_cortex_snapshot(&mut self, input: &mut impl Read) -> io::Result<()> {
+        let [external] = crate::snapshot::read_words(input)?;
+        let external = u32::try_from(external).map_err(io::Error::other)?;
+        let mut nvic = self.nvic.as_ref().unwrap().clone();
+        nvic.load_snapshot(input)?;
+        let systick = crate::systick::SysTick::load_snapshot(input)?;
+        self.restore_memory(input)?;
+        self.external_nvic_levels = external;
+        self.nvic = Some(nvic);
+        self.systick = Some(systick);
+        Ok(())
+    }
+
     pub(crate) fn supports_rv64_snapshot(&self) -> bool {
         self.clint.is_none() && self.rv64_devices.supports_snapshot()
             && self.rv64_tohost.is_none() && self.robot_tohost.is_none()

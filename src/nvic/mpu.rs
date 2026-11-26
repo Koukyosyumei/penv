@@ -1,4 +1,4 @@
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Mpu {
     control: u32,
     selected: usize,

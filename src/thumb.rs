@@ -134,6 +134,72 @@ impl Thumb {
         }
     }
 
+    pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> std::io::Result<()> {
+        use crate::snapshot::write_words;
+        let sleep = match self.sleep { Sleep::Running => 0, Sleep::Interrupt => 1, Sleep::Event => 2 };
+        write_words(output, &[
+            self.vectors.map_or(1 << 32, u64::from), u64::from(self.thumb2), u64::from(self.basepri),
+            u64::from(self.faultmask), u64::from(self.itstate), u64::from(self.clock_gated),
+            self.retired_instructions, u64::from(self.apsr()), u64::from(self.fpscr), u64::from(self.fp_active),
+            u64::from(self.active_exception), u64::from(self.interrupts_masked), sleep,
+            u64::from(self.event), self.system_pending, u64::from(self.invalid_thumb_state),
+            u64::from(self.locked_up), u64::from(self.instruction_lockup), u64::from(self.branch_exception),
+            u64::from(self.thread_uses_psp), u64::from(self.msp), u64::from(self.psp),
+        ])?;
+        write_words(output, &self.fp.map(u64::from))?;
+        write_words(output, &self.pending.map(u64::from))?;
+        write_words(output, &self.active_exceptions.0.map(u64::from))
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_bool, read_words};
+        let [vtor, thumb2, basepri, faultmask, itstate, clock_gated, retired, apsr, fpscr,
+            fp_active, active, primask, sleep, event, system_pending, invalid_state, lockup,
+            instruction_lockup, branch_exception, use_psp, msp, psp] = read_words(input)?;
+        if read_bool(thumb2)? != self.thumb2 {
+            return Err(invalid("snapshot Cortex-M instruction set differs from the platform"));
+        }
+        let word = |value| u32::try_from(value).map_err(std::io::Error::other);
+        let byte = |value| u8::try_from(value).map_err(std::io::Error::other);
+        self.vectors = if vtor == 1 << 32 { None } else { Some(word(vtor)?) };
+        self.basepri = byte(basepri)?;
+        self.faultmask = read_bool(faultmask)?;
+        self.itstate = byte(itstate)?;
+        self.clock_gated = read_bool(clock_gated)?;
+        self.retired_instructions = retired;
+        self.set_apsr(word(apsr)?);
+        self.fpscr = word(fpscr)?;
+        self.fp_active = read_bool(fp_active)?;
+        self.active_exception = byte(active)?;
+        self.interrupts_masked = read_bool(primask)?;
+        self.sleep = match sleep {
+            0 => Sleep::Running,
+            1 => Sleep::Interrupt,
+            2 => Sleep::Event,
+            _ => return Err(invalid("invalid Cortex-M sleep state")),
+        };
+        self.event = read_bool(event)?;
+        self.system_pending = system_pending;
+        self.invalid_thumb_state = read_bool(invalid_state)?;
+        self.locked_up = read_bool(lockup)?;
+        self.instruction_lockup = read_bool(instruction_lockup)?;
+        self.branch_exception = read_bool(branch_exception)?;
+        self.thread_uses_psp = read_bool(use_psp)?;
+        self.msp = word(msp)?;
+        self.psp = word(psp)?;
+        for state in &mut self.fp {
+            let [value] = read_words(input)?;
+            *state = word(value)?;
+        }
+        for registers in [&mut self.pending, &mut self.active_exceptions.0] {
+            for register in registers {
+                let [value] = read_words(input)?;
+                *register = word(value)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn reset_state(&mut self) {
         *self = Self {
             vectors: self.vectors,

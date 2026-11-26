@@ -61,6 +61,8 @@ pub(crate) fn assemble_source(
             rest = comment.split_once("*/").ok_or("unterminated ARM assembly comment")?.1;
         }
         cleaned.push_str(rest);
+        cleaned = cleaned.lines().map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+            .collect::<Vec<_>>().join("\n");
     }
     let source = if thumb { cleaned.as_str() } else { source };
     let comment = if thumb { '@' } else { '#' };

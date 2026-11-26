@@ -992,6 +992,9 @@ fn build_machine_with_timing(
             .bus
             .map_nvic(priority.unwrap_or(0xc0), uart_irq)
             .map_err(|e| entry.error(&e))?;
+        if let Some(controller) = nvic {
+            machine.bus.set_nvic_name(controller.name.clone());
+        }
         machine.primary.name = Some(entry.name.clone());
         if cpu_type == Some(r#""cortex-m4""#) {
             machine.bus.nvic.as_mut().unwrap().enable_fpu();

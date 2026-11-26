@@ -27,7 +27,7 @@ const SYSTEM_PRIORITY_END: u32 = SYSTEM_PRIORITY + 11;
 const PRIORITY_END: u32 = PRIORITY + IRQ_LINES as u32 - 1;
 
 #[derive(Clone, Copy, Default)]
-pub struct ActiveExceptions([u32; 8]);
+pub struct ActiveExceptions(pub(crate) [u32; 8]);
 
 impl ActiveExceptions {
     pub fn contains(&self, exception: u8) -> bool {
@@ -51,7 +51,7 @@ impl ActiveExceptions {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Security {
     bfhfnmins: bool,
     vector_base_ns: u32,
@@ -96,6 +96,7 @@ impl Security {
     }
 }
 
+#[derive(Clone)]
 pub struct Nvic {
     vector_base: Option<u32>,
     security: Option<Box<Security>>,
@@ -131,6 +132,7 @@ pub struct Nvic {
     pub uart_irq: Option<u8>,
 }
 
+#[derive(Clone)]
 struct Mpu {
     count: u8,
     enabled: u32,
@@ -243,6 +245,93 @@ impl Nvic {
 
     pub fn divide_by_zero_traps(&self) -> bool {
         self.ccr & (1 << 4) != 0
+    }
+
+    pub(crate) fn supports_snapshot(&self) -> bool {
+        self.security.is_none() && self.nrf_mpu.is_none()
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[
+            self.vector_base.map_or(1 << 32, u64::from), self.external_lines as u64,
+            u64::from(self.priority_mask), u64::from(self.priority_group), u64::from(self.pending_event),
+            u64::from(self.hardfault_pending), self.fpccr.map_or(1 << 32, u64::from),
+            u64::from(self.scr), u64::from(self.reset_requested), u64::from(self.lockup),
+            u64::from(self.active_system), u64::from(self.debug_status), u64::from(self.fpcar),
+            u64::from(self.lazy_fp_full_frame), u64::from(self.bus_fault_status),
+            u64::from(self.bus_fault_address), u64::from(self.ccr), u64::from(self.cpacr),
+            u64::from(self.fault_enables), u64::from(self.cfsr), u64::from(self.hfsr),
+            u64::from(self.cache_selector), u64::from(self.demcr), u64::from(self.mpu.is_some()),
+        ])?;
+        write_words(output, &self.enabled.map(u64::from))?;
+        write_words(output, &self.pending.map(u64::from))?;
+        write_words(output, &self.active.0.map(u64::from))?;
+        output.write_all(&self.priority)?;
+        output.write_all(&self.system_priority)?;
+        if let Some(mpu) = &self.mpu {
+            write_words(output, &[u64::from(mpu.count), u64::from(mpu.enabled), u64::from(mpu.selected)])?;
+            for region in mpu.regions {
+                write_words(output, &region.map(u64::from))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_bool, read_words};
+        let [vtor, lines, mask, group, event, hard_pending, fpccr, scr, reset,
+            lockup, active_system, debug, fpcar, full_fp, fault_status, fault_address,
+            ccr, cpacr, fault_enable, cfsr, hfsr, cache, demcr, mpu] = read_words(input)?;
+        let word = |value| u32::try_from(value).map_err(std::io::Error::other);
+        let optional_word = |value| if value == 1 << 32 { Ok(None) } else { word(value).map(Some) };
+        if lines != self.external_lines as u64 || mask != u64::from(self.priority_mask)
+            || group > 7 || read_bool(mpu)? != self.mpu.is_some()
+        {
+            return Err(invalid("NVIC configuration differs from the snapshot"));
+        }
+        self.vector_base = optional_word(vtor)?;
+        self.priority_group = group as u8;
+        self.pending_event = read_bool(event)?;
+        self.hardfault_pending = read_bool(hard_pending)?;
+        self.fpccr = optional_word(fpccr)?;
+        self.scr = word(scr)?;
+        self.reset_requested = read_bool(reset)?;
+        self.lockup = read_bool(lockup)?;
+        self.active_system = u16::try_from(active_system).map_err(std::io::Error::other)?;
+        self.debug_status = read_bool(debug)?;
+        self.fpcar = word(fpcar)?;
+        self.lazy_fp_full_frame = read_bool(full_fp)?;
+        self.bus_fault_status = word(fault_status)?;
+        self.bus_fault_address = word(fault_address)?;
+        self.ccr = word(ccr)?;
+        self.cpacr = word(cpacr)?;
+        self.fault_enables = word(fault_enable)?;
+        self.cfsr = word(cfsr)?;
+        self.hfsr = word(hfsr)?;
+        self.cache_selector = word(cache)?;
+        self.demcr = word(demcr)?;
+        for bank in [&mut self.enabled, &mut self.pending, &mut self.active.0] {
+            for entry in bank {
+                let [value] = read_words(input)?;
+                *entry = word(value)?;
+            }
+        }
+        input.read_exact(&mut self.priority)?;
+        input.read_exact(&mut self.system_priority)?;
+        if let Some(mpu) = &mut self.mpu {
+            let [count, enabled, selected] = read_words(input)?;
+            if count != u64::from(mpu.count) || selected > u64::from(u8::MAX) {
+                return Err(invalid("invalid MPU selector in NVIC snapshot"));
+            }
+            mpu.enabled = word(enabled)?;
+            mpu.selected = selected as u8;
+            for region in &mut mpu.regions {
+                let [base, limit] = read_words(input)?;
+                *region = [word(base)?, word(limit)?];
+            }
+        }
+        Ok(())
     }
 
     pub fn reset(&mut self) {

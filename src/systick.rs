@@ -13,6 +13,7 @@ const CALIBRATION: u32 = 0xe000_e01c;
 const RENODE_DEFAULT_FREQUENCY: u32 = 50 * 0x80_0000;
 pub const ICSR: u32 = 0xe000_ed04;
 
+#[derive(Clone)]
 pub struct SysTick {
     control: u32,
     reload: u32,
@@ -60,6 +61,36 @@ impl SysTick {
         Self::RANGES
             .into_iter()
             .any(|(low, high)| start < u64::from(high) && end > u64::from(low))
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        crate::snapshot::write_words(output, &[
+            u64::from(self.control), u64::from(self.reload), u64::from(self.current),
+            u64::from(self.count_flag), u64::from(self.pending), u64::from(self.pendsv_pending),
+            u64::from(self.nmi_pending), self.frequency.map_or(1 << 32, u64::from),
+            self.steps_per_second, self.phase, u64::from(self.clock_gated),
+            u64::from(self.current_initialized), u64::from(self.counting),
+            u64::from(self.zero_state_reload), u64::from(self.noisy),
+        ])
+    }
+
+    pub(crate) fn load_snapshot(input: &mut impl std::io::Read) -> std::io::Result<Self> {
+        use crate::snapshot::{invalid, read_bool, read_words};
+        let [control, reload, current, count_flag, pending, pendsv, nmi, frequency, steps_per_second,
+            phase, gated, initialized, counting, zero_state_reload, noisy] = read_words(input)?;
+        let word = |value| u32::try_from(value).map_err(std::io::Error::other);
+        if steps_per_second == 0 || phase >= steps_per_second || reload > 0xff_ffff || current > 0xff_ffff {
+            return Err(invalid("invalid SysTick snapshot phase or reload value"));
+        }
+        Ok(Self {
+            control: word(control)?, reload: word(reload)?, current: word(current)?,
+            count_flag: read_bool(count_flag)?, pending: read_bool(pending)?,
+            pendsv_pending: read_bool(pendsv)?, nmi_pending: read_bool(nmi)?,
+            frequency: if frequency == 1 << 32 { None } else { Some(word(frequency)?) },
+            steps_per_second, phase, clock_gated: read_bool(gated)?,
+            current_initialized: read_bool(initialized)?, counting: read_bool(counting)?,
+            zero_state_reload: read_bool(zero_state_reload)?, noisy: read_bool(noisy)?,
+        })
     }
 
     pub fn reset(&mut self) {

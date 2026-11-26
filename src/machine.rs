@@ -1381,6 +1381,7 @@ impl Machine {
         if Self::cpu_less_snapshot_format(&header).is_ok()
             || Self::cortex_snapshot_has_registers(&header).is_ok()
             || &header == crate::snapshot::RV64_MAGIC
+            || &header == crate::snapshot::CORTEX_MAGIC
         {
             Ok(())
         } else {
@@ -1531,6 +1532,88 @@ impl Machine {
         read().map_err(|error| error.to_string())
     }
 
+    pub(crate) fn cortex_snapshot_platform(&self) -> Result<String, String> {
+        if !self.has_thumb2_cpu() || !self.secondary.is_empty()
+            || self.primary.thumb.as_ref().is_some_and(|cpu| cpu.trustzone)
+            || !self.bus.supports_cortex_snapshot() || self.primary.reset_held
+            || self.primary.reset_release.is_some() || self.primary.busy_wait.is_some()
+            || !self.reset_steps.is_empty() || !self.button_events.is_empty() || !self.adc_events.is_empty()
+            || self.recorder.is_some() || !self.replay.is_empty() || !self.inputs.is_empty()
+            || !self.uart_device_events.is_empty() || self.profile.is_some()
+        {
+            return Err("unsupported snapshot platform or pending Cortex-M operations".into());
+        }
+        let path = self.monitor_platform.as_ref().ok_or("unsupported snapshot platform without a REPL file")?;
+        let repl = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+        if repl.len() > 64 * 1024 || repl.contains("\"\"\"") {
+            return Err("unsupported snapshot platform description".into());
+        }
+        Ok(repl)
+    }
+
+    fn write_cortex_live_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
+        use crate::snapshot::{CORTEX_MAGIC, write_text, write_words};
+        let platform = self.cortex_snapshot_platform()?;
+        let mut write = || -> std::io::Result<()> {
+            output.write_all(CORTEX_MAGIC)?;
+            write_text(output, &platform)?;
+            write_text(output, self.primary.name.as_deref().unwrap_or_default())?;
+            let nanos = self.monitor_elapsed_ns();
+            write_words(output, &[self.elapsed_steps(), nanos as u64, (nanos >> 64) as u64,
+                u64::from(self.monitor_active), u64::from(self.primary.monitor_paused),
+                u64::from(self.primary.monitor_halted), u64::from(self.cpu_paused),
+                u64::from(self.cpu_halted), u64::from(self.cpu_clock_stopped),
+                u64::from(self.primary.pc_written), u64::from(self.primary.pc)])?;
+            write_words(output, &self.primary.registers.map(u64::from))?;
+            self.primary.thumb.as_ref().unwrap().save_snapshot(output)?;
+            self.bus.save_cortex_snapshot(output)
+        };
+        write().map_err(|error| error.to_string())
+    }
+
+    fn read_cortex_live_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
+        use crate::snapshot::{invalid, read_bool, read_text, read_words};
+        let platform = self.cortex_snapshot_platform()?;
+        let mut read = || -> std::io::Result<()> {
+            if read_text(input)? != platform || read_text(input)? != self.primary.name.as_deref().unwrap_or_default() {
+                return Err(invalid("Cortex-M snapshot platform is different"));
+            }
+            let [steps, ns_low, ns_high, active, paused, halted, cpu_paused, cpu_halted, clock_stopped,
+                pc_written, pc] = read_words(input)?;
+            let pc = u32::try_from(pc).map_err(std::io::Error::other)?;
+            let active = read_bool(active)?;
+            let paused = read_bool(paused)?;
+            let halted = read_bool(halted)?;
+            let cpu_paused = read_bool(cpu_paused)?;
+            let cpu_halted = read_bool(cpu_halted)?;
+            let clock_stopped = read_bool(clock_stopped)?;
+            let pc_written = read_bool(pc_written)?;
+            let mut registers = [0; 32];
+            for (destination, value) in registers.iter_mut().zip(read_words::<32>(input)?) {
+                *destination = u32::try_from(value).map_err(std::io::Error::other)?;
+            }
+            let mut thumb = self.primary.thumb.as_ref().unwrap().clone();
+            thumb.load_snapshot(input)?;
+            self.bus.load_cortex_snapshot(input)?;
+            self.reset_monitor_time(steps, self.monitor_quantum);
+            self.bus.monitor_clock_step = steps;
+            self.bus.monitor_clock_ns = u128::from(ns_low) | (u128::from(ns_high) << 64);
+            self.monitor_active = active;
+            self.primary.monitor_paused = paused;
+            self.primary.monitor_halted = halted;
+            self.cpu_paused = cpu_paused;
+            self.cpu_halted = cpu_halted;
+            self.cpu_clock_stopped = clock_stopped;
+            self.primary.pc_written = pc_written;
+            self.primary.pc = pc;
+            self.primary.registers = registers;
+            self.primary.thumb = Some(thumb);
+            self.boot_memory_cleared = false;
+            Ok(())
+        };
+        read().map_err(|error| error.to_string())
+    }
+
     pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
         if self.boot_memory_cleared {
             return Err("Load a boot snapshot after Clear".into());
@@ -1540,6 +1623,9 @@ impl Machine {
         }
         if self.primary.rv64.is_some() {
             return self.write_rv64_snapshot(output);
+        }
+        if self.elapsed_steps() != 0 {
+            return self.write_cortex_live_snapshot(output);
         }
         self.check_memory_snapshot()?;
         (|| -> std::io::Result<()> {
@@ -1578,6 +1664,11 @@ impl Machine {
         if self.primary.rv64.is_some() {
             return self.read_rv64_snapshot(input);
         }
+        let mut header = [0; 9];
+        input.read_exact(&mut header).map_err(|error| error.to_string())?;
+        if &header == crate::snapshot::CORTEX_MAGIC {
+            return self.read_cortex_live_snapshot(input);
+        }
         self.check_memory_snapshot()?;
         let mut load = || -> std::io::Result<_> {
             fn read_word(input: &mut impl Read) -> std::io::Result<u32> {
@@ -1585,8 +1676,6 @@ impl Machine {
                 input.read_exact(&mut bytes)?;
                 Ok(u32::from_le_bytes(bytes))
             }
-            let mut header = [0; 9];
-            input.read_exact(&mut header)?;
             let has_registers = Self::cortex_snapshot_has_registers(&header)?;
             let address = read_word(input)?;
             if address & 0x7f != 0 {

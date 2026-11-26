@@ -280,6 +280,15 @@ fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<Snap
     let mut input = open_snapshot_input(path)?;
     let metadata = read_snapshot_metadata(&mut input)?;
     let header = input.fill_buf().map_err(|error| error.to_string())?;
+    if header.starts_with(crate::snapshot::CORTEX_MAGIC) {
+        let metadata = metadata.ok_or("Cortex-M snapshot requires monitor metadata")?;
+        if metadata.cpu_mips.is_none_or(|mips| mips == 0) {
+            return Err("invalid Cortex-M snapshot rate".into());
+        }
+        input.consume(crate::snapshot::CORTEX_MAGIC.len());
+        let repl = crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?;
+        return Ok(((!metadata.selected.is_empty()).then_some(metadata.selected), Some(SnapshotPlatform::Inline(repl))));
+    }
     if header.starts_with(crate::snapshot::RV64_MAGIC) {
         let metadata = metadata.ok_or("RV64 snapshot requires monitor metadata")?;
         if metadata.cpu_mips.is_none_or(|mips| mips == 0) {
@@ -2557,7 +2566,11 @@ fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<St
     let mut script = format!("mach create \"{name}\"\n");
     match repl {
         Some(SnapshotPlatform::Inline(repl)) => {
-            script.push_str(&format!("machine LoadPlatformDescriptionFromString \"{repl}\"\n"));
+            if repl.contains('\n') {
+                script.push_str(&format!("machine LoadPlatformDescriptionFromString \"\"\"{repl}\"\"\"\n"));
+            } else {
+                script.push_str(&format!("machine LoadPlatformDescriptionFromString \"{repl}\"\n"));
+            }
         }
         Some(SnapshotPlatform::File(repl)) => {
             let repl = repl.to_str().filter(|path| !path.chars().any(|c| c.is_control() || matches!(c, '"' | '\\')))
@@ -2570,6 +2583,9 @@ fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<St
 }
 
 fn snapshot_platform(machine: &Machine) -> Result<Option<SnapshotPlatform>, String> {
+    if machine.is_cortex_m() && machine.elapsed_steps() != 0 {
+        return machine.cortex_snapshot_platform().map(|repl| Some(SnapshotPlatform::Inline(repl)));
+    }
     if !machine.cpu_less {
         return machine.rv64_snapshot_platform().map(|path| Some(SnapshotPlatform::File(path.to_owned())));
     }
