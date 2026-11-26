@@ -568,6 +568,10 @@ pub fn load_with_assets(path: &Path, root: Option<&Path>, stm32f0_console: bool,
     load_platform(path, root, true, stm32f0_console, assets)
 }
 
+pub(crate) fn load_monitor_configuration(path: &Path, root: &Path, assets: Option<&Path>) -> Result<Machine, String> {
+    load_platform(path, Some(root), false, false, assets)
+}
+
 pub fn check(path: &Path) -> Result<(), String> {
     load_platform(path, None, false, false, None).map(|_| ())
 }

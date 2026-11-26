@@ -383,7 +383,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 re.match(r"machine\s+LoadPlatformDescriptionFromString\s", command)
                 and self.proc is not None
                 or re.match(r"(?:py|python)\s", command)
-                or re.fullmatch(r"(?:peripherals|printenv|lastLog(?:\s+\S+)?|emulation\s+IsStarted)", command)
+                or re.fullmatch(r"(?:peripherals|logLevel|printenv|lastLog(?:\s+\S+)?|emulation\s+IsStarted)", command)
                 or re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
                 or re.match(r"(?:sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)|[\w.]+\s+GetRegister)\s", command)
                 or re.fullmatch(r"[\w.]+\s+Read(?:DoubleWord|QuadWord|ByteUsingDoubleWord|WordUsingDoubleWord)\s+\S+", command)

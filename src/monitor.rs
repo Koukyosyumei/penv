@@ -40,6 +40,7 @@ pub struct Boot {
     pub cpu_control: Vec<CpuControl>,
     pub platform: Option<PathBuf>,
     inline_repl: Vec<(PathBuf, String)>,
+    multiple_machines: bool,
     pub generated_repl: Option<GeneratedRepl>,
     pub session: Session,
     pub serial_analyzer: Option<String>,
@@ -81,6 +82,16 @@ pub struct Session {
     number_mode: NumberMode,
     allow_privates: bool,
     memory_symbols: HashMap<String, std::collections::BTreeSet<(u64, u64)>>,
+    named_machines: NamedMachines,
+}
+
+#[derive(Default)]
+struct NamedMachines {
+    order: Vec<String>,
+    detached: HashMap<String, Machine>,
+    draft: Option<Vec<(PathBuf, String)>>,
+    generated: Vec<GeneratedRepl>,
+    log_levels: std::collections::BTreeMap<String, i8>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -328,11 +339,102 @@ impl Session {
         Some((name.strip_prefix("sysbus.").unwrap_or(name), address))
     }
 
+    fn create_named_machine(&mut self, machine: &mut Machine, requested: Option<&str>) -> Result<(), String> {
+        if self.named_machines.order.is_empty() {
+            self.named_machines.order.extend(self.machine.clone());
+        }
+        let name = if let Some(name) = requested {
+            name.to_owned()
+        } else {
+            (0..).map(|index| format!("machine-{index}"))
+                .find(|candidate| !self.named_machines.order.contains(candidate)).unwrap()
+        };
+        if name.is_empty() || self.named_machines.order.contains(&name) {
+            return Err(format!("machine {name:?} already exists or has no name"));
+        }
+        let mut next = Machine::without_default_ram();
+        next.cpu_less = true;
+        next.empty_monitor = true;
+        next.monitor_asset_dir.clone_from(&machine.monitor_asset_dir);
+        self.swap_named_machine(machine, next, name.clone());
+        self.named_machines.order.push(name);
+        self.named_machines.draft = Some(Vec::new());
+        Ok(())
+    }
+
+    fn swap_named_machine(&mut self, machine: &mut Machine, next: Machine, name: String) {
+        let old = std::mem::replace(machine, next);
+        if let Some(previous) = self.machine.replace(name.clone()) {
+            apply_machine_selection(&mut self.machine_cleared, true, Some(&previous), &mut self.variables);
+            self.named_machines.detached.insert(previous, old);
+        }
+        apply_machine_selection(&mut self.machine_cleared, false, Some(&name), &mut self.variables);
+        crate::monitor_log::set_level(self.named_machines.log_levels.get(&name).copied().unwrap_or(1));
+    }
+
+    fn select_named_machine(&mut self, machine: &mut Machine, selector: &str) -> Result<(), String> {
+        let name = if let Ok(index) = selector.parse::<usize>() {
+            self.named_machines.order.get(index).cloned().ok_or("Wrong machine number.")?
+        } else {
+            selector.to_owned()
+        };
+        if self.machine.as_deref() == Some(&name) {
+            apply_machine_selection(&mut self.machine_cleared, false, Some(&name), &mut self.variables);
+            return Ok(());
+        }
+        let next = self.named_machines.detached.remove(&name)
+            .ok_or_else(|| format!("Machine {name} not found."))?;
+        self.swap_named_machine(machine, next, name);
+        Ok(())
+    }
+
+    fn attach_platform_fragment(
+        &mut self, machine: &mut Machine, source: &str, origin: &Path, root: &Path,
+    ) -> Result<(), String> {
+        let draft = self.named_machines.draft.as_mut().ok_or("inline platform requires a new machine")?;
+        let mut boot = Boot::default();
+        boot.inline_repl.clone_from(draft);
+        boot.inline_repl.push((origin.to_owned(), source.to_owned()));
+        boot.materialize_platform()?;
+        let path = boot.platform.as_deref().expect("materialized REPL");
+        let mut next = crate::platform::load_monitor_configuration(path, root, machine.monitor_asset_dir.as_deref())?;
+        next.monitor_platform = boot.platform;
+        next.monitor_asset_dir.clone_from(&machine.monitor_asset_dir);
+        next.bus.use_renode_unmapped_data();
+        next.initialize_monitor_reset_pcs();
+        self.named_machines.generated.extend(boot.generated_repl);
+        *draft = boot.inline_repl;
+        *machine = next;
+        Ok(())
+    }
+
+    fn describe_machine_log_levels(&self, machine: &Machine, output: &mut impl Write) -> Result<(), String> {
+        const LEVELS: [&str; 5] = ["NOISY", "DEBUG", "INFO", "WARNING", "ERROR"];
+        for (name, &level) in &self.named_machines.log_levels {
+            let active = if self.machine.as_deref() == Some(name) {
+                machine
+            } else if let Some(detached) = self.named_machines.detached.get(name) {
+                detached
+            } else {
+                continue;
+            };
+            let level = LEVELS[(level + 1) as usize];
+            writeln!(output, "{name}:sysbus : {level}").map_err(|error| error.to_string())?;
+            for device in active.bus.monitor_bus_device_names() {
+                writeln!(output, "{name}:sysbus.{device} : {level}").map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
     fn selected_machine(&self) -> Option<&str> {
         self.machine.as_deref().filter(|_| !self.machine_cleared)
     }
 
     fn save(&self, machine: &Machine, path: &Path) -> Result<(), String> {
+        if self.named_machines.order.len() > 1 {
+            return Err("unsupported snapshot platform with multiple machines".into());
+        }
         let mut data = Vec::new();
         let mut entries: Vec<_> = self.variables.iter()
             .filter(|(key, _)| !matches!(key.as_str(), "global.CWD" | "global.ORIGIN"))
@@ -549,6 +651,10 @@ enum Action {
     ScopedRamOverlay(String, String, u64, u32),
     PeripheralList,
     SubobjectTester(String, u32),
+    MonitorCreateMachine(Option<String>),
+    MonitorSelectMachine(String),
+    PlatformFragment(String, PathBuf, PathBuf),
+    ReadLogLevels,
     IlluminanceFeed(String, PathBuf),
     RunRemaining,
     TimeSourceInfo,
@@ -861,6 +967,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime | Action::MonitorLog(_)
                     | Action::AssembleBlock(..) | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..) | Action::BusScalar(_)
+                    | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
                     | Action::LoadScopedHex(..) | Action::CpuBlockSize(..) | Action::CpuBlockHook(..) | Action::CpuWillExecuteIt(..) | Action::CpuCondition(..) | Action::NvicPriorityBoost(..)
                     | Action::Frequency(..) | Action::NvicPending(..) | Action::MachineReset(..) | Action::CpuReset(..)
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
@@ -926,6 +1033,9 @@ fn run_commands<'a>(
     let mut host_terminals = HashMap::new();
     let mut cleared = false;
     for command in commands {
+        if !matches!(command.action, Action::PlatformFragment(..)) {
+            session.named_machines.draft = None;
+        }
         if cleared && !matches!(command.action, Action::LoadMemory(_)) {
             return Err(format!(
                 "{}:{}: Load a boot snapshot after Clear",
@@ -1485,8 +1595,21 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::LastLog(count) => write_last_log(*count, &mut output.reply()).map(|()| None),
+            Action::MonitorCreateMachine(name) => session.create_named_machine(machine, name.as_deref()).map(|()| None),
+            Action::MonitorSelectMachine(name) => session.select_named_machine(machine, name).map(|()| None),
+            Action::PlatformFragment(source, origin, root) => session.attach_platform_fragment(machine, source, origin, root).map(|()| None),
+            Action::ReadLogLevels => session.describe_machine_log_levels(machine, &mut output.reply()).map(|()| None),
             Action::LogLevel(level) => {
                 machine.bus.set_monitor_log_level(*level);
+                Ok(None)
+            }
+            Action::PeripheralLog(target, level) if session.machine.as_ref() == Some(target)
+                || session.named_machines.detached.contains_key(target) =>
+            {
+                session.named_machines.log_levels.insert(target.clone(), *level);
+                if session.machine.as_ref() == Some(target) {
+                    machine.bus.set_monitor_log_level(*level);
+                }
                 Ok(None)
             }
             Action::PeripheralLog(target, level) => machine.bus.set_peripheral_log_level(target, *level).map(|()| None),
@@ -1943,6 +2066,7 @@ fn live_command_boot(path: &Path, session: &Session) -> Boot {
         platform: Some(path.to_owned()),
         image: Some(Asset::new("", path)),
         started: true,
+        multiple_machines: session.named_machines.order.len() > 1 || session.named_machines.draft.is_some(),
         ..Boot::default()
     };
     boot.session.machine.clone_from(&session.machine);
@@ -3149,6 +3273,7 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
     }
     if let Ok(["mach" | "machine", "set", selector]) = command_words(command.trim()).as_deref() {
         if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && !state.boot.multiple_machines
             && let Err(error) = validate_machine_selection(
                 selector, &state.variables, state.boot.session.machine.as_deref(), state.machine,
             )
@@ -3276,7 +3401,7 @@ fn emulation_started_reply(started: bool) -> &'static str {
 }
 
 fn is_console_action(action: &Action) -> bool {
-    matches!(action, Action::ScriptLog(..) | Action::LogLevel(_) | Action::LastLog(_) | Action::Echo(_))
+    matches!(action, Action::ReadLogLevels | Action::ScriptLog(..) | Action::LogLevel(_) | Action::LastLog(_) | Action::Echo(_))
 }
 
 fn is_log_capture_setup(action: &Action) -> bool {
@@ -3308,6 +3433,7 @@ pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), St
     }
     for command in &boot.runtime {
         match &command.action {
+            Action::ReadLogLevels => {}
             Action::ScriptLog(level, message) => crate::monitor_log::record(*level, message),
             Action::LogLevel(level) => crate::monitor_log::set_level(*level),
             Action::LastLog(count) => write_last_log(*count, output)?,
@@ -3517,7 +3643,11 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                 inner.replace("\\\"", "\"")
             };
             if state.boot.started || !state.boot.runtime.is_empty() {
-                let action = parse_live_overlay(&source, root).map_err(|message| error(&message))?;
+                let action = if state.boot.multiple_machines {
+                    Action::PlatformFragment(source, origin.to_owned(), root.to_owned())
+                } else {
+                    parse_live_overlay(&source, root).map_err(|message| error(&message))?
+                };
                 state.boot.runtime.push(RuntimeCommand {
                     line: line + 1, source: path.to_owned(), action,
                 });
@@ -3630,7 +3760,7 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
             continue;
         }
         match words.as_slice() {
-            ["mach" | "machine", "set", selector] => {
+            ["mach" | "machine", "set", selector] if !state.boot.multiple_machines => {
                 validate_machine_selection(selector, &state.variables, state.boot.session.machine.as_deref(), state.machine)
                     .map_err(|e| error(&e))?;
                 set_script_machine_selection(state, false, path, line + 1);
@@ -4241,7 +4371,7 @@ fn execute(
     match words {
         [] => return Ok(()),
         ["using", "sysbus"] => return Ok(()),
-        ["mach" | "machine", "set", selector] if !boot.session.machine_cleared => {
+        ["mach" | "machine", "set", selector] if !boot.session.machine_cleared && !boot.multiple_machines => {
             return validate_machine_selection(selector, variables, boot.session.machine.as_deref(), *machine);
         }
         ["AttachMonitorLog", capacity] if !boot.started && boot.runtime.is_empty() => {
@@ -4531,10 +4661,23 @@ fn execute(
         ["rcc" | "sysbus.rcc", "WriteDoubleWord", offset, value] if boot.started => Some(Action::WriteRcc(
             crate::parse_address(resolve(offset)?)?, crate::parse_address(resolve(value)?)?)),
 
+        ["mach" | "machine", "create" | "add", name @ ..] if *machine && name.len() <= 1 => {
+            let name = name.first().map(|name| resolve(name).map(|value| unquote(value).to_owned())).transpose()?;
+            boot.multiple_machines = true;
+            Some(Action::MonitorCreateMachine(name))
+        }
+        ["mach" | "machine", "set", name] if boot.multiple_machines => {
+            Some(Action::MonitorSelectMachine(unquote(resolve(name)?).to_owned()))
+        }
+        ["logLevel"] => Some(Action::ReadLogLevels),
         ["machine", "LoadPlatformDescriptionFromString", value] if boot.started => {
             let source = monitor_string(resolve(value)?)
                 .ok_or("expected quoted inline REPL")?;
-            Some(parse_live_overlay(&source, root)?)
+            Some(if boot.multiple_machines {
+                Action::PlatformFragment(source, monitor_origin(variables).to_owned(), root.to_owned())
+            } else {
+                parse_live_overlay(&source, root)?
+            })
         }
         ["ConnectMonitorGpio", source, output, target, input] if boot.started => Some(Action::GpioWire(
             (*source).to_owned(), output.parse().map_err(|_| "invalid source GPIO pin")?,
@@ -5540,6 +5683,7 @@ fn execute(
                     action,
                     Action::BusScalar(_) | Action::ContextBusScalar(..) | Action::CpuVectorTable(..) | Action::CpuStatus(..) | Action::NvicSignal(..)
                         | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
+                        | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
                         | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::AssembleBlock(..)
