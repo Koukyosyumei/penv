@@ -1943,10 +1943,20 @@ impl Machine {
             return Err("the platform has no CPU".into());
         }
         let now = self.monitor_elapsed_ns();
-        self.bus.set_monitor_cpu_mips(mips)?;
+        let scheduler_mips = mips.checked_mul(self.monitor_cpu_rate_divisor())
+            .ok_or("PerformanceInMips exceeds the scheduler rate")?;
+        self.bus.set_monitor_cpu_mips(scheduler_mips)?;
         self.bus.monitor_clock_ns = now;
         self.bus.monitor_clock_step = self.elapsed_steps();
         Ok(())
+    }
+
+    pub(crate) fn monitor_cpu_rate_divisor(&self) -> u32 {
+        if self.primary.rv64.is_some() {
+            self.hart_count() as u32
+        } else {
+            1
+        }
     }
 
     pub fn run_until<W: Write>(

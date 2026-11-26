@@ -386,7 +386,7 @@ impl Session {
             };
             file.write_all(version).map_err(|e| e.to_string())?;
             file.write_all(&machine.monitor_quantum.to_le_bytes()).map_err(|e| e.to_string())?;
-            let mips = if machine.cpu_less { 0 } else { (machine.bus.monitor_step_hz() / 1_000_000) as u32 };
+            let mips = if machine.cpu_less { 0 } else { (machine.bus.monitor_step_hz() / 1_000_000 / machine.monitor_cpu_rate_divisor() as _) as u32 };
             file.write_all(&mips.to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&(data.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&data).map_err(|e| e.to_string())?;
@@ -1146,7 +1146,7 @@ fn run_commands<'a>(
                 if machine.cpu_less {
                     return Err("the platform has no CPU".into());
                 }
-                mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, &mut output.output).map(|()| None)
+                mode.print(machine.bus.monitor_step_hz() / 1_000_000 / machine.monitor_cpu_rate_divisor() as _, 4, &mut output.output).map(|()| None)
             }
             Action::SingleStepBlocking(value) => {
                 if let Some(value) = value {
