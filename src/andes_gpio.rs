@@ -13,6 +13,10 @@ pub(crate) struct AndesGpio {
 impl AndesGpio {
     pub const SIZE: u32 = 0x1000;
 
+    pub(crate) fn reset(&mut self) {
+        *self = Self::new(self.base, self.irq);
+    }
+
     pub fn new(base: u32, irq: Option<(usize, u32)>) -> Self {
         Self {
             base,

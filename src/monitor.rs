@@ -553,6 +553,7 @@ enum Action {
     PeripheralLog(String, i8),
     PeripheralWrite(String, u32, u32, u32),
     PeripheralRead(String, u32, u32),
+    TimerQuadWord(String, u32, Option<u64>),
     WatchdogIrq(String),
     EgisSysconProperty(String, String),
     SynchroniseQuantum,
@@ -739,7 +740,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::CpuMips(..) | Action::ReadCpuMips(..) | Action::RequireFullCsrValidation(..) | Action::ReadCsrValidation(..)
                     | Action::CpuStep(..) | Action::ClearTranslationCache(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
-                    | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::WatchdogIrq(_) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
+                    | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::EgisSysconProperty(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_) | Action::PeripheralLog(..)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
@@ -1196,6 +1197,12 @@ fn run_commands<'a>(
                     .ok_or_else(|| format!("unknown Andes watchdog {target:?}"))?;
                 writeln!(output.reply(), "{}", if value { "True" } else { "False" })
                     .map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::TimerQuadWord(target, offset, value) => {
+                let address = machine.bus.machine_timer_register(target, *offset)
+                    .ok_or_else(|| format!("unknown machine timer register {target} {offset:#x}"))?;
+                BusScalar { address: u64::from(address), width: 8, value: *value, number_mode: session.number_mode }
+                    .apply(&mut machine.bus, &mut output.reply()).map(|()| None)
             }
             Action::PeripheralRead(target, offset, width) => {
                 let (aligned, shift, mask) = peripheral_word_access(*offset, *width)?;
@@ -4630,6 +4637,12 @@ fn execute(
             ))
         }
         ["logLevel", level, target] => Some(Action::PeripheralLog(resolve(target)?.to_owned(), crate::monitor_log::parse_level(resolve(level)?)?)),
+        [target, "ReadQuadWord", offset] => Some(Action::TimerQuadWord(
+            resolve(target)?.into(), crate::parse_address(resolve(offset)?)?, None,
+        )),
+        [target, "WriteQuadWord", offset, value] => Some(Action::TimerQuadWord(
+            resolve(target)?.into(), crate::parse_address(resolve(offset)?)?, Some(crate::parse_address64(resolve(value)?)?),
+        )),
         [target, method @ ("ReadDoubleWord" | "ReadByteUsingDoubleWord" | "ReadWordUsingDoubleWord"), offset] =>
             Some(Action::PeripheralRead(resolve(target)?.into(), crate::parse_address(resolve(offset)?)?, peripheral_access_width(method))),
         [target, method @ ("WriteDoubleWord" | "WriteByteUsingDoubleWord" | "WriteWordUsingDoubleWord"), offset, value] =>
@@ -4781,7 +4794,7 @@ fn execute(
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)
-                        | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::WatchdogIrq(_) | Action::EgisSysconProperty(..)
+                        | Action::PeripheralWrite(..) | Action::PeripheralRead(..) | Action::TimerQuadWord(..) | Action::WatchdogIrq(_) | Action::EgisSysconProperty(..)
                         | Action::CreateUartTester(..)
                         | Action::DefaultUartTester(_)
                         | Action::ClearUartTesterReport(_)

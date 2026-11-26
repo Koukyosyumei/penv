@@ -21,6 +21,14 @@ pub(crate) struct AndesPit {
 impl AndesPit {
     pub const SIZE: u32 = 0x1000;
 
+    pub(crate) fn reset(&mut self) {
+        self.phase = 0;
+        self.interrupt_enable = 0;
+        self.interrupt_status = 0;
+        self.enable = 0;
+        for channel in &mut self.channels { *channel = Channel::default(); }
+    }
+
     pub fn new(
         base: u32,
         name: String,

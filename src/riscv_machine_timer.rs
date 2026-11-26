@@ -11,6 +11,12 @@ pub(crate) struct RiscvMachineTimer {
 impl RiscvMachineTimer {
     pub const SIZE: u32 = 0x10;
 
+    pub(crate) fn reset(&mut self) {
+        self.time = 0;
+        self.compare = u64::MAX;
+        self.fractional_ticks = 0;
+    }
+
     pub fn new(base: u32, hart: usize, time_provider: bool, frequency: u32) -> Self {
         Self {
             base,
@@ -31,6 +37,10 @@ impl RiscvMachineTimer {
         let ticks = self.fractional_ticks + u64::from(self.frequency);
         self.time = self.time.wrapping_add(ticks / u64::from(rate));
         self.fractional_ticks = ticks % u64::from(rate);
+        self.interrupt_pending()
+    }
+
+    pub fn interrupt_pending(&self) -> bool {
         self.time >= self.compare
     }
 

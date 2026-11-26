@@ -34,6 +34,20 @@ impl AndesSpi {
     const TX_THRESHOLD: u32 = 8;
     const END: u32 = 16;
 
+    pub(crate) fn reset(&mut self) {
+        self.registers.fill(0);
+        self.receive.clear();
+        self.address_assigned = false;
+        self.tx_count = 0;
+        self.rx_count = 0;
+        self.dma = None;
+        if let Some(flash) = &mut self.flash {
+            flash.finish();
+            flash.status.fill(0);
+            flash.reset_enabled = false;
+        }
+    }
+
     pub fn new(
         base: u32,
         name: String,

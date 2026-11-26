@@ -2591,7 +2591,7 @@ fn load_platform(
         let time_provider = cpu.body.iter().any(|(_, row)| {
             row.strip_prefix("timeProvider:").is_some_and(|name| name.trim() == entry.name)
         });
-        machine.bus.map_riscv_machine_timer(crate::riscv_machine_timer::RiscvMachineTimer::new(
+        machine.bus.map_riscv_machine_timer(&entry.name, crate::riscv_machine_timer::RiscvMachineTimer::new(
             entry.address()?, 0, time_provider, frequency,
         )).map_err(|error| entry.error(&error))?;
     }
@@ -2871,6 +2871,7 @@ fn load_platform(
         machine.bus.map_egis_syscon(crate::egis_syscon::EgisSyscon::new(
             entry.address()?, entry.name.clone(), devices,
         )).map_err(|error| entry.error(&error))?;
+        machine.configure_egis_reset();
     }
     for entry in sifive_uarts {
         let mut irq = 0;

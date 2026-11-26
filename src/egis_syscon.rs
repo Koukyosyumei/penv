@@ -9,25 +9,43 @@ impl EgisSyscon {
     pub const SIZE: u32 = 0x1000;
     const DIVIDERS: [u32; 7] = [1, 2, 3, 4, 6, 8, 16];
 
+    const RESET_REGISTERS: [u32; 12] = [
+        1,
+        0x41,
+        0,
+        0x40,
+        0x7000_0000,
+        0x3f_ffff,
+        0x3f_ffff,
+        0xbffc_0000,
+        0,
+        0,
+        0,
+        0,
+    ];
+
     pub fn new(base: u32, name: String, devices: [u32; 3]) -> Self {
+        let mut registers = Self::RESET_REGISTERS;
+        registers[7] |= 1 << 13;
         Self {
             base,
             name,
             devices,
-            registers: [
-                1,
-                0x41,
-                0,
-                0x40,
-                0x7000_0000,
-                0x3f_ffff,
-                0x3f_ffff,
-                0xbffc_2000,
-                0,
-                0,
-                0,
-                0,
-            ],
+            registers,
+        }
+    }
+
+    pub fn reset(&mut self, cause: EgisReset) {
+        let previous = self.registers;
+        self.registers = Self::RESET_REGISTERS;
+        match cause {
+            EgisReset::Warm => {
+                for index in [3, 4, 7] {
+                    self.registers[index] = previous[index];
+                }
+            }
+            EgisReset::Cold => {}
+            EgisReset::Watchdog => self.registers[7] |= 1 << 12,
         }
     }
 
@@ -68,8 +86,10 @@ impl EgisSyscon {
                 SysconChange::Clock(self.apb_clock())
             }
             0x0c => {
-                if value & 6 != 0 {
-                    SysconChange::Reset
+                if value & 4 != 0 {
+                    SysconChange::Reset(EgisReset::Warm)
+                } else if value & 2 != 0 {
+                    SysconChange::Reset(EgisReset::Cold)
                 } else {
                     SysconChange::None
                 }
@@ -92,10 +112,17 @@ impl EgisSyscon {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum EgisReset {
+    Cold,
+    Warm,
+    Watchdog,
+}
+
 pub(crate) enum SysconChange {
     None,
     Clock(u32),
-    Reset,
+    Reset(EgisReset),
 }
 
 #[cfg(test)]
@@ -189,6 +216,13 @@ impl EgisExtra {
                 0x1080 => sequence.next() as u32,
                 _ => 0,
             },
+        }
+    }
+
+    pub fn reset(&mut self) {
+        if let Self::Entropy { control, key, .. } = self {
+            *control = 0;
+            *key = [0; 4];
         }
     }
 

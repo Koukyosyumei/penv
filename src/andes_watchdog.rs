@@ -20,6 +20,16 @@ impl AndesWatchdog {
     const UNLOCK: u16 = 0x5aa5;
     const RESTART: u16 = 0xcafe;
 
+    pub(crate) fn reset(&mut self) {
+        self.phase = 0;
+        self.control = 0;
+        self.unlocked = false;
+        self.elapsed = false;
+        self.interrupt_ticks = 0;
+        self.reset_ticks = 0;
+        self.reset_armed = false;
+    }
+
     pub fn new(base: u32, name: String, frequency: u32, irq: Option<(usize, u32)>) -> Self {
         Self {
             base,

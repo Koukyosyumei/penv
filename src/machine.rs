@@ -129,6 +129,7 @@ pub struct Machine {
     pub(crate) cpu_less: bool,
     pub(crate) empty_monitor: bool,
     monitor_active: bool,
+    egis_reset_cpu: Option<Box<Hart>>,
     pub(crate) monitor_single_step_blocking: bool,
     pub bus: Bus,
     pub primary: Hart,
@@ -424,6 +425,7 @@ impl Machine {
             cpu_less: false,
             empty_monitor: false,
             monitor_active: false,
+            egis_reset_cpu: None,
             monitor_single_step_blocking: true,
             boot_memory_cleared: false,
             monitor_firmware: None,
@@ -554,6 +556,10 @@ impl Machine {
             .as_ref()
             .expect("validated RV64 CPU")
             .translate_read(&mut self.bus, address)
+    }
+
+    pub(crate) fn configure_egis_reset(&mut self) {
+        self.egis_reset_cpu = Some(Box::new(self.primary.clone()));
     }
 
     pub(crate) fn initialize_monitor_reset_pcs(&mut self) {
@@ -1831,6 +1837,18 @@ impl Machine {
             .map(|(stop, _)| stop)
     }
 
+    fn apply_egis_reset_request(&mut self) -> Result<bool, String> {
+        let Some(cause) = self.bus.andes_reset_requested.take() else { return Ok(false) };
+        let Some(initial) = self.egis_reset_cpu.as_deref() else { return Ok(true) };
+        let vector = self.bus.reset_egis_devices(cause).ok_or("missing Egis AOSMU")?;
+        let paused = self.primary.monitor_paused;
+        self.primary.configure_reset_vector(vector);
+        self.primary.monitor_reset(initial)?;
+        self.primary.monitor_paused = paused;
+        self.halted &= !1;
+        Ok(false)
+    }
+
     fn run_selected<W: Write>(
         &mut self,
         limit: u64,
@@ -1993,6 +2011,10 @@ impl Machine {
                     .nrf_adxl_input(&name)
                     .ok_or_else(|| format!("unknown ADXL372 {name:?}"))? = acceleration;
             }
+            self.bus.tick_andes_clocked_devices();
+            if self.apply_egis_reset_request()? {
+                return Ok((Stop::Reset, retired));
+            }
             let index = selected.unwrap_or_else(|| {
                 let index = self.next_hart;
                 if index == self.secondary.len() {
@@ -2145,10 +2167,14 @@ impl Machine {
             if let Some(code) = self.bus.rv64_test_exit {
                 return Ok((Stop::TestExit(code), retired));
             }
-            if self.bus.rv64_devices.reset_requested || std::mem::take(&mut self.bus.andes_reset_requested) {
+            if self.bus.rv64_devices.reset_requested {
                 return Ok((Stop::Reset, retired));
             }
-            if hart.monitor_paused {
+            let paused = hart.monitor_paused;
+            if self.apply_egis_reset_request()? {
+                return Ok((Stop::Reset, retired));
+            }
+            if paused {
                 break;
             }
         }
@@ -2777,9 +2803,8 @@ impl Hart {
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));
         }
         let clint = bus.clint.as_mut().map_or(0, |clint| clint.tick(self.slot));
-        let rate = bus.step_hz();
-        let machine_timer_irq = bus.riscv_machine_timer.as_mut()
-            .is_some_and(|timer| self.slot == timer.hart && timer.tick(rate));
+        let machine_timer_irq = bus.riscv_machine_timer.as_ref()
+            .is_some_and(|timer| self.slot == timer.hart && timer.interrupt_pending());
         let mut pending = clint | (u32::from(machine_timer_irq) * crate::clint::TIMER);
         if let Some(clic) = bus.clic.as_mut() {
             clic.sample_clint(clint);

@@ -20,6 +20,17 @@ pub struct Plic {
 impl Plic {
     pub const SIZE: u64 = 0x400_0000;
 
+    pub(crate) fn reset(&mut self) {
+        self.priority.fill(0);
+        self.level.fill(0);
+        self.pending.fill(0);
+        self.claimed_by.fill(None);
+        for context in &mut self.contexts {
+            context.enabled.fill(0);
+            context.threshold = 0;
+        }
+    }
+
     pub fn new(base: u32, sources: u32, outputs: &[u32]) -> Self {
         let words = (sources as usize + 1).div_ceil(32);
         Self {

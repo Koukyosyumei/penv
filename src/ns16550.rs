@@ -18,6 +18,10 @@ pub struct Ns16550 {
 }
 
 impl Ns16550 {
+    pub(crate) fn reset(&mut self) {
+        *self = Self::new(self.base, self.source, self.wide);
+    }
+
     pub fn new(base: u32, source: Option<u32>, wide: bool) -> Self {
         Self {
             base,

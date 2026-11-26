@@ -560,7 +560,7 @@ pub struct Bus {
     andes_rtc: Vec<crate::andes_rtc::AndesRtc>,
     egis_syscon: Option<crate::egis_syscon::EgisSyscon>,
     egis_extra: Vec<crate::egis_syscon::EgisExtra>,
-    pub(crate) andes_reset_requested: bool,
+    pub(crate) andes_reset_requested: Option<crate::egis_syscon::EgisReset>,
     sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
@@ -570,6 +570,7 @@ pub struct Bus {
     external_nvic_levels: u32,
     pub clint: Option<Clint>,
     pub(crate) riscv_machine_timer: Option<crate::riscv_machine_timer::RiscvMachineTimer>,
+    riscv_machine_timer_name: Option<String>,
     pub(crate) clic: Option<crate::clic::Clic>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
@@ -3336,6 +3337,7 @@ impl Bus {
 
     pub(crate) fn map_riscv_machine_timer(
         &mut self,
+        name: &str,
         timer: crate::riscv_machine_timer::RiscvMachineTimer,
     ) -> Result<(), String> {
         let start = u64::from(timer.base);
@@ -3346,7 +3348,17 @@ impl Bus {
             return Err("invalid or overlapping RISC-V machine timer".into());
         }
         self.riscv_machine_timer = Some(timer);
+        self.riscv_machine_timer_name = Some(name.to_owned());
         Ok(())
+    }
+
+    pub(crate) fn machine_timer_register(&self, target: &str, offset: u32) -> Option<u32> {
+        let target = target.strip_prefix("sysbus.").unwrap_or(target);
+        if self.riscv_machine_timer_name.as_deref() != Some(target) {
+            return None;
+        }
+        let timer = self.riscv_machine_timer.as_ref()?;
+        (offset < crate::riscv_machine_timer::RiscvMachineTimer::SIZE).then(|| timer.base + offset)
     }
 
     pub fn map_clint(&mut self, base: u32, targets: usize) -> Result<(), String> {
@@ -3439,6 +3451,24 @@ impl Bus {
         self.set_egis_timer_clocks(syscon.devices, syscon.apb_clock());
         self.egis_syscon = Some(syscon);
         Ok(())
+    }
+
+    pub(crate) fn reset_egis_devices(&mut self, cause: crate::egis_syscon::EgisReset) -> Option<u32> {
+        let syscon = self.egis_syscon.as_mut()?;
+        syscon.reset(cause);
+        let (devices, frequency, vector) = (syscon.devices, syscon.apb_clock(), syscon.reset_vector());
+        self.set_egis_timer_clocks(devices, frequency);
+        if let Some(timer) = &mut self.riscv_machine_timer { timer.reset(); }
+        if let Some(uart) = &mut self.ns16550 { uart.reset(); }
+        for (_, plic) in &mut self.plics { plic.reset(); }
+        for timer in &mut self.andes_pit { timer.reset(); }
+        for watchdog in &mut self.andes_watchdogs { watchdog.reset(); }
+        for rtc in &mut self.andes_rtc { rtc.reset(); }
+        for gpio in &mut self.andes_gpio { gpio.reset(); }
+        for spi in &mut self.andes_spi { spi.reset(); }
+        for device in &mut self.egis_extra { device.reset(); }
+        self.reservations.fill(None);
+        Some(vector)
     }
 
     pub(crate) fn egis_syscon_property(&self, name: &str, property: &str) -> Option<u32> {
@@ -5904,6 +5934,24 @@ impl Bus {
         }
     }
 
+    pub(crate) fn tick_andes_clocked_devices(&mut self) {
+        let rate = self.step_hz();
+        if let Some(timer) = &mut self.riscv_machine_timer {
+            timer.tick(rate);
+        }
+        for rtc in &mut self.andes_rtc {
+            rtc.tick(rate);
+        }
+        for pit in &mut self.andes_pit {
+            pit.tick(rate);
+        }
+        for watchdog in &mut self.andes_watchdogs {
+            if watchdog.tick(rate) {
+                self.andes_reset_requested = Some(crate::egis_syscon::EgisReset::Watchdog);
+            }
+        }
+    }
+
     pub fn tick_plic(&mut self) -> u32 {
         if let Some(uart) = self.ns16550.as_ref()
             && let Some(source) = uart.source
@@ -5937,19 +5985,16 @@ impl Bus {
         }
         let step_rate = self.step_hz();
         for rtc in &mut self.andes_rtc {
-            rtc.tick(step_rate);
             if let Some((controller, source)) = rtc.irq {
                 self.plics[controller].1.set_line(source, rtc.interrupt());
             }
         }
         for watchdog in &mut self.andes_watchdogs {
-            self.andes_reset_requested |= watchdog.tick(step_rate);
             if let Some((controller, source)) = watchdog.irq {
                 self.plics[controller].1.set_line(source, watchdog.interrupt());
             }
         }
         for pit in &mut self.andes_pit {
-            pit.tick(step_rate);
             if let Some((controller, source)) = pit.irq {
                 let (name, plic) = &mut self.plics[controller];
                 if plic.line_is_asserted(source) != pit.interrupt() {
@@ -7813,7 +7858,7 @@ impl Bus {
             match syscon.write(address, value) {
                 crate::egis_syscon::SysconChange::None => {}
                 crate::egis_syscon::SysconChange::Clock(frequency) => self.set_egis_timer_clocks(devices, frequency),
-                crate::egis_syscon::SysconChange::Reset => self.andes_reset_requested = true,
+                crate::egis_syscon::SysconChange::Reset(cause) => self.andes_reset_requested = Some(cause),
             }
             return Ok(());
         }

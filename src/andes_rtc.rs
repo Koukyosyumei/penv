@@ -15,6 +15,10 @@ impl AndesRtc {
     const INTERRUPT_MASK: u32 = 0xfc;
     const STATUS_WRITE_DONE: u32 = 1 << 16;
 
+    pub(crate) fn reset(&mut self) {
+        *self = Self::new(self.base, self.irq);
+    }
+
     pub fn new(base: u32, irq: Option<(usize, u32)>) -> Self {
         Self {
             base,
