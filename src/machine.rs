@@ -1489,6 +1489,7 @@ impl Machine {
         if Self::cpu_less_snapshot_format(&header).is_ok()
             || Self::cortex_snapshot_has_registers(&header).is_ok()
             || &header == crate::snapshot::ARM32_MAGIC
+            || &header == crate::snapshot::ARM32_MAGIC_V1
             || &header == crate::snapshot::RV64_MAGIC
             || &header == crate::snapshot::CORTEX_MAGIC
         {
@@ -1756,7 +1757,7 @@ impl Machine {
         write().map_err(|error| error.to_string())
     }
 
-    fn read_arm32_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
+    fn read_arm32_snapshot(&mut self, input: &mut impl Read, has_testers: bool) -> Result<(), String> {
         use crate::snapshot::{invalid, read_bool, read_text, read_words};
         let platform = self.arm32_snapshot_platform()?.to_owned();
         let mut read = || -> std::io::Result<()> {
@@ -1783,7 +1784,7 @@ impl Machine {
             }
             let mut arm32 = self.primary.arm32.as_ref().unwrap().clone();
             arm32.load_snapshot(input)?;
-            self.bus.load_arm_snapshot(input)?;
+            self.bus.load_arm_snapshot(input, has_testers)?;
             self.reset_monitor_time(steps, self.monitor_quantum);
             self.bus.monitor_clock_step = steps;
             self.bus.monitor_clock_ns = u128::from(ns_low) | (u128::from(ns_high) << 64);
@@ -1855,8 +1856,8 @@ impl Machine {
         }
         let mut header = [0; 9];
         input.read_exact(&mut header).map_err(|error| error.to_string())?;
-        if &header == crate::snapshot::ARM32_MAGIC {
-            return self.read_arm32_snapshot(input);
+        if &header == crate::snapshot::ARM32_MAGIC || &header == crate::snapshot::ARM32_MAGIC_V1 {
+            return self.read_arm32_snapshot(input, &header == crate::snapshot::ARM32_MAGIC);
         }
         if &header == crate::snapshot::CORTEX_MAGIC {
             return self.read_cortex_live_snapshot(input);

@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    io::{self, Write},
+    io::{self, Read, Write},
     sync::mpsc::{Receiver, TryRecvError},
 };
 
@@ -527,6 +527,55 @@ impl UartHistory {
         Self { carriage_return, ..Self::default() }
     }
 
+    pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::{invalid, write_text, write_words};
+        if self.active.is_some() || self.multiline.is_some() || self.failure.is_some() {
+            return Err(invalid("cannot save an active UART assertion"));
+        }
+        write_words(output, &[u64::from(self.carriage_return), self.activity, self.sgr.len() as u64,
+            self.unread.len() as u64, self.failures.len() as u64])?;
+        output.write_all(&self.sgr)?;
+        for &(byte, time) in &self.unread {
+            write_words(output, &[u64::from(byte), time as u64, (time >> 64) as u64])?;
+        }
+        for failure in &self.failures {
+            write_words(output, &[u64::from(failure.regex.is_some())])?;
+            write_text(output, &failure.pattern)?;
+            if let Some(regex) = &failure.regex {
+                write_text(output, regex.as_str())?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_snapshot(input: &mut impl Read) -> io::Result<Self> {
+        use crate::snapshot::{invalid, read_bool, read_text, read_words};
+        let [carriage_return, activity, sgr, unread, failures] = read_words(input)?;
+        if [sgr, unread, failures].into_iter().any(|length| length > UART_HISTORY_BYTES as u64) {
+            return Err(invalid("snapshot UART history exceeds buffer limits"));
+        }
+        let mut history = Self::with_carriage_return(read_bool(carriage_return)?);
+        history.activity = activity;
+        history.sgr.resize(sgr as usize, 0);
+        input.read_exact(&mut history.sgr)?;
+        for _ in 0..unread {
+            let [byte, low, high] = read_words(input)?;
+            history.unread.push_back((u8::try_from(byte).map_err(io::Error::other)?,
+                u128::from(low) | u128::from(high) << 64));
+        }
+        for _ in 0..failures {
+            let [has_regex] = read_words(input)?;
+            let pattern = read_text(input)?;
+            let regex = if read_bool(has_regex)? {
+                Some(regex::Regex::new(&read_text(input)?).map_err(io::Error::other)?)
+            } else {
+                None
+            };
+            history.failures.push(FailingUartPattern { pattern, regex });
+        }
+        Ok(history)
+    }
+
     fn terminator(&self) -> u8 {
         if self.carriage_return { b'\r' } else { b'\n' }
     }
@@ -798,6 +847,26 @@ struct BinaryWait {
 }
 
 impl BinaryUartHistory {
+    pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        if self.wait.is_some() {
+            return Err(crate::snapshot::invalid("cannot save an active binary UART assertion"));
+        }
+        crate::snapshot::write_words(output, &[self.unread.len() as u64])?;
+        let (first, second) = self.unread.as_slices();
+        output.write_all(first)?;
+        output.write_all(second)
+    }
+
+    pub(crate) fn load_snapshot(input: &mut impl Read) -> io::Result<Self> {
+        let [length] = crate::snapshot::read_words(input)?;
+        if length > UART_HISTORY_BYTES as u64 {
+            return Err(crate::snapshot::invalid("snapshot binary UART history exceeds buffer limit"));
+        }
+        let mut bytes = vec![0; length as usize];
+        input.read_exact(&mut bytes)?;
+        Ok(Self { unread: bytes.into(), wait: None })
+    }
+
     #[cfg(test)]
     pub fn begin_wait(&mut self, pattern: &[u8], match_start: bool) {
         self.begin_pattern(&BinaryUartPattern::Literal(pattern.to_vec()), match_start);

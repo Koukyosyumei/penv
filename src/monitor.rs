@@ -303,7 +303,9 @@ fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<Snap
         let repl = crate::snapshot::read_text(&mut input).map_err(|error| error.to_string())?;
         return Ok(((!metadata.selected.is_empty()).then_some(metadata.selected), Some(SnapshotPlatform::Inline(repl))));
     }
-    if header.starts_with(crate::snapshot::RV64_MAGIC) || header.starts_with(crate::snapshot::ARM32_MAGIC) {
+    if [crate::snapshot::RV64_MAGIC, crate::snapshot::ARM32_MAGIC, crate::snapshot::ARM32_MAGIC_V1]
+        .iter().any(|magic| header.starts_with(*magic))
+    {
         let metadata = metadata.ok_or("native CPU snapshot requires monitor metadata")?;
         if metadata.cpu_mips.is_none_or(|mips| mips == 0) {
             return Err("invalid RV64 snapshot rate".into());

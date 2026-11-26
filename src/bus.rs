@@ -7043,6 +7043,24 @@ impl Bus {
         Ok(())
     }
 
+    fn save_uart_testers(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::{write_text, write_words};
+        write_words(output, &[self.uart_testers.len() as u64,
+            self.default_uart_tester.map_or(u64::MAX, |index| index as u64),
+            u64::from(self.default_uart_timeout.is_some()), self.default_uart_timeout.unwrap_or(0),
+            self.default_uart_echo.map_or(2, u64::from), u64::from(self.default_uart_next_line),
+            u64::from(self.default_uart_pause)])?;
+        for tester in &self.uart_testers {
+            write_text(output, &tester.target)?;
+            write_words(output, &[tester.timeout, u64::from(matches!(tester.history, TesterHistory::Binary(_)))])?;
+            match &tester.history {
+                TesterHistory::Text(history) => history.save_snapshot(output)?,
+                TesterHistory::Binary(history) => history.save_snapshot(output)?,
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn supports_arm_snapshot(&self) -> bool {
         self.aliases.is_empty() && self.rv64_reservations.iter().all(Option::is_none)
             && self.pydevs.is_empty() && self.arm_gic.is_some()
@@ -7051,6 +7069,7 @@ impl Bus {
     pub(crate) fn save_arm_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
         use crate::snapshot::write_words;
         write_words(output, &[self.arm_events, self.pl011_uarts.len() as u64])?;
+        self.save_uart_testers(output)?;
         self.arm_gic.as_ref().unwrap().save_snapshot(output)?;
         for uart in &self.pl011_uarts {
             uart.save_snapshot(output)?;
@@ -7070,11 +7089,34 @@ impl Bus {
         Ok(())
     }
 
-    pub(crate) fn load_arm_snapshot(&mut self, input: &mut impl Read) -> io::Result<()> {
-        use crate::snapshot::{invalid, read_words};
+    pub(crate) fn load_arm_snapshot(&mut self, input: &mut impl Read, has_testers: bool) -> io::Result<()> {
+        use crate::snapshot::{invalid, read_bool, read_text, read_words};
         let [events, uart_count] = read_words(input)?;
         if uart_count != self.pl011_uarts.len() as u64 {
             return Err(invalid("snapshot PL011 count differs from the platform"));
+        }
+        let mut testers = Vec::new();
+        let mut defaults = None;
+        if has_testers {
+            let [count, selected, has_timeout, timeout, echo, next_line, pause] = read_words(input)?;
+            if count > uart_count || selected != u64::MAX && selected >= count {
+                return Err(invalid("invalid snapshot UART tester count or selection"));
+            }
+            let selected = (selected != u64::MAX).then_some(selected as usize);
+            let timeout = read_bool(has_timeout)?.then_some(timeout);
+            let echo = if echo == 2 { None } else { Some(read_bool(echo)?) };
+            defaults = Some((selected, timeout, echo, read_bool(next_line)?, read_bool(pause)?));
+            for _ in 0..count {
+                let target = read_text(input)?;
+                let port = self.tester_port(&target).map_err(io::Error::other)?;
+                let [timeout, binary] = read_words(input)?;
+                let history = if read_bool(binary)? {
+                    TesterHistory::Binary(BinaryUartHistory::load_snapshot(input)?)
+                } else {
+                    TesterHistory::Text(UartHistory::load_snapshot(input)?)
+                };
+                testers.push(UartTester { target, port, history, timeout });
+            }
         }
         let mut gic = self.arm_gic.as_ref().unwrap().clone();
         gic.load_snapshot(input)?;
@@ -7114,6 +7156,14 @@ impl Bus {
         }
         for (region, contents) in self.regions.iter_mut().zip(contents) {
             region.bytes = contents;
+        }
+        if let Some((selected, timeout, echo, next_line, pause)) = defaults {
+            self.uart_testers = testers;
+            self.default_uart_tester = selected;
+            self.default_uart_timeout = timeout;
+            self.default_uart_echo = echo;
+            self.default_uart_next_line = next_line;
+            self.default_uart_pause = pause;
         }
         self.arm_events = events;
         self.arm_gic = Some(gic);

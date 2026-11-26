@@ -1,7 +1,8 @@
 use std::io::{self, Read, Write};
 
 pub(crate) const CORTEX_MAGIC: &[u8; 9] = b"PENVTHMB\x01";
-pub(crate) const ARM32_MAGIC: &[u8; 9] = b"PENVARM3\x01";
+pub(crate) const ARM32_MAGIC_V1: &[u8; 9] = b"PENVARM3\x01";
+pub(crate) const ARM32_MAGIC: &[u8; 9] = b"PENVARM3\x02";
 pub(crate) const RV64_MAGIC: &[u8; 9] = b"PENVRV64\x01";
 
 pub(crate) fn invalid(message: &str) -> io::Error {
