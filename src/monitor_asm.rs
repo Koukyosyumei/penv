@@ -90,7 +90,7 @@ pub(crate) fn assemble_source(
     }
     let output_text = String::from_utf8_lossy(&output.stdout);
     let image = match inline_encoding(&output_text)? {
-        Some(image) if !output_text.contains("fixup ") => image,
+        Some(image) if !instructions.contains(".4byte ") && !output_text.contains("fixup ") => image,
         _ => link_instructions(triple, &features, address, &instructions)?,
     };
     if image.is_empty() {
