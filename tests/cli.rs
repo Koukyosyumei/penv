@@ -3232,3 +3232,64 @@ uart: UART.NS16550 @ sysbus 0x40000000
     assert!(!timeout.status.success(), "{timeout:?}");
     assert!(String::from_utf8_lossy(&timeout.stderr).contains("UART timeout after 8 s"));
 }
+
+#[test]
+fn monitor_runs_while_waiting_for_a_partial_command_and_honors_pause() {
+    use std::io::{BufRead, BufReader};
+    use std::time::{Duration, Instant};
+
+    let directory = std::env::temp_dir().join(format!("penv-monitor-idle-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        "cpu: CPU.RiscV32 @ sysbus\n    cpuType: \"rv32i\"\n    timeProvider: empty\nram: Memory.MappedMemory @ sysbus 0x80000000\n    size: 0x1000\n",
+    ).unwrap();
+    let firmware: Vec<u8> = [0x0010_8093u32, 0xffdf_f06f]
+        .into_iter().flat_map(u32::to_le_bytes).collect();
+    fs::write(directory.join("firmware.bin"), firmware).unwrap();
+    let script = directory.join("boot.resc");
+    fs::write(&script, "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0x80000000\ncpu PC 0x80000000\n").unwrap();
+    let mut child = penv_command()
+        .args(["run", "--monitor-stdio", "--script"])
+        .arg(&script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut reply = |status: &str| {
+        let mut header = String::new();
+        output.read_line(&mut header).unwrap();
+        let (actual, size) = header.trim_end().split_once(' ').unwrap();
+        assert_eq!(actual, status);
+        let mut payload = vec![0; size.parse().unwrap()];
+        output.read_exact(&mut payload).unwrap();
+        String::from_utf8(payload).unwrap()
+    };
+    reply("READY");
+    input.write_all(b"start\n").unwrap();
+    reply("OK");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let register = "cpu GetRegister x1";
+    loop {
+        writeln!(input, "PENV-COMMAND {}", register.len()).unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        input.write_all(register.as_bytes()).unwrap();
+        if reply("OK").trim() != "0x0" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "active emulation made no progress");
+    }
+
+    input.write_all(b"pause\ncpu GetRegister x1\n").unwrap();
+    reply("OK");
+    let paused = reply("OK");
+    std::thread::sleep(Duration::from_millis(30));
+    input.write_all(b"cpu GetRegister x1\n").unwrap();
+    assert_eq!(reply("OK"), paused);
+    drop(input);
+    assert!(child.wait().unwrap().success());
+    fs::remove_dir_all(directory).unwrap();
+}

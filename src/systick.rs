@@ -289,6 +289,16 @@ mod tests {
     }
 
     #[test]
+    fn calibration_reflects_the_configured_frequency() {
+        let mut timer = SysTick::default();
+        assert_eq!(timer.read(CALIBRATION), Some(0x8040_0000));
+        timer.set_frequency(72_000_000);
+        assert_eq!(timer.read(CALIBRATION), Some(0x800a_fc80));
+        timer.set_frequency(72_000_001);
+        assert_eq!(timer.read(CALIBRATION), Some(0xc00a_fc80));
+    }
+
+    #[test]
     fn upstream_count_down_with_reload_set_before_reset() {
         check_upstream_reload_order(false);
     }
