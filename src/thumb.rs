@@ -58,7 +58,7 @@ pub struct Thumb {
     vectors: Option<u32>,
     pub(crate) thumb2: bool,
     pub(crate) cortex_m33: bool,
-    pub(crate) cortex_m55: bool,
+    pub(crate) armv81m: bool,
     pub(crate) trustzone: bool,
     secure: bool,
     inactive_security_bank: SecurityBank,
@@ -216,7 +216,7 @@ impl Thumb {
             vectors: self.vectors,
             thumb2: self.thumb2,
             cortex_m33: self.cortex_m33,
-            cortex_m55: self.cortex_m55,
+            armv81m: self.armv81m,
             trustzone: self.trustzone,
             secure: self.trustzone,
             clock_gated: self.clock_gated,
@@ -1048,7 +1048,7 @@ impl Thumb {
         if self.fp_active {
             r[14] &= !0x10;
         }
-        if self.cortex_m33 || self.cortex_m55 {
+        if self.cortex_m33 || self.armv81m {
             r[14] = (r[14] & !0x41) | (u32::from(origin_secure) << 6) | u32::from(self.trustzone && !nonsecure);
             if has_callee_frame && !nonsecure {
                 r[14] &= !0x20;
@@ -1150,7 +1150,7 @@ impl Thumb {
         }
         let basic_target = if self.trustzone && target & 0xffffff82 == 0xffffff80 {
             target | 0x71
-        } else if (self.cortex_m33 || self.cortex_m55) && target & 0xffff_ffa1 == 0xffff_ffa0 {
+        } else if (self.cortex_m33 || self.armv81m) && target & 0xffff_ffa1 == 0xffff_ffa0 {
             target | 0x51
         } else if self.thumb2 {
             target | 0x10
@@ -2259,7 +2259,7 @@ impl Thumb {
                 {
                     self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
                 } else {
-                    let vector = self.cortex_m55.then(|| mve::VectorTransfer::decode(inst, low)).flatten();
+                    let vector = self.armv81m.then(|| mve::VectorTransfer::decode(inst, low)).flatten();
                     let secure_fp_transfer = self.trustzone && self.secure
                         && inst & 0xffe0 == 0xec20 && low == 0x0a00;
                     if vector.is_some() || secure_fp_transfer || Self::is_fpu_instruction(inst, low) {

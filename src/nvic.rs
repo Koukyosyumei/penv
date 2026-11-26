@@ -99,6 +99,7 @@ impl Security {
 #[derive(Clone)]
 pub struct Nvic {
     vector_base: Option<u32>,
+    cpuid: u32,
     security: Option<Box<Security>>,
     external_lines: usize,
     enabled: [u32; BANKS],
@@ -219,6 +220,7 @@ impl Nvic {
     pub fn new(priority_mask: u8, uart_irq: Option<u8>) -> Self {
         Self {
             vector_base: None,
+            cpuid: 0x410f_c241,
             security: None,
             external_lines: IRQ_LINES,
             enabled: [0; BANKS],
@@ -380,12 +382,14 @@ impl Nvic {
 
     pub fn reset(&mut self) {
         let external_lines = self.external_lines;
+        let cpuid = self.cpuid;
         let has_fpu = self.fpccr.is_some();
         let has_nrf_mpu = self.nrf_mpu.is_some();
         let mpu_count = self.mpu.as_ref().map(|mpu| mpu.count);
         let trustzone = self.security.is_some();
         *self = Self::new(self.priority_mask, self.uart_irq);
         self.external_lines = external_lines;
+        self.cpuid = cpuid;
         if has_fpu {
             self.enable_fpu();
         }
@@ -398,6 +402,10 @@ impl Nvic {
         if let Some(count) = mpu_count {
             self.configure_mpu(count);
         }
+    }
+
+    pub(crate) fn set_cpuid(&mut self, cpuid: u32) {
+        self.cpuid = cpuid;
     }
 
     pub fn enable_trustzone(&mut self) {
@@ -874,7 +882,7 @@ impl Nvic {
                 return self.mpu.as_ref().map(|mpu| mpu.read(offset));
             }
             if offset == 0xd00 && self.has_fpu() {
-                return Some(0x410f_c241);
+                return Some(self.cpuid);
             }
             if offset == 0xf34 {
                 return self.fpccr;

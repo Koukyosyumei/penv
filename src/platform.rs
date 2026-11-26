@@ -1517,14 +1517,15 @@ fn load_platform(
             }
         }
         let cortex_m7 = cpu_type == Some(r#""cortex-m7""#);
-        let cortex_m55 = cpu_type == Some(r#""cortex-m55""#);
+        let cortex_m85 = cpu_type == Some(r#""cortex-m85""#);
+        let armv81m = cortex_m85 || cpu_type == Some(r#""cortex-m55""#);
         let cortex_m33 = cpu_type == Some(r#""cortex-m33""#);
-        let cortex_m4f = matches!(cpu_type, Some(r#""cortex-m4""# | r#""cortex-m4f""#)) || cortex_m7 || cortex_m33 || cortex_m55;
+        let cortex_m4f = matches!(cpu_type, Some(r#""cortex-m4""# | r#""cortex-m4f""#)) || cortex_m7 || cortex_m33 || armv81m;
         if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) && !cortex_m4f {
-            return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4F, Cortex-M7, Cortex-M33 or Cortex-M55 cpuType"));
+            return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4F, Cortex-M7, Cortex-M33, Cortex-M55 or Cortex-M85 cpuType"));
         }
-        if trustzone && !(cortex_m33 || cortex_m55) {
-            return Err(entry.error("TrustZone requires a Cortex-M33 or Cortex-M55 CPU"));
+        if trustzone && !(cortex_m33 || armv81m) {
+            return Err(entry.error("TrustZone requires Cortex-M33 or Armv8.1-M"));
         }
         if !cortex_m4f {
             machine.bus.map_stm32f072_flash().map_err(|error| entry.error(&error))?;
@@ -2537,8 +2538,11 @@ fn load_platform(
         }
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors, cortex_m4f);
-        if cortex_m55 {
-            machine.primary.mark_cortex_m55(trustzone)?;
+        if armv81m {
+            machine.primary.configure_armv81m(trustzone)?;
+            if cortex_m85 {
+                machine.bus.nvic.as_mut().unwrap().set_cpuid(0x411f_d230);
+            }
         } else if cortex_m33 {
             machine.primary.mark_cortex_m33(trustzone)?;
         }
