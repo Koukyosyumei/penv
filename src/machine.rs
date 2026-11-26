@@ -561,6 +561,7 @@ impl Machine {
     }
 
     pub(crate) fn configure_egis_reset(&mut self) {
+        self.primary.wfi_as_nop = false;
         self.egis_reset_cpu = Some(Box::new(self.primary.clone()));
     }
 
