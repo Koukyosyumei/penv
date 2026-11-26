@@ -589,6 +589,7 @@ fn load_platform(
     let mut external_pmps = HashMap::new();
     let mut clint = None;
     let mut riscv_machine_timer = None;
+    let mut andes_pits = Vec::new();
     let mut clic = None;
     let mut nvic = None;
     let mut exti = None;
@@ -762,6 +763,7 @@ fn load_platform(
             }
             "Miscellaneous.LED" | "Miscellaneous.Button" if !cortex_m => panel_parts.push(entry),
             "GPIOPort.LiteX_GPIO" => litex_gpios.push(entry),
+            "Timers.AndesATCPIT100" => andes_pits.push(entry),
             "Timers.RiscVMachineTimer" => {
                 if riscv_machine_timer.replace(entry).is_some() {
                     return Err(entry.error("only one RISC-V machine timer is supported"));
@@ -2648,6 +2650,42 @@ fn load_platform(
         }.map_err(|e| entry.error(&e))?;
         plic_config.get_or_insert((entry, sources));
     }
+    for entry in andes_pits {
+        let mut frequency = None;
+        let mut channels = None;
+        let mut irq = None;
+        for (_, line) in &entry.body {
+            if let Some((pin, target)) = line.split_once("->") {
+                let (target, source) = target.split_once('@').ok_or_else(|| entry.error("expected PIT PLIC wiring"))?;
+                let source = number(source.trim()).map_err(|error| entry.error(&error))?;
+                let Some((controller, sources)) = plic_config.filter(|(plic, _)| plic.name == target.trim()) else {
+                    return Err(entry.error("unknown PIT interrupt destination"));
+                };
+                if irq.is_some() || !matches!(pin.trim(), "" | "IRQ") || !(1..=sources).contains(&source) {
+                    return Err(entry.error("invalid PIT interrupt connection"));
+                }
+                irq = machine.bus.plic_index(&controller.name).map(|index| (index, source));
+            } else if let Some((name, value)) = line.split_once(':') {
+                let value = number(value.trim()).map_err(|error| entry.error(&error))?;
+                match name.trim() {
+                    "clockFrequency" if frequency.is_none() => frequency = Some(value),
+                    "numberOfChannels" if channels.is_none() => channels = Some(value),
+                    _ => return Err(entry.error("unsupported PIT property")),
+                }
+            } else {
+                return Err(entry.error("unsupported PIT declaration"));
+            }
+        }
+        let frequency = frequency.filter(|frequency| *frequency != 0)
+            .ok_or_else(|| entry.error("PIT requires a positive clock frequency"))?;
+        let channels = channels.unwrap_or(4);
+        if !(1..=4).contains(&channels) {
+            return Err(entry.error("PIT requires between one and four channels"));
+        }
+        machine.bus.map_andes_pit(crate::andes_pit::AndesPit::new(
+            entry.address()?, entry.name.clone(), frequency, channels as usize, irq,
+        )).map_err(|error| entry.error(&error))?;
+    }
     for entry in sifive_uarts {
         let mut irq = 0;
         for (_, wire) in &entry.body {
@@ -3848,8 +3886,8 @@ ram: Memory.MappedMemory @ {
         bus.write(0x1000_0180, 4, 0x1234_5678, &mut std::io::sink()).unwrap();
         assert_eq!(bus.read::<4>(0x2000_0180).unwrap(), 0x1234_5678);
         assert_eq!(bus.read::<4>(0x3000_0080).unwrap(), 0x1234_5678);
-        assert!(bus.read::<4>(0x2000_0200).is_err());
-        assert!(bus.read::<4>(0x3000_0200).is_err());
+        assert!(bus.read_ram::<4>(0x2000_0200).is_err());
+        assert!(bus.read_ram::<4>(0x3000_0200).is_err());
     }
 
     #[test]

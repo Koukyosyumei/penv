@@ -550,6 +550,7 @@ pub struct Bus {
     f4_gpio_leds: Vec<(String, u32, u8)>,
     gpio_exti_outputs: [Option<u8>; 16],
     plics: Vec<(String, Plic)>,
+    andes_pit: Vec<crate::andes_pit::AndesPit>,
     sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
@@ -2966,6 +2967,9 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.andes_pit.iter().any(|pit| overlaps_range(start, end, pit.base, crate::andes_pit::AndesPit::SIZE)) {
+            return true;
+        }
         if self.riscv_machine_timer.as_ref().is_some_and(|timer| {
             overlaps_range(start, end, timer.base, crate::riscv_machine_timer::RiscvMachineTimer::SIZE)
         }) {
@@ -3384,6 +3388,20 @@ impl Bus {
             return Err("PLIC requires 1–63 interrupt sources".into());
         }
         self.register_plic("plic", Plic::new(base, sources, outputs).with_priorities(priorities))
+    }
+
+    pub(crate) fn map_andes_pit(&mut self, pit: crate::andes_pit::AndesPit) -> Result<(), String> {
+        let start = u64::from(pit.base);
+        let end = start + u64::from(crate::andes_pit::AndesPit::SIZE);
+        if pit.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping Andes PIT at {start:#010x}"));
+        }
+        self.andes_pit.push(pit);
+        Ok(())
+    }
+
+    pub(crate) fn plic_index(&self, name: &str) -> Option<usize> {
+        self.plics.iter().position(|(registered, _)| registered == name)
     }
 
     pub(crate) fn map_andes_plic(
@@ -5742,6 +5760,19 @@ impl Bus {
                 }
             }
         }
+        let step_rate = self.step_hz();
+        for pit in &mut self.andes_pit {
+            pit.tick(step_rate);
+            if let Some((controller, source)) = pit.irq {
+                let (name, plic) = &mut self.plics[controller];
+                if plic.line_is_asserted(source) != pit.interrupt() {
+                    let value = if pit.interrupt() { "True" } else { "False" };
+                    crate::monitor_log::record(0, &format!("{name}: Setting GPIO number #{source} to value {value}"));
+                    crate::monitor_log::record(0, &format!("{name}: Setting state to {value} for source #{source}"));
+                }
+                plic.set_line(source, pit.interrupt());
+            }
+        }
         self.plics.iter().fold(0, |outputs, (_, plic)| outputs | plic.irq_outputs())
     }
 
@@ -6692,6 +6723,9 @@ impl Bus {
         {
             return Ok(clic.read(offset, N));
         }
+        if N == 4 && let Some(pit) = self.andes_pit.iter().find(|pit| pit.contains(address)) {
+            return Ok(pit.read(address));
+        }
         if N == 4 && let Some(timer) = &self.riscv_machine_timer
             && let Some(value) = timer.read(address, N)
         {
@@ -7290,20 +7324,18 @@ impl Bus {
     }
 
     fn read_unaligned_ram<const N: usize>(&self, address: u32) -> Result<[u8; N], BusError> {
-        for region in &self.regions {
-            if let Some(offset) = region.offset(u64::from(address), N) {
-                let mut bytes = [0; N];
-                if region.flash_pages.is_some() {
-                    for (index, byte) in bytes[..N].iter_mut().enumerate() {
-                        *byte = region.flash_read(offset + index);
-                    }
-                } else {
-                    bytes[..N].copy_from_slice(&region.bytes[offset..offset + N]);
-                }
-                return Ok(bytes);
+        let (index, offset) = self.ram_location64(u64::from(address), N)
+            .ok_or(BusError::Unmapped(address, N))?;
+        let region = &self.regions[index];
+        let mut bytes = [0; N];
+        if region.flash_pages.is_some() {
+            for (index, byte) in bytes.iter_mut().enumerate() {
+                *byte = region.flash_read(offset + index);
             }
+        } else {
+            bytes.copy_from_slice(&region.bytes[offset..offset + N]);
         }
-        Err(BusError::Unmapped(address, N))
+        Ok(bytes)
     }
 
     fn write_faulting_peripheral(
@@ -7565,6 +7597,10 @@ impl Bus {
             && let Some(offset) = clic.offset(address, width)
         {
             clic.write(offset, width, value);
+            return Ok(());
+        }
+        if width == 4 && let Some(pit) = self.andes_pit.iter_mut().find(|pit| pit.contains(address)) {
+            pit.write(address, value);
             return Ok(());
         }
         if width == 4 && let Some(timer) = &mut self.riscv_machine_timer

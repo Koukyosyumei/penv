@@ -69,6 +69,11 @@ impl Plic {
         }
     }
 
+    pub(crate) fn line_is_asserted(&self, source: u32) -> bool {
+        let (word, bit) = Self::source_bit(source);
+        self.level.get(word).is_some_and(|level| level & bit != 0)
+    }
+
     fn source_bit(source: u32) -> (usize, u32) {
         ((source / 32) as usize, 1 << (source % 32))
     }
