@@ -17,6 +17,37 @@ impl Iwdg {
     pub const MODEL: &str = "Timers.STM32_IndependentWatchdog";
     pub const SIZE: u32 = 0x400;
 
+    pub(crate) fn from_repl(
+        base: u32,
+        body: &[(usize, String)],
+        number: impl Fn(&str) -> Result<u32, String>,
+    ) -> Result<Self, String> {
+        let mut frequency = None;
+        let mut window = None;
+        let mut prescaler = None;
+        for (_, text) in body {
+            let (key, value) = text.split_once(':').ok_or("expected IWDG property")?;
+            let value = value.trim();
+            match key.trim() {
+                "frequency" if frequency.is_none() => frequency = Some(number(value)?),
+                "windowOption" if window.is_none() => {
+                    window = Some(value.parse().map_err(|_| "invalid IWDG windowOption")?);
+                }
+                "defaultPrescaler" if prescaler.is_none() => {
+                    let value = number(value)?;
+                    if value > 7 {
+                        return Err("invalid IWDG defaultPrescaler".into());
+                    }
+                    prescaler = Some(value as u8);
+                }
+                _ => return Err("unsupported or duplicate IWDG property".into()),
+            }
+        }
+        let frequency = frequency.filter(|&value| value != 0)
+            .ok_or("expected nonzero IWDG frequency")?;
+        Ok(Self::new(base, frequency, window.unwrap_or(true), prescaler.unwrap_or(0)))
+    }
+
     pub fn new(base: u32, frequency: u32, window_option: bool, default_prescaler: u8) -> Self {
         Self {
             base,

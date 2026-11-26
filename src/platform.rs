@@ -889,6 +889,11 @@ fn load_platform(
                     return Err(entry.error("only one STM32F4 RCC is supported"));
                 }
             }
+            crate::stm32_iwdg::Iwdg::MODEL if cortex_m => {
+                let watchdog = crate::stm32_iwdg::Iwdg::from_repl(entry.address()?, &entry.body, number)
+                    .map_err(|error| entry.error(&error))?;
+                machine.bus.map_iwdg(watchdog).map_err(|error| entry.error(&error))?;
+            }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
             "SPI.STM32SPI" => stm32_spis.push(entry),
             "SPI.STP08ShiftRegister" => spi_shifts.push(entry),

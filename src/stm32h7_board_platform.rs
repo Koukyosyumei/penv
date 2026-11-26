@@ -195,47 +195,9 @@ pub fn configure(
         if alias.is_some() {
             return Err(entry.error("IWDG uses an independent clock"));
         }
-        let mut frequency = None;
-        let mut window = None;
-        let mut prescaler = None;
-        for (_, text) in &entry.body {
-            let (key, value) = text
-                .split_once(':')
-                .ok_or_else(|| entry.error("expected IWDG property"))?;
-            match key.trim() {
-                "frequency" if frequency.is_none() => {
-                    frequency = Some(number(value.trim()).map_err(|e| entry.error(&e))?);
-                }
-                "windowOption" if window.is_none() => {
-                    window = Some(
-                        value
-                            .trim()
-                            .parse()
-                            .map_err(|_| entry.error("invalid IWDG windowOption"))?,
-                    );
-                }
-                "defaultPrescaler" if prescaler.is_none() => {
-                    let value = number(value.trim()).map_err(|e| entry.error(&e))?;
-                    if value > 7 {
-                        return Err(entry.error("invalid IWDG defaultPrescaler"));
-                    }
-                    prescaler = Some(value as u8);
-                }
-                _ => return Err(entry.error("unsupported or duplicate IWDG property")),
-            }
-        }
-        let frequency = frequency
-            .filter(|&value| value != 0)
-            .ok_or_else(|| entry.error("expected nonzero IWDG frequency"))?;
-        machine
-            .bus
-            .map_iwdg(Iwdg::new(
-                base,
-                frequency,
-                window.unwrap_or(true),
-                prescaler.unwrap_or(0),
-            ))
-            .map_err(|e| entry.error(&e))?;
+        let watchdog = Iwdg::from_repl(base, &entry.body, number)
+            .map_err(|error| entry.error(&error))?;
+        machine.bus.map_iwdg(watchdog).map_err(|error| entry.error(&error))?;
     }
     for entry in entries
         .iter()
