@@ -1679,7 +1679,7 @@ impl Machine {
                 cpu.load_snapshot(input)?;
                 cpus.push((cpu, read_bool(halt)?, read_bool(pause)?, read_bool(single)?));
             }
-            let devices = self.bus.rv64_devices.read_snapshot(input)?;
+            let devices = self.bus.rv64_devices.read_snapshot(input, version)?;
             let has_clint = version >= 2 && read_bool(read_words::<1>(input)?[0])?;
             let mut clint = self.bus.clint.clone();
             if has_clint != clint.is_some() {

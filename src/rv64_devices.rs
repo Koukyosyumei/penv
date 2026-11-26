@@ -41,13 +41,8 @@ pub struct Devices {
     input_uart: usize,
 }
 
-// Backing value for the CacheConfig_WayEnable Python peripheral in polarfire-soc.repl.
-pub(crate) struct UartSnapshot {
-    receive: VecDeque<u8>,
-    tx_control: u32,
-    rx_control: u32,
-    enable: u32,
-    divisor: u32,
+struct UartSnapshot {
+    kind: UartKind,
     scoped_bases: [Option<u32>; MAX_HARTS],
 }
 
@@ -66,7 +61,6 @@ impl Devices {
             && self.mpfs_sd.is_empty() && self.mpfs_watchdogs.is_empty() && self.mpfs_spi.is_empty()
             && self.mpfs_ddr.is_empty() && self.mpfs_sysreg.is_none() && self.mpfs_cache_way_enable.is_none()
             && self.starlight_reset_pin.is_none()
-            && self.uarts.iter().all(|uart| matches!(uart.kind, UartKind::SiFive { .. }))
     }
 
     pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
@@ -77,14 +71,23 @@ impl Devices {
         write_words(output, &[self.uarts.len() as u64, self.input_uart as u64, u64::from(self.reset_requested)])?;
         write_words(output, &self.lines)?;
         for uart in &self.uarts {
-            let UartKind::SiFive { receive, tx_control, rx_control, enable, divisor } = &uart.kind else {
-                unreachable!("snapshot preflight checks UART type");
-            };
             write_text(output, &uart.name)?;
-            write_words(output, &[
-                u64::from(uart.base), uart.harts, u64::from(*tx_control), u64::from(*rx_control),
-                u64::from(*enable), u64::from(*divisor), receive.len() as u64,
-            ])?;
+            let receive = match &uart.kind {
+                UartKind::Ns16550(serial) => {
+                    write_words(output, &[1, uart.harts])?;
+                    write_words(output, &uart.scoped_bases.map(|base| base.map_or(1 << 32, u64::from)))?;
+                    serial.save_snapshot(output)?;
+                    continue;
+                }
+                UartKind::SiFive { receive, tx_control, rx_control, enable, divisor } => {
+                    write_words(output, &[0])?;
+                    write_words(output, &[
+                        u64::from(uart.base), uart.harts, u64::from(*tx_control), u64::from(*rx_control),
+                        u64::from(*enable), u64::from(*divisor), receive.len() as u64,
+                    ])?;
+                    receive
+                }
+            };
             write_words(output, &uart.scoped_bases.map(|base| base.map_or(1 << 32, u64::from)))?;
             let (a, b) = receive.as_slices();
             output.write_all(a)?;
@@ -93,7 +96,7 @@ impl Devices {
         Ok(())
     }
 
-    pub(crate) fn read_snapshot(&self, input: &mut impl std::io::Read) -> io::Result<DeviceSnapshot> {
+    pub(crate) fn read_snapshot(&self, input: &mut impl std::io::Read, version: u8) -> io::Result<DeviceSnapshot> {
         use crate::snapshot::{invalid, read_bool, read_text, read_words};
         let [count, input_uart, reset] = read_words(input)?;
         if !self.supports_snapshot() || count != self.uarts.len() as u64 || input_uart >= count.max(1) {
@@ -105,22 +108,42 @@ impl Devices {
             if read_text(input)? != uart.name {
                 return Err(invalid("RV64 UART name differs from the snapshot"));
             }
-            let [base, harts, tx, rx, enable, divisor, length] = read_words(input)?;
-            if base != u64::from(uart.base) || harts != uart.harts || length > 1 << 20 {
-                return Err(invalid("invalid RV64 UART registration or receive buffer"));
-            }
-            let mut scoped_bases = [None; MAX_HARTS];
-            for base in &mut scoped_bases {
-                let [value] = read_words(input)?;
-                if value != 1 << 32 {
-                    *base = Some(u32::try_from(value).map_err(io::Error::other)?);
+            fn read_scoped_bases(input: &mut impl std::io::Read) -> io::Result<[Option<u32>; MAX_HARTS]> {
+                let mut bases = [None; MAX_HARTS];
+                for base in &mut bases {
+                    let [value] = read_words(input)?;
+                    if value != 1 << 32 {
+                        *base = Some(u32::try_from(value).map_err(io::Error::other)?);
+                    }
                 }
+                Ok(bases)
             }
-            let mut receive = vec![0; length as usize];
-            input.read_exact(&mut receive)?;
-            let word = |value| u32::try_from(value).map_err(io::Error::other);
-            uarts.push(UartSnapshot { receive: receive.into(), tx_control: word(tx)?, rx_control: word(rx)?,
-                enable: word(enable)?, divisor: word(divisor)?, scoped_bases });
+            let uart_type = if version >= 4 { read_words::<1>(input)?[0] } else { 0 };
+            let (kind, scoped_bases) = match (uart_type, &uart.kind) {
+                (1, UartKind::Ns16550(serial)) => {
+                    if read_words::<1>(input)?[0] != uart.harts {
+                        return Err(invalid("invalid NS16550 snapshot registration"));
+                    }
+                    let bases = read_scoped_bases(input)?;
+                    (UartKind::Ns16550(serial.read_snapshot(input)?), bases)
+                }
+                (0, UartKind::SiFive { .. }) => {
+                    let [base, harts, tx, rx, enable, divisor, length] = read_words(input)?;
+                    if base != u64::from(uart.base) || harts != uart.harts || length > 1 << 20 {
+                        return Err(invalid("invalid RV64 UART registration or receive buffer"));
+                    }
+                    let bases = read_scoped_bases(input)?;
+                    let mut receive = vec![0; length as usize];
+                    input.read_exact(&mut receive)?;
+                    let word = |value| u32::try_from(value).map_err(io::Error::other);
+                    (UartKind::SiFive {
+                        receive: receive.into(), tx_control: word(tx)?, rx_control: word(rx)?,
+                        enable: word(enable)?, divisor: word(divisor)?,
+                    }, bases)
+                }
+                _ => return Err(invalid("RV64 UART type differs from the snapshot")),
+            };
+            uarts.push(UartSnapshot { kind, scoped_bases });
         }
         Ok(DeviceSnapshot { uarts, lines, input_uart: input_uart as usize, reset_requested: read_bool(reset)? })
     }
@@ -131,10 +154,7 @@ impl Devices {
         self.reset_requested = snapshot.reset_requested;
         for (uart, saved) in self.uarts.iter_mut().zip(snapshot.uarts) {
             uart.scoped_bases = saved.scoped_bases;
-            uart.kind = UartKind::SiFive {
-                receive: saved.receive, tx_control: saved.tx_control, rx_control: saved.rx_control,
-                enable: saved.enable, divisor: saved.divisor,
-            };
+            uart.kind = saved.kind;
         }
     }
 }
