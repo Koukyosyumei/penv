@@ -488,6 +488,9 @@ pub(crate) struct Cpu {
     fault_address: [u32; 4],
     hpfar: u32,
     debug_status: u32,
+    jazelle_control: [u32; 2],
+    cache_size_selection: u32,
+    kernel_counter_control: u32,
     pub(crate) timer: Option<GenericTimer>,
 }
 
@@ -540,7 +543,10 @@ impl Cpu {
             context_id: 0,
             fault_address: [0; 4],
             hpfar: 0,
-            debug_status: 0,
+             debug_status: 0,
+            jazelle_control: [0; 2],
+            cache_size_selection: 0,
+            kernel_counter_control: 0,
             timer: None,
         }
     }
@@ -707,6 +713,14 @@ impl Cpu {
         value: Option<u64>,
     ) -> Result<Option<u64>, String> {
         let canonical = name.to_ascii_lowercase();
+        if self.is_v8r() && matches!(canonical.as_str(), "joscr" | "jmcr") {
+            let register = &mut self.jazelle_control[usize::from(canonical == "jmcr")];
+            if let Some(value) = value {
+                *register = u32::try_from(value).map_err(|_| "system register value exceeds 32 bits")?;
+                return Ok(None);
+            }
+            return Ok(Some(u64::from(*register)));
+        }
         if self.is_v8r()
             && let Some(register) = match canonical.as_str() {
                 "ttbr0" => Some(&mut self.translation_tables[0]),
@@ -766,6 +780,8 @@ impl Cpu {
             "ifsr" => 0x0005_0020,
             "hsr" => 0x0085_0002,
             "dfar" => 0x0006_0000,
+            "csselr" => 0x0040_0000,
+            "cntkctl" => 0x000e_0001,
             "ctr" => 0x0000_0020,
             "clidr" => 0x0020_0020,
             "revidr" => 0x0000_00c0,
@@ -896,6 +912,8 @@ impl Cpu {
             0x0001_0040 => (&mut self.cpacr, 0xf0_0000),
             0x0080_0000 if v8r => (&mut self.vpidr, u32::MAX),
             0x0080_00a0 if v8r => (&mut self.vmpidr, u32::MAX),
+            0x0040_0000 if v8r => (&mut self.cache_size_selection, 0xf),
+            0x000e_0001 if v8r => (&mut self.kernel_counter_control, 0x3ff),
             0x0082_0000 if v8r => (&mut self.vsctlr, u32::MAX),
             0x0081_0000 if v8r => (&mut self.hsctlr, u32::MAX),
             0x0081_0020 if v8r => (&mut self.hactlr, u32::MAX),
@@ -1910,6 +1928,20 @@ impl Cpu {
                         next = self.exception(0x1a, 0x0c, address, registers);
                     } else {
                         next = self.exception(0x17, 0x0c, next, registers);
+                    }
+                }
+                _ if self.is_v8r()
+                    && matches!(instruction & 0x0fef_0fff, 0x0ee1_0e10 | 0x0ee2_0e10) =>
+                {
+                    if rd == 15 {
+                        next = self.undefined(next, registers);
+                    } else {
+                        let register = &mut self.jazelle_control[rn - 1];
+                        if instruction & (1 << 20) != 0 {
+                            registers[rd] = *register;
+                        } else {
+                            *register = registers[rd];
+                        }
                     }
                 }
                 _ if instruction & 0x0ff0_00f0 == 0x07f0_00f0

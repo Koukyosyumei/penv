@@ -17,6 +17,8 @@ impl Cpu {
         ];
         write_words(output, &control.map(u64::from))?;
         write_words(output, &[self.hdcr, self.hcptr, self.hstr, self.actlr, self.vpidr, self.vmpidr, self.vsctlr].map(u64::from))?;
+        write_words(output, &self.jazelle_control.map(u64::from))?;
+        write_words(output, &[self.cache_size_selection, self.kernel_counter_control].map(u64::from))?;
         for bank in self.banks {
             write_words(output, &[bank.sp, bank.lr, bank.spsr].map(u64::from))?;
         }
@@ -73,6 +75,10 @@ impl Cpu {
         }
         if version >= 14 {
             [self.vsctlr] = read_u32s(input)?;
+        }
+        if version >= 15 {
+            self.jazelle_control = read_u32s(input)?;
+            [self.cache_size_selection, self.kernel_counter_control] = read_u32s(input)?;
         }
         if Self::bank_for(self.cpsr).is_none() {
             return Err(invalid("invalid snapshot AArch32 CPU mode"));
