@@ -133,6 +133,7 @@ mod stm32_ethernet;
 mod stm32_exti;
 mod stm32l0_flash;
 mod stm32l0_rcc;
+mod stm32l0_power;
 mod stm32_flash;
 mod stm32_gpio;
 mod stm32_gpio_board;

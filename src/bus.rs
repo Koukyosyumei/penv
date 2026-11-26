@@ -509,6 +509,7 @@ pub struct Bus {
     stm32_flash: Option<Stm32F0Flash>,
     stm32l0_flash: Option<crate::stm32l0_flash::Stm32l0Flash>,
     stm32l0_rcc: Option<crate::stm32l0_rcc::Stm32l0Rcc>,
+    stm32l0_power: Option<crate::stm32l0_power::Stm32l0Power>,
     stm32_rtc: Option<Stm32Rtc>,
     iwdgs: Vec<Iwdg>,
     h7_exti: Option<H7Exti>,
@@ -2982,6 +2983,11 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.stm32l0_power.as_ref().is_some_and(|power| {
+            overlaps_range(start, end, power.base, crate::stm32l0_power::Stm32l0Power::SIZE)
+        }) {
+            return true;
+        }
         if self.stm32l0_rcc.as_ref().is_some_and(|rcc| {
             overlaps_range(start, end, rcc.base, crate::stm32l0_rcc::Stm32l0Rcc::SIZE)
         }) {
@@ -3975,6 +3981,9 @@ impl Bus {
         if let Some(uart) = self.litex_uart.as_mut() {
             *uart = LiteXUart::new(uart.bases.clone(), None);
         }
+        if let Some(power) = self.stm32l0_power.as_mut() {
+            power.reset();
+        }
         if let Some(rcc) = self.stm32l0_rcc.as_mut() {
             rcc.reset();
             self.refresh_stm32l0_clock();
@@ -4059,6 +4068,12 @@ impl Bus {
                 nvic.set_line(line, true, active);
             }
             let mut exti_inputs = [self.gpio_exti_levels, 0, 0];
+            if let Some(power) = self.stm32l0_power.as_ref().filter(|power| power.interrupt())
+                && let Some(line) = power.exti
+            {
+                exti_inputs[0] |= 1 << line;
+            }
+
             for uart in &self.stm32_uarts {
                 if f4_clocked(self.f4_rcc.as_ref(), uart.base)
                     && usart_clocked(self.h7_network_control.as_ref(), uart)
@@ -5089,6 +5104,16 @@ impl Bus {
         self.stm32_regular_adcs.iter_mut().find(|adc| adc.name == name)
             .ok_or_else(|| format!("unknown STM32 ADC {name:?}"))?
             .feed_sample(value, channel, repeat)
+    }
+
+    pub(crate) fn map_stm32l0_power(&mut self, power: crate::stm32l0_power::Stm32l0Power) -> Result<(), String> {
+        let start = u64::from(power.base);
+        let end = start + u64::from(crate::stm32l0_power::Stm32l0Power::SIZE);
+        if power.base & 3 != 0 || end > 1 << 32 || self.stm32l0_power.is_some() || self.overlaps(start, end) {
+            return Err("invalid or overlapping STM32L0 power controller".into());
+        }
+        self.stm32l0_power = Some(power);
+        Ok(())
     }
 
     pub(crate) fn map_stm32l0_rcc(&mut self, rcc: crate::stm32l0_rcc::Stm32l0Rcc) -> Result<(), String> {
@@ -6983,6 +7008,9 @@ impl Bus {
         {
             return Ok(value as u32);
         }
+        if N == 4 && let Some(power) = self.stm32l0_power.as_ref().filter(|power| power.contains(address)) {
+            return Ok(power.read(address));
+        }
         if N == 4 && let Some(rcc) = self.stm32l0_rcc.as_ref().filter(|rcc| rcc.contains(address)) {
             return Ok(rcc.read(address));
         }
@@ -7869,6 +7897,10 @@ impl Bus {
                 .access(address.into(), width as u32, Some(value.into()))
                 .map(|_| ())
                 .map_err(BusError::Python);
+        }
+        if width == 4 && let Some(power) = self.stm32l0_power.as_mut().filter(|power| power.contains(address)) {
+            power.write(address, value);
+            return Ok(());
         }
         if width == 4 && let Some(rcc) = self.stm32l0_rcc.as_mut().filter(|rcc| rcc.contains(address)) {
             let before = rcc.systick_frequency();

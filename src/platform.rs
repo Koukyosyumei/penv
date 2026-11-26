@@ -604,6 +604,7 @@ fn load_platform(
     let mut memory_bases = HashMap::new();
     let mut stm32l0_flash = None;
     let mut stm32l0_rcc = None;
+    let mut stm32l0_power = None;
     let mut flash_controller = None;
     let mut flash_chip = None;
     let mut uart = None;
@@ -910,6 +911,11 @@ fn load_platform(
                     return Err(entry.error("only one STM32 DMA controller is supported"));
                 }
             }
+            "Miscellaneous.STM32L0_PWR" => {
+                if stm32l0_power.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32L0 power controller is supported"));
+                }
+            }
             "Miscellaneous.STM32L0_RCC" => {
                 if stm32l0_rcc.replace(entry).is_some() {
                     return Err(entry.error("only one STM32L0 RCC is supported"));
@@ -961,6 +967,22 @@ fn load_platform(
     let extended_nvic = stm32_uarts
         .iter()
         .any(|uart| uart.model == "UART.STM32_UART");
+    if let Some(entry) = stm32l0_power {
+        let line = match entry.body.as_slice() {
+            [] => None,
+            [(_, wire)] => {
+                let (pin, destination) = wire.split_once("->").ok_or_else(|| entry.error("expected power IRQ wiring"))?;
+                let (name, line) = destination.split_once('@').ok_or_else(|| entry.error("expected power EXTI destination"))?;
+                if !matches!(pin.trim(), "" | "IRQ") || !exti.is_some_and(|exti| exti.name == name.trim()) {
+                    return Err(entry.error("invalid power EXTI destination"));
+                }
+                Some(irq_index(line, 32).map_err(|error| entry.error(&error))?)
+            }
+            _ => return Err(entry.error("unsupported power controller property")),
+        };
+        machine.bus.map_stm32l0_power(crate::stm32l0_power::Stm32l0Power::new(entry.address()?, line))
+            .map_err(|error| entry.error(&error))?;
+    }
     if let Some(entry) = stm32l0_rcc {
         let mut systick = false;
         let mut hse_frequency = 16_000_000;
