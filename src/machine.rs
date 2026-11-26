@@ -694,6 +694,19 @@ impl Machine {
             };
             return result.map(Some).ok_or_else(|| format!("unsupported monitor register {register}"));
         }
+        if let Some(cpu) = &mut hart.rv64 {
+            if let Some(index) = register.strip_prefix('f').and_then(|index| index.parse::<usize>().ok()) {
+                return match value {
+                    Some(value) => cpu.initialize_freg(index, value).map(|()| None),
+                    None => cpu.monitor_register(&register).map(Some)
+                        .ok_or_else(|| format!("unsupported monitor register {register}")),
+                };
+            }
+            if register == "fflags" && value.is_none() {
+                return cpu.monitor_register(&register).map(Some)
+                    .ok_or_else(|| format!("unsupported monitor register {register}"));
+            }
+        }
         let index = match register.as_str() {
             "fp" => Some(8),
             register => ABI.iter().position(|name| *name == register).or_else(|| {

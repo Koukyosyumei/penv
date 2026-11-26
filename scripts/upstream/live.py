@@ -402,6 +402,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 if (re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)
                         or re.fullmatch(r"sysbus IsPeripheralEnabled [\w.]+", command)
+                        or re.match(r"[\w.]+\s+GetRegister\s", command)
                         or re.fullmatch(r"[\w.]+\s+(?:PC|SP|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency)", command)):
                     return self.operation(command, assertion=True)
                 if (re.match(r"(?:include|i|ExecuteScript|log|Save|Load|runMacro)(?:\s|$)", command)
