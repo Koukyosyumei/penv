@@ -638,6 +638,7 @@ fn load_platform(
     let mut stm32_rngs = Vec::new();
     let mut flash_controller = None;
     let mut flash_chip = None;
+    let mut stm32_spi_flashes = Vec::new();
     let mut uart = None;
     let mut stm32_uarts = Vec::new();
     let mut sifive_uarts = Vec::new();
@@ -719,7 +720,7 @@ fn load_platform(
                     .next()
                     .ok_or_else(|| entry.error("missing memory size"))?;
                 if entry.registration.is_none() && entry.model == "Memory.MappedMemory"
-                    && entries.iter().any(|flash| flash.model == "SPI.Puya_P25Q"
+                    && entries.iter().any(|flash| (flash.model == "SPI.Puya_P25Q" || (cortex_m && flash.model == "SPI.Micron_MT25Q"))
                         && flash.body.iter().any(|(_, line)| line.strip_prefix("underlyingMemory:")
                             .is_some_and(|name| name.trim() == entry.name)))
                 {
@@ -778,6 +779,7 @@ fn load_platform(
                     return Err(entry.error("only one LiteX SPI flash controller is supported"));
                 }
             }
+            "SPI.Micron_MT25Q" if cortex_m => stm32_spi_flashes.push(entry),
             "SPI.Micron_MT25Q" => {
                 if flash_chip.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX SPI flash chip is supported"));
@@ -1500,6 +1502,7 @@ fn load_platform(
         let mut gpio_ports = HashMap::new();
         let mut led_inputs = HashMap::new();
         let mut pwm_inputs = HashMap::new();
+        let mut flash_selects = HashMap::new();
         for &entry in &stm32_gpios {
             let mut port = make_stm32_gpio(entry)?;
             for (_, text) in &entry.body {
@@ -1552,6 +1555,13 @@ fn load_platform(
                             return Err(entry.error("FRAM write protection requires GPIO input zero"));
                         }
                         machine.bus.wire_fram_write_protect(port.base, *pin, Rc::clone(fram));
+                    } else if stm32_spi_flashes.iter().any(|flash| flash.name == target) {
+                        let [pin] = outputs.as_slice() else {
+                            return Err(entry.error("expected one SPI flash chip-select source"));
+                        };
+                        if irq_index(inputs, 1).is_err() || flash_selects.insert(target, (port.base, *pin)).is_some() {
+                            return Err(entry.error("invalid or duplicate SPI flash chip-select wiring"));
+                        }
                     } else if gpio_pwm_testers.iter().any(|tester| tester.name == target) {
                         let [pin] = outputs.as_slice() else {
                             return Err(entry.error("expected one PWM tester output source"));
@@ -1984,6 +1994,30 @@ fn load_platform(
                 .map_stm32_i2c(device)
                 .map_err(|e| i2c.error(&e))?;
         }
+        let mut flash_targets = HashMap::new();
+        for flash in stm32_spi_flashes {
+            let controller = flash.registration.as_deref().filter(|name| stm32_spis.iter().any(|spi| spi.name == *name))
+                .ok_or_else(|| flash.error("expected STM32 SPI controller"))?;
+            let select = flash_selects.remove(flash.name.as_str())
+                .ok_or_else(|| flash.error("missing SPI flash chip-select wiring"))?;
+            let options = keys(flash, &["underlyingMemory"])?;
+            let [(_, backing)] = options.as_slice() else {
+                return Err(flash.error("expected SPI flash backing memory"));
+            };
+            let memory = entries.iter().find(|entry| entry.name == *backing
+                && entry.model == "Memory.MappedMemory" && entry.registration.is_none())
+                .ok_or_else(|| flash.error("expected unregistered MappedMemory for SPI flash"))?;
+            let options = keys(memory, &["size"])?;
+            let [(_, size)] = options.as_slice() else {
+                return Err(memory.error("missing SPI flash memory size"));
+            };
+            let size = number(size).map_err(|error| memory.error(&error))? as usize;
+            if flash_targets.insert(controller, crate::stm32_spi::SpiFlash::new(select, size)
+                .map_err(|error| flash.error(&error))?).is_some()
+            {
+                return Err(flash.error("only one flash per STM32 SPI controller is supported"));
+            }
+        }
         for spi in stm32_spis {
             let mut series = None;
             let mut capacity = None;
@@ -2042,6 +2076,12 @@ fn load_platform(
             device.shift_register = shift_targets
                 .remove(spi.name.as_str())
                 .map(|(_, shift)| shift);
+            if let Some(flash) = flash_targets.remove(spi.name.as_str()) {
+                if device.shift_register.is_some() {
+                    return Err(spi.error("only one target per STM32 SPI controller is supported"));
+                }
+                device.flash = Some(flash);
+            }
             device.dma_rx = dma_rx;
             device.dma_tx = dma_tx;
             machine
@@ -2049,6 +2089,7 @@ fn load_platform(
                 .map_stm32f0_spi(device)
                 .map_err(|e| spi.error(&e))?;
         }
+        machine.bus.refresh_gpio_wiring();
         for timer in stm32_timers {
             let mut frequency = None;
             let mut limit = None;

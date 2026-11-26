@@ -754,6 +754,15 @@ impl Region {
         &mut self.bytes[offset..offset + width]
     }
 
+    pub(crate) fn standalone_flash(size: usize) -> Result<Self, String> {
+        if size < 4096 || !size.is_power_of_two() {
+            return Err("SPI flash size must be a power of two and at least one sector".into());
+        }
+        let mut region = Self::new(0, size, 0)?;
+        region.flash_pages = Some(vec![false; size / 4096]);
+        Ok(region)
+    }
+
     pub(crate) fn flash_size(&self) -> usize {
         self.bytes.len()
     }
@@ -5053,6 +5062,14 @@ impl Bus {
                     }
                     tester.high = high;
                 }
+            }
+        }
+        for spi in &mut self.stm32_spis {
+            if let Some(flash) = spi.flash.as_mut() {
+                let (port, pin) = flash.select_pin;
+                let selected = self.stm32_gpios.iter().find(|gpio| gpio.base == port)
+                    .is_some_and(|gpio| gpio.pins() & (1 << pin) == 0);
+                flash.set_selected(selected);
             }
         }
         let previous = self.gpio_exti_levels;

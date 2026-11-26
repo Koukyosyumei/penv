@@ -64,7 +64,7 @@ impl Flash {
         }
     }
 
-    fn finish(&mut self) {
+    pub(crate) fn finish(&mut self) {
         if matches!(
             self.command,
             Some(0x01 | 0x02 | 0x12 | 0x20 | 0x21 | 0x52 | 0x5c | 0x60 | 0xc5 | 0xc7 | 0xd8 | 0xdc)
@@ -77,7 +77,7 @@ impl Flash {
         self.index = 0;
     }
 
-    fn transfer(&mut self, byte: u8, storage: &mut Region) -> u8 {
+    pub(crate) fn transfer(&mut self, byte: u8, storage: &mut Region) -> u8 {
         let Some(command) = self.command else {
             self.command = Some(byte);
             self.address = 0;

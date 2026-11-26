@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crate::stm32_gpio_board::GpioLed;
 
 const ENABLE: u32 = 1 << 6;
@@ -19,12 +21,47 @@ impl Stp08 {
     }
 }
 
+pub(crate) struct SpiFlash {
+    pub select_pin: (u32, u8),
+    selected: bool,
+    chip: crate::litex_flash::Flash,
+    storage: crate::bus::Region,
+}
+
+impl SpiFlash {
+    pub(crate) fn new(select_pin: (u32, u8), size: usize) -> Result<Self, String> {
+        Ok(Self {
+            select_pin,
+            selected: false,
+            chip: crate::litex_flash::Flash::default(),
+            storage: crate::bus::Region::standalone_flash(size)?,
+        })
+    }
+
+    pub(crate) fn set_selected(&mut self, selected: bool) {
+        if self.selected && !selected {
+            self.chip.finish();
+        }
+        self.selected = selected;
+    }
+
+    fn exchange(&mut self, byte: u8) -> u8 {
+        if self.selected {
+            self.chip.transfer(byte, &mut self.storage)
+        } else {
+            0
+        }
+    }
+}
+
 pub struct Stm32F0Spi {
     pub base: u32,
     pub irq: Option<u8>,
     pub dma_rx: u8,
     pub dma_tx: u8,
     pub shift_register: Option<Stp08>,
+    pub(crate) flash: Option<SpiFlash>,
+    receive: VecDeque<u8>,
     capacity: u32,
     receive_count: u32,
     overrun: bool,
@@ -45,6 +82,8 @@ impl Stm32F0Spi {
             dma_rx: 0,
             dma_tx: 0,
             shift_register: None,
+            flash: None,
+            receive: VecDeque::new(),
             capacity,
             receive_count: 0,
             overrun: false,
@@ -54,9 +93,14 @@ impl Stm32F0Spi {
 
     pub fn reset(&mut self) {
         let target = self.shift_register.take();
+        let mut flash = self.flash.take();
+        if let Some(flash) = flash.as_mut() {
+            flash.set_selected(false);
+        }
         let (irq, dma_rx, dma_tx) = (self.irq, self.dma_rx, self.dma_tx);
         *self = Self::new(self.base, self.capacity);
         self.shift_register = target;
+        self.flash = flash;
         (self.irq, self.dma_rx, self.dma_tx) = (irq, dma_rx, dma_tx);
     }
 
@@ -125,7 +169,11 @@ impl Stm32F0Spi {
                 self.receive_count = self
                     .receive_count
                     .saturating_sub(self.frames_in_access(width));
-                0 // Both an unattached port and the STP08 provide zero on the receive line.
+                let mut value = 0;
+                for index in 0..self.frames_in_access(width) {
+                    value |= u32::from(self.receive.pop_front().unwrap_or(0)) << (index * 8);
+                }
+                value
             }
             _ if offset & 3 == 0 => self
                 .registers
@@ -149,6 +197,14 @@ impl Stm32F0Spi {
                     }
                 }
                 let bidi_transmit = self.registers[0] & (3 << 14) == 3 << 14;
+                if let Some(flash) = self.flash.as_mut() {
+                    for index in 0..frames {
+                        let response = flash.exchange((value >> (index * 8)) as u8);
+                        if !bidi_transmit && self.receive.len() < self.capacity as usize {
+                            self.receive.push_back(response);
+                        }
+                    }
+                }
                 if !bidi_transmit {
                     let count = self.receive_count.saturating_add(frames);
                     self.overrun |= count > self.capacity;
