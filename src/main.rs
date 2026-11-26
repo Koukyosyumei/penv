@@ -40,6 +40,7 @@ pub mod circular_buffer;
 mod clic;
 mod clint;
 mod andes_pit;
+mod andes_gpio;
 mod riscv_machine_timer;
 mod collapsed_profile;
 mod compressed;

@@ -590,6 +590,7 @@ fn load_platform(
     let mut clint = None;
     let mut riscv_machine_timer = None;
     let mut andes_pits = Vec::new();
+    let mut andes_gpios = Vec::new();
     let mut clic = None;
     let mut nvic = None;
     let mut exti = None;
@@ -635,6 +636,11 @@ fn load_platform(
     for entry in &entries {
         if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
             map_sysbus_ranges(entry, &mut machine.bus, root.unwrap_or(Path::new(".")), assets)?;
+            continue;
+        }
+        if entry.model.is_empty() && entry.registration.is_none()
+            && andes_gpios.iter().any(|gpio: &&Entry| gpio.name == entry.name)
+        {
             continue;
         }
         if !names.insert(&entry.name) {
@@ -764,6 +770,7 @@ fn load_platform(
             "Miscellaneous.LED" | "Miscellaneous.Button" if !cortex_m => panel_parts.push(entry),
             "GPIOPort.LiteX_GPIO" => litex_gpios.push(entry),
             "Timers.AndesATCPIT100" => andes_pits.push(entry),
+            "GPIOPort.AndesATCGPIO100" => andes_gpios.push(entry),
             "Timers.RiscVMachineTimer" => {
                 if riscv_machine_timer.replace(entry).is_some() {
                     return Err(entry.error("only one RISC-V machine timer is supported"));
@@ -2650,6 +2657,45 @@ fn load_platform(
         }.map_err(|e| entry.error(&e))?;
         plic_config.get_or_insert((entry, sources));
     }
+    let mut gpio_indices = HashMap::new();
+    let mut gpio_routes = Vec::new();
+    for entry in andes_gpios {
+        let mut irq = None;
+        let overlays = entries.iter().filter(|other| other.name == entry.name && other.model.is_empty());
+        for declaration in std::iter::once(entry).chain(overlays) {
+            for (_, wire) in &declaration.body {
+                let (pin, destination) = wire.split_once("->").ok_or_else(|| declaration.error("expected GPIO wiring"))?;
+                let (target, index) = destination.split_once('@').ok_or_else(|| declaration.error("expected GPIO wire destination"))?;
+                let pin = pin.trim();
+                let target = target.trim();
+                if matches!(pin, "" | "IRQ") {
+                    let source = number(index.trim()).map_err(|error| declaration.error(&error))?;
+                    let (_, sources) = plic_config.filter(|(plic, _)| plic.name == target)
+                        .ok_or_else(|| declaration.error("unknown GPIO PLIC destination"))?;
+                    if irq.is_some() || !(1..=sources).contains(&source) {
+                        return Err(declaration.error("invalid GPIO PLIC source"));
+                    }
+                    irq = machine.bus.plic_index(target).map(|index| (index, source));
+                    continue;
+                }
+                let pins = irq_list(pin, 32).map_err(|error| declaration.error(&error))?;
+                let inputs = irq_list(index, 32).map_err(|error| declaration.error(&error))?;
+                if pins.len() != inputs.len() {
+                    return Err(declaration.error("mismatched GPIO wire ranges"));
+                }
+                gpio_routes.extend(pins.into_iter().zip(inputs).map(|(pin, input)| (declaration, pin, target, input)));
+            }
+        }
+        let index = machine.bus.map_andes_gpio(crate::andes_gpio::AndesGpio::new(
+            entry.address()?, irq,
+        )).map_err(|error| entry.error(&error))?;
+        gpio_indices.insert(entry.name.as_str(), index);
+    }
+    for (entry, pin, target, input) in gpio_routes {
+        let source = gpio_indices[entry.name.as_str()];
+        let index = gpio_indices.get(target).copied().ok_or_else(|| entry.error("unknown Andes GPIO wire destination"))?;
+        machine.bus.connect_andes_gpio(source, pin, index, input);
+    }
     for entry in andes_pits {
         let mut frequency = None;
         let mut channels = None;
@@ -3864,6 +3910,45 @@ fn keys_in<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn andes_gpio_overlay_routes_output_to_rising_edge_interrupt() {
+        let directory = std::env::temp_dir().join(format!("penv-andes-gpio-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("platform.repl");
+        fs::write(&path, r#"cpu: CPU.RiscV32 @ sysbus
+    cpuType: "rv32i"
+    timeProvider: empty
+ram: Memory.MappedMemory @ sysbus 0x10000000
+    size: 0x1000
+plic: IRQControllers.AndesNCEPLIC100 @ sysbus <0x20000000, +0x400000>
+    numberOfSources: 1023
+    numberOfContexts: 1
+    0 -> cpu@11
+gpio: GPIOPort.AndesATCGPIO100 @ sysbus 0x30000000
+    IRQ -> plic@21
+gpio:
+    4 -> gpio@5
+"#).unwrap();
+        let machine = load(&path, None, false);
+        fs::remove_dir_all(directory).unwrap();
+        let mut bus = machine.unwrap().bus;
+        let mut sink = std::io::sink();
+        bus.write(0x2000_0054, 4, 1, &mut sink).unwrap();
+        bus.write(0x2000_2000, 4, 1 << 21, &mut sink).unwrap();
+        bus.write(0x3000_0028, 4, 1 << 4, &mut sink).unwrap();
+        bus.write(0x3000_0054, 4, 6 << 20, &mut sink).unwrap();
+        assert_eq!(bus.tick_plic(), 0);
+        bus.write(0x3000_0030, 4, 1 << 4, &mut sink).unwrap();
+        assert_eq!(bus.read::<4>(0x3000_0020).unwrap(), 1 << 5);
+        assert_eq!(bus.read::<4>(0x3000_0064).unwrap(), 1 << 5);
+        assert_eq!(bus.tick_plic(), 1 << 11);
+        assert_eq!(bus.read::<4>(0x2020_0004).unwrap(), 21);
+        bus.write(0x3000_0064, 4, 1 << 5, &mut sink).unwrap();
+        assert_eq!(bus.tick_plic(), 0);
+        bus.write(0x2020_0004, 4, 21, &mut sink).unwrap();
+        assert_eq!(bus.tick_plic(), 0);
+    }
 
     #[test]
     fn rv32_memory_windows_share_backing_and_apply_bounds_and_offsets() {

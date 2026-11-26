@@ -551,6 +551,8 @@ pub struct Bus {
     gpio_exti_outputs: [Option<u8>; 16],
     plics: Vec<(String, Plic)>,
     andes_pit: Vec<crate::andes_pit::AndesPit>,
+    andes_gpio: Vec<crate::andes_gpio::AndesGpio>,
+    andes_gpio_routes: Vec<(usize, u8, usize, u8)>,
     sifive_gpios: Vec<crate::sifive_gpio::SiFiveGpio>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
@@ -2967,6 +2969,9 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.andes_gpio.iter().any(|gpio| overlaps_range(start, end, gpio.base, crate::andes_gpio::AndesGpio::SIZE)) {
+            return true;
+        }
         if self.andes_pit.iter().any(|pit| overlaps_range(start, end, pit.base, crate::andes_pit::AndesPit::SIZE)) {
             return true;
         }
@@ -3388,6 +3393,23 @@ impl Bus {
             return Err("PLIC requires 1–63 interrupt sources".into());
         }
         self.register_plic("plic", Plic::new(base, sources, outputs).with_priorities(priorities))
+    }
+
+    pub(crate) fn map_andes_gpio(&mut self, gpio: crate::andes_gpio::AndesGpio) -> Result<usize, String> {
+        let start = u64::from(gpio.base);
+        let end = start + u64::from(crate::andes_gpio::AndesGpio::SIZE);
+        if gpio.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping Andes GPIO at {start:#010x}"));
+        }
+        let index = self.andes_gpio.len();
+        self.andes_gpio.push(gpio);
+        Ok(index)
+    }
+
+    pub(crate) fn connect_andes_gpio(&mut self, source: usize, pin: u8, target: usize, input: u8) {
+        self.andes_gpio_routes.push((source, pin, target, input));
+        let level = self.andes_gpio[source].output() & (1 << pin) != 0;
+        self.andes_gpio[target].drive_input(input, level);
     }
 
     pub(crate) fn map_andes_pit(&mut self, pit: crate::andes_pit::AndesPit) -> Result<(), String> {
@@ -5760,6 +5782,11 @@ impl Bus {
                 }
             }
         }
+        for gpio in &self.andes_gpio {
+            if let Some((controller, source)) = gpio.irq {
+                self.plics[controller].1.set_line(source, gpio.interrupt());
+            }
+        }
         let step_rate = self.step_hz();
         for pit in &mut self.andes_pit {
             pit.tick(step_rate);
@@ -6723,6 +6750,9 @@ impl Bus {
         {
             return Ok(clic.read(offset, N));
         }
+        if N == 4 && let Some(gpio) = self.andes_gpio.iter().find(|gpio| gpio.contains(address)) {
+            return Ok(gpio.read(address));
+        }
         if N == 4 && let Some(pit) = self.andes_pit.iter().find(|pit| pit.contains(address)) {
             return Ok(pit.read(address));
         }
@@ -7597,6 +7627,21 @@ impl Bus {
             && let Some(offset) = clic.offset(address, width)
         {
             clic.write(offset, width, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(index) = self.andes_gpio.iter().position(|gpio| gpio.contains(address))
+        {
+            let gpio = &mut self.andes_gpio[index];
+            let previous = gpio.output();
+            gpio.write(address, value);
+            let output = gpio.output();
+            for &(source, pin, target, input) in &self.andes_gpio_routes {
+                let mask = 1 << pin;
+                if source == index && (previous ^ output) & mask != 0 {
+                    self.andes_gpio[target].drive_input(input, output & mask != 0);
+                }
+            }
             return Ok(());
         }
         if width == 4 && let Some(pit) = self.andes_pit.iter_mut().find(|pit| pit.contains(address)) {
