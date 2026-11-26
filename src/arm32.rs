@@ -837,6 +837,12 @@ impl Cpu {
             return pmsa[bank].access(register, value);
         }
         let v8r = self.is_v8r();
+        if v8r && key == 0x0007_0008 {
+            // The R-profile MPU uses identity translation. Renode reports
+            // the translated page in PAR for ATS1CPR.
+            self.physical_address_register = u64::from(value? & !0xfff);
+            return Some(None);
+        }
         if v8r
             && let Some(register) = match key {
                 0x0002_0000 => Some(&mut self.translation_tables[0]),
