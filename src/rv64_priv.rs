@@ -323,6 +323,10 @@ impl Privilege {
         self.machine.value = value;
     }
 
+    pub(crate) fn monitor_mepc(&mut self, value: u64) {
+        self.machine.write(0x41, value);
+    }
+
     pub(crate) fn monitor_sepc(&mut self, value: Option<u64>, alignment: u64) -> Result<Option<u64>, String> {
         if self.levels != Levels::MachineSupervisorUser {
             return Err("SEPC requires supervisor mode".into());
@@ -493,6 +497,9 @@ impl Privilege {
     }
 
     pub fn write(&mut self, csr: u32, value: u64, misa: u64) -> bool {
+        if self.mode == Mode::Machine && matches!(csr, 0x3a0..=0x3af | 0x3b0..=0x3ef) {
+            return self.pmp.as_mut().is_some_and(|pmp| pmp.write(csr, value));
+        }
         if (csr >> 10) == 3 || self.read(csr, misa, !1).is_none() {
             return false;
         }

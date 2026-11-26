@@ -613,6 +613,10 @@ impl Csr {
             .ok_or_else(error)
     }
 
+    pub(crate) fn monitor_mepc(&mut self, value: u32) {
+        self.exception_pc = value & self.epc_mask();
+    }
+
     pub(crate) fn set_monitor_trap_value(&mut self, value: u32) {
         self.write(0x343, value);
     }

@@ -4440,7 +4440,7 @@ fn execute(
             ))
         }
         [target, register @ ("MSTATUS" | "MEPC" | "MCAUSE" | "MTVAL" | "SEPC"), value @ ..]
-            if value.is_empty() || (matches!(*register, "MTVAL" | "SEPC") && value.len() == 1) =>
+            if value.is_empty() || (matches!(*register, "MEPC" | "MTVAL" | "SEPC") && value.len() == 1) =>
         {
             let value = value.first().map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
             Some(Action::CpuRegister(

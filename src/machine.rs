@@ -710,6 +710,17 @@ impl Machine {
                 return Ok(None);
             }
         }
+        if let Some(value) = value.filter(|_| register == "mepc") {
+            if let Some(cpu) = &mut hart.rv64 {
+                cpu.privilege.monitor_mepc(value);
+                return Ok(None);
+            }
+            if hart.thumb.is_none() {
+                let value = u32::try_from(value).map_err(|_| "MEPC exceeds RV32 width")?;
+                hart.csr.monitor_mepc(value);
+                return Ok(None);
+            }
+        }
         if let Some(value) = value.filter(|_| register == "mtval") {
             if let Some(cpu) = &mut hart.rv64 {
                 cpu.privilege.set_monitor_trap_value(value);
