@@ -114,9 +114,9 @@ impl NumberMode {
     fn print(self, value: u64, width: usize, output: &mut impl Write) -> Result<(), String> {
         let digits = 2 * width;
         match self {
-            Self::Hexadecimal => writeln!(output, "0x{value:0digits$X}"),
-            Self::Decimal => writeln!(output, "{value}"),
-            Self::Both => writeln!(output, "0x{value:0digits$X} ({value})"),
+            Self::Hexadecimal => write!(output, "0x{value:0digits$X}\r\n"),
+            Self::Decimal => write!(output, "{value}\r\n"),
+            Self::Both => write!(output, "0x{value:0digits$X} ({value})\r\n"),
         }.map_err(|error| error.to_string())
     }
 }
