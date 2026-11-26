@@ -1073,6 +1073,15 @@ fn load_platform(
                 )).map_err(|error| entry.error(&error))?;
             }
             "GPIOPort.RenesasRA8_GPIO" => map_renesas_gpio(entry, &entries, &mut machine.bus)?,
+            "I2C.RenesasRA_IIC" => {
+                let (routes, properties) = renesas_icu_routes(
+                    entry, &entries, ["ReceiveIRQ", "TransmitIRQ", "TransmitEndIRQ", "ErrorOrEventIRQ"],
+                )?;
+                keys_in(entry, &properties, &[])?;
+                machine.bus.map_renesas_ra_iic(crate::renesas_ra_iic::Iic::new(
+                    entry.address()?, entry.name.clone(), routes,
+                )).map_err(|error| entry.error(&error))?;
+            }
             "UART.RenesasRA8M1_SCI" => {
                 let (routes, properties) = renesas_icu_routes(
                     entry, &entries, ["ReceiveIRQ", "TransmitIRQ", "TransmitEndIRQ"],
@@ -2148,11 +2157,15 @@ fn load_platform(
                 .ok_or_else(|| {
                     eeprom.error("expected EEPROM registered on an I²C controller with an address")
                 })?;
-            if !stm32_i2cs.iter().any(|i2c| i2c.name == target) {
+            let address = number(address.trim()).map_err(|e| eeprom.error(&e))?;
+            if entries.iter().any(|device| device.name == target && device.model == "I2C.RenesasRA_IIC") {
+                machine.bus.attach_renesas_iic_eeprom(target, address, i2c_eeprom(eeprom)?)
+                    .map_err(|error| eeprom.error(&error))?;
+            } else if stm32_i2cs.iter().any(|i2c| i2c.name == target) {
+                eeproms.entry(target).or_default().push((eeprom, address));
+            } else {
                 return Err(eeprom.error("unknown EEPROM I²C controller"));
             }
-            let address = number(address.trim()).map_err(|e| eeprom.error(&e))?;
-            eeproms.entry(target).or_default().push((eeprom, address));
         }
         let mut fram_relays = HashMap::<_, Vec<_>>::new();
         for relay in i2c_fram_relays {
@@ -4410,10 +4423,10 @@ fn map_renesas_gpio(entry: &Entry, entries: &[Entry], bus: &mut Bus) -> Result<(
     bus.map_renesas_gpio(port).map_err(|error| entry.error(&error))
 }
 
-fn renesas_icu_routes(
-    entry: &Entry, entries: &[Entry], pins: [&str; 3],
-) -> Result<([Option<usize>; 3], Properties), String> {
-    let mut routes = [None; 3];
+fn renesas_icu_routes<const N: usize>(
+    entry: &Entry, entries: &[Entry], pins: [&str; N],
+) -> Result<([Option<usize>; N], Properties), String> {
+    let mut routes = [None; N];
     let mut properties = Vec::new();
     for item in &entry.body {
         if let Some((pin, target)) = item.1.split_once("->") {

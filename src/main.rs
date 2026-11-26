@@ -111,6 +111,7 @@ mod renesas_ra_agt;
 mod renesas_ra_gpio;
 mod renesas_ra_gpt;
 mod renesas_ra_icu;
+mod renesas_ra_iic;
 mod renesas_ra_sci;
 mod repl_parser;
 mod repl_syntax;

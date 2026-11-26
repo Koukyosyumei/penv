@@ -525,6 +525,7 @@ pub struct Bus {
     renesas_ra_gpt: Vec<crate::renesas_ra_gpt::Gpt>,
     renesas_ra_agt: Vec<crate::renesas_ra_agt::Agt>,
     renesas_ra_sci: Vec<crate::renesas_ra_sci::Sci>,
+    renesas_ra_iic: Vec<crate::renesas_ra_iic::Iic>,
     renesas_sci_input: usize,
     renesas_gpio: Vec<crate::renesas_ra_gpio::Port>,
     renesas_gpio_protection: Vec<crate::renesas_ra_gpio::Protection>,
@@ -1880,6 +1881,9 @@ impl Bus {
         for protection in &mut self.renesas_gpio_protection {
             protection.reset();
         }
+        for iic in &mut self.renesas_ra_iic {
+            iic.reset();
+        }
         for uart in &mut self.renesas_ra_sci {
             uart.reset();
         }
@@ -2794,7 +2798,7 @@ impl Bus {
             || !self.gpio_pwm_leds.is_empty()
             || !self.stm32_regular_adcs.is_empty()
             || self.stm32_adc.is_some() || self.stm32_dma.as_ref().is_some_and(Stm32Dma::has_enabled_channels)
-            || !self.renesas_ra_sci.is_empty()
+            || !self.renesas_ra_sci.is_empty() || !self.renesas_ra_iic.is_empty()
             || self.renesas_ra_agt.iter().any(crate::renesas_ra_agt::Agt::running)
             || self.renesas_ra_gpt.iter().any(crate::renesas_ra_gpt::Gpt::running)
             || self.renesas_ra_icu.as_ref().is_some_and(crate::renesas_ra_icu::Icu::has_pending)
@@ -3713,6 +3717,9 @@ impl Bus {
             })
             || self.renesas_gpio_protection.iter().any(|protection| {
                 overlaps_range(start, end, protection.base, protection.size)
+            })
+            || self.renesas_ra_iic.iter().any(|device| {
+                overlaps_range(start, end, device.base, crate::renesas_ra_iic::Iic::SIZE)
             })
             || self.renesas_ra_sci.iter().any(|uart| {
                 start < u64::from(uart.base) + u64::from(crate::renesas_ra_sci::Sci::SIZE)
@@ -4644,6 +4651,19 @@ impl Bus {
         true
     }
 
+    pub(crate) fn map_renesas_ra_iic(&mut self, device: crate::renesas_ra_iic::Iic) -> Result<(), String> {
+        self.check_peripheral_range(device.base, crate::renesas_ra_iic::Iic::SIZE)?;
+        self.renesas_ra_iic.push(device);
+        Ok(())
+    }
+
+    pub(crate) fn attach_renesas_iic_eeprom(&mut self, target: &str, address: u32, eeprom: Eeprom) -> Result<(), String> {
+        let device = self.renesas_ra_iic.iter_mut().find(|device| device.name == target)
+            .ok_or("unknown Renesas I²C controller")?;
+        let address = u8::try_from(address).map_err(|_| "invalid I²C address")?;
+        device.attach(address, eeprom)
+    }
+
     pub(crate) fn map_renesas_ra_sci(&mut self, uart: crate::renesas_ra_sci::Sci) -> Result<(), String> {
         let start = u64::from(uart.base);
         let end = start + u64::from(crate::renesas_ra_sci::Sci::SIZE);
@@ -4723,6 +4743,15 @@ impl Bus {
         }
         for uart in &mut self.renesas_ra_sci {
             uart.tick(&mut pulse);
+        }
+        if let Some(icu) = &mut self.renesas_ra_icu {
+            for device in &mut self.renesas_ra_iic {
+                device.tick(|event, level| icu.set_event(event, level));
+            }
+        } else {
+            for device in &mut self.renesas_ra_iic {
+                device.tick(|_, _| {});
+            }
         }
         if let Some(nvic) = self.nvic.as_mut() {
             if let Some(icu) = &self.renesas_ra_icu {
@@ -8497,6 +8526,9 @@ impl Bus {
         if N == 1 && let Some(protection) = self.renesas_gpio_protection.iter().find(|device| device.contains(address)) {
             return Ok(protection.read(address));
         }
+        if N == 1 && let Some(device) = self.renesas_ra_iic.iter_mut().find(|device| device.contains(address)) {
+            return Ok(u32::from(device.read(address)));
+        }
         if N == 4 && address & 3 == 0
             && let Some(device) = self.renesas_ra_sci.iter_mut().find(|uart| uart.contains(address))
         {
@@ -9603,6 +9635,11 @@ impl Bus {
         }
         if width == 1 && let Some(protection) = self.renesas_gpio_protection.iter_mut().find(|device| device.contains(address)) {
             protection.write(address, value);
+            return Ok(());
+        }
+        if width == 1 && let Some(index) = self.renesas_ra_iic.iter().position(|device| device.contains(address)) {
+            let step_hz = self.step_hz();
+            self.renesas_ra_iic[index].write(address, value as u8, step_hz);
             return Ok(());
         }
         if width == 4 && address & 3 == 0
