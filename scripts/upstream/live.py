@@ -378,6 +378,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if machine is not None and not isinstance(machine, str):
                 raise Unsupported("Execute Command machine must be a name")
             select = f"mach set {self.literal(machine)}" if machine and machine.strip() else None
+            observes_state = bool(
+                re.fullmatch(r"(?:printenv|lastLog(?:\s+\S+)?|emulation\s+IsStarted)", command)
+                or re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
+                or re.match(r"(?:sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)|[\w.]+\s+GetRegister)\s", command)
+                or re.fullmatch(r"sysbus IsPeripheralEnabled [\w.]+", command)
+                or re.fullmatch(r"[\w.]+\s+(?:PC|SP|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency|PerformanceInMips|CSRValidation)", command)
+            )
             if self.proc is None:
                 if select:
                     self.inspect_startup(select)
@@ -399,11 +406,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     if reply == "OK":
                         return value
                     return self.operation(command, assertion=True)
-                if (re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
-                        or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)
-                        or re.fullmatch(r"sysbus IsPeripheralEnabled [\w.]+", command)
-                        or re.match(r"[\w.]+\s+GetRegister\s", command)
-                        or re.fullmatch(r"[\w.]+\s+(?:PC|SP|MSTATUS|MEPC|MCAUSE|MTVAL|SEPC|ExecutionMode|Frequency|PerformanceInMips|CSRValidation)", command)):
+                if observes_state:
                     return self.operation(command, assertion=True)
                 if (re.match(r"(?:include|i|ExecuteScript|log|Save|Load|runMacro)(?:\s|$)", command)
                         or re.match(r"machine\s+LoadPlatformDescription(?:\s|$)", command)
@@ -417,7 +420,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 return ""
             if select:
                 self.operation(select)
-            return self.operation(command, assertion=bool(re.fullmatch(r"(?:printenv|lastLog(?:\s+\S+)?)", command)))
+            return self.operation(command, assertion=observes_state)
         if args or machine is not None:
             raise Unsupported("Execute Command machine context requires the Rust monitor")
         assigned = self.monitor_input.assign(command)
