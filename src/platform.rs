@@ -1498,12 +1498,11 @@ fn load_platform(
             match key {
                 "cpuType" => cpu_type = Some(value),
                 "enableTrustZone" => {
-                    trustzone = value.parse().map_err(|_| entry.error("invalid enableTrustZone"))?;
+                    trustzone = boolean_value(value).ok_or_else(|| entry.error("invalid enableTrustZone"))?;
                 }
                 "isCpuWaitSignalSet" => {
-                    cpu_wait = value
-                        .parse()
-                        .map_err(|_| entry.error("invalid isCpuWaitSignalSet"))?;
+                    cpu_wait = boolean_value(value)
+                        .ok_or_else(|| entry.error("invalid isCpuWaitSignalSet"))?;
                 }
                 "nvic" if nvic.is_some_and(|controller| controller.name == value) => {}
                 "nvic" => return Err(entry.error("unknown NVIC reference")),
@@ -4575,6 +4574,22 @@ fn keys_in<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cortex_m85_platform_preserves_cpuid_on_reset() {
+        let path = std::env::temp_dir().join(format!("penv-cortex-m85-{}.repl", std::process::id()));
+        fs::write(&path, r#"
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000 { -> cpu@0 }
+cpu: CPU.CortexM @ sysbus { cpuType: "cortex-m85"; nvic: nvic; enableTrustZone: False }
+ram: Memory.MappedMemory @ sysbus 0x0 { size: 0x1000 }
+"#).unwrap();
+        let machine = load(&path, None, false);
+        fs::remove_file(path).unwrap();
+        let mut bus = machine.unwrap().bus;
+        assert_eq!(bus.read::<4>(0xe000_ed00).unwrap(), 0x411f_d230);
+        bus.reset_cortex_m_devices();
+        assert_eq!(bus.read::<4>(0xe000_ed00).unwrap(), 0x411f_d230);
+    }
 
     #[test]
     fn renesas_ra_timers_pulse_their_wired_icu_events() {
