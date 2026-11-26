@@ -18,6 +18,15 @@ pub fn load_binary(machine: &mut Machine, file: File, address: u64) -> Result<()
 
 pub fn load_binary_in_context(
     machine: &mut Machine,
+    file: File,
+    address: u64,
+    hart: Option<usize>,
+) -> Result<(), String> {
+    load_binary_into_bus(&mut machine.bus, file, address, hart)
+}
+
+pub(crate) fn load_binary_into_bus(
+    bus: &mut crate::bus::Bus,
     mut file: File,
     address: u64,
     hart: Option<usize>,
@@ -28,8 +37,8 @@ pub fn load_binary_in_context(
     }
     let size = usize::try_from(length).map_err(|_| "raw image too large")?;
     let memory = match hart {
-        Some(hart) => machine.bus.cpu_memory64(hart, address, size),
-        None => machine.bus.memory64(address, size),
+        Some(hart) => bus.cpu_memory64(hart, address, size),
+        None => bus.memory64(address, size),
     }
     .ok_or_else(|| format!("unmapped RAM access at {address:#010x} ({size} bytes)"))?;
     file.read_exact(memory).map_err(|error| error.to_string())

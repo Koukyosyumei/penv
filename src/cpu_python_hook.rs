@@ -11,6 +11,7 @@ const WORKER: &str = r#"
 import builtins
 import contextlib
 import io
+import os
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -36,11 +37,39 @@ class BusRangeRegistration:
         self.size = size
         self.cpu = cpu
 
-for name in ('Antmicro', 'Antmicro.Renode', 'Antmicro.Renode.Peripherals',
-             'Antmicro.Renode.Peripherals.Bus'):
+def add_namespace(name):
     module = sys.modules.setdefault(name, ModuleType(name))
     module.__path__ = []
-sys.modules['Antmicro.Renode.Peripherals.Bus'].BusRangeRegistration = BusRangeRegistration
+    parent, _, leaf = name.rpartition('.')
+    if parent:
+        setattr(sys.modules[parent], leaf, module)
+    return module
+
+class RegisterValue:
+    def __init__(self, value=0):
+        self.RawValue = int(value) & ((1 << 64) - 1)
+        self.ByteArrayValue = None
+        self.Bits = 64
+
+class FileInfo:
+    def __init__(self, path):
+        self.path = path
+    @property
+    def Length(self):
+        return os.stat(self.path).st_size
+
+class RuntimeHelpers:
+    @staticmethod
+    def GetHashCode(value):
+        return id(value) & 0x7fffffff
+
+for name in ('Antmicro', 'Antmicro.Renode', 'Antmicro.Renode.Peripherals',
+             'System', 'System.Runtime'):
+    add_namespace(name)
+add_namespace('Antmicro.Renode.Peripherals.Bus').BusRangeRegistration = BusRangeRegistration
+add_namespace('Antmicro.Renode.Peripherals.CPU').RegisterValue = RegisterValue
+add_namespace('System.IO').FileInfo = FileInfo
+add_namespace('System.Runtime.CompilerServices').RuntimeHelpers = RuntimeHelpers
 
 class UnsignedAddress(int):
     pass
@@ -62,10 +91,16 @@ class Bus:
         return UnsignedAddress(rpc('symbol ' + name.encode().hex() + suffix))
     def ReadByte(self, address):
         return int(rpc('byte ' + str(address)))
+    def WriteDoubleWord(self, address, value):
+        rpc(f'write-double-word {address} {value}')
+    def LoadBinary(self, filename, address):
+        rpc(f'load-binary {os.fsencode(filename).hex()} {address}')
 
 class Machine:
     SystemBus = Bus()
     def __getitem__(self, path):
+        if path == 'sysbus':
+            return self.SystemBus
         return Credential(path)
     @property
     def UserState(self):
@@ -100,7 +135,8 @@ class CPU(Credential):
 
 level = SimpleNamespace(Noisy=-1, Debug=0, Info=1, Warning=2, Error=3)
 cpu = CPU(sys.argv[2])
-scope = dict(machine=cpu.Machine, cpu=cpu, self=cpu, LogLevel=level, hex=monitor_hex)
+scope = dict(machine=cpu.Machine, cpu=cpu, self=cpu, LogLevel=level, hex=monitor_hex,
+             System=sys.modules['System'])
 request = SimpleNamespace(Value=0)
 program = compile(sys.argv[1], '<CPU hook>', 'exec')
 print('ready', flush=True)
@@ -335,6 +371,22 @@ impl Hook {
                             .map_err(|e| e.to_string())
                     })
                     .map(|value| value.to_string()),
+                "write-double-word" => (|| {
+                    let (address, value) = argument.split_once(' ').ok_or("invalid bus write")?;
+                    let address = address.parse::<u32>().map_err(|error| error.to_string())?;
+                    let value = value.parse::<u32>().map_err(|error| error.to_string())?;
+                    bus.write_scalar(address, 4, value, &mut std::io::sink(), true)
+                        .map_err(|error| error.to_string())?;
+                    Ok(String::new())
+                })(),
+                "load-binary" => (|| {
+                    let (path, address) = argument.split_once(' ').ok_or("invalid binary load")?;
+                    let path = decode(path)?;
+                    let address = address.parse::<u64>().map_err(|error| error.to_string())?;
+                    let file = File::open(&path).map_err(|error| format!("{path}: {error}"))?;
+                    crate::image::load_binary_into_bus(bus, file, address, None)?;
+                    Ok(String::new())
+                })(),
                 "peripheral-read" => (|| {
                     let (path, count) = argument.split_once(' ').ok_or("invalid peripheral read")?;
                     let path = decode(path)?;
