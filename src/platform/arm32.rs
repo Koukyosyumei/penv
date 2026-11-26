@@ -93,6 +93,7 @@ pub(super) fn construct(entries: &[Entry], require_ram: bool) -> Result<Machine,
         let cpu = machine.hart_mut(hart);
         cpu.name = Some(entry.name.clone());
         cpu.configure_reset_vector(0);
+        cpu.initialize_reset_pc();
         cpu.arm32 = Some(Box::new(processor));
         for (_, command) in init {
             match command
@@ -312,6 +313,9 @@ fn map_gic(machine: &mut Machine, entry: &Entry, affinities: &[u32]) -> Result<(
             size: 0x2_0000,
             kind: WindowKind::Redistributor(cpu),
         });
+    }
+    for slot in 0..affinities.len() {
+        machine.hart_mut(slot).arm32.as_mut().unwrap().set_gic_system_registers(version == Version::V3);
     }
     let gic = Gic::new(version, shared, affinities).map_err(|error| entry.error(&error))?;
     machine

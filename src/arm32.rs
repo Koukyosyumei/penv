@@ -339,6 +339,7 @@ pub(crate) struct Cpu {
     fpexc: u32,
     vfp_high_words: [u32; 32],
     affinity: u32,
+    gic_system_registers: bool,
     elr_hyp: u32,
     pmsa: Option<[pmsa::Pmsa; 2]>,
     interrupt_inputs: [bool; 2],
@@ -376,6 +377,7 @@ impl Cpu {
             fpexc: 0x700,
             vfp_high_words: [0; 32],
             affinity: 0,
+            gic_system_registers: false,
             elr_hyp: 0,
             pmsa: matches!(profile, Profile::RealTimeV8)
                 .then(|| [pmsa::Pmsa::new(16), pmsa::Pmsa::new(16)]),
@@ -421,6 +423,10 @@ impl Cpu {
 
     pub(crate) fn is_v8r(&self) -> bool {
         matches!(self.profile, Profile::RealTimeV8)
+    }
+
+    pub(crate) fn set_gic_system_registers(&mut self, enabled: bool) {
+        self.gic_system_registers = enabled;
     }
 
     pub(crate) fn set_affinity(&mut self, affinity: u32) {
@@ -542,6 +548,8 @@ impl Cpu {
             "ifsr" => 0x0005_0020,
             "hsr" => 0x0085_0002,
             "dfar" => 0x0006_0000,
+            "id_pfr0" => 0x0000_0001,
+            "id_pfr1" => 0x0000_0021,
             "id_mmfr0" => 0x0000_0081,
             "mpidr" => 0x0000_00a0,
             "tpidrurw" => 0x000d_0040,
@@ -590,6 +598,8 @@ impl Cpu {
         if v8r {
             let read_only = match key {
                 0x0000_0000 => Some(0x411f_d132),
+                0x0000_0001 => Some(0x0000_0131),
+                0x0000_0021 => Some(0x0011_1001 | (u32::from(self.gic_system_registers) << 28)),
                 0x0000_0081 => Some(0x0021_1040),
                 0x0000_00a0 => Some(0x8000_0000 | self.affinity),
                 _ => None,
