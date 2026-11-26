@@ -851,6 +851,9 @@ impl BusScalar {
         {
             return Ok(value);
         }
+        if !address.is_multiple_of(width as u64) && bus.ram64(address, width).is_some() {
+            return crate::memory_setup::read_ram(bus, address, width);
+        }
         match (address32, width) {
             (Some(address), 1) => bus.read_scalar::<1>(address, true),
             (Some(address), 2) => bus.read_scalar::<2>(address, true),
@@ -920,6 +923,13 @@ impl BusScalar {
             if let Some(address) = address32 && width == 8
                 && bus.riscv_machine_timer.as_mut().and_then(|timer| timer.write(address, width, value)).is_some()
             {
+                return Ok(());
+            }
+            if !address.is_multiple_of(width as u64)
+                && let Some(memory) = bus.memory64(address, width)
+            {
+                memory.copy_from_slice(&value.to_le_bytes()[..width]);
+                bus.observe_memory_store(address, width, value);
                 return Ok(());
             }
             match address32 {
