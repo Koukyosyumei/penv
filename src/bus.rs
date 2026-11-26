@@ -1045,16 +1045,22 @@ impl Bus {
         Ok(())
     }
 
-    pub(crate) fn map_named_cpu_ram(&mut self, name: &str, hart: usize, address: u64, size: u32) -> Result<(), String> {
+    pub(crate) fn map_named_monitor_ram(&mut self, name: &str, hart: Option<usize>, address: u64, size: u32) -> Result<(), String> {
         if self.traceable_memory.iter().any(|(candidate, ..)| candidate == name) {
             return Err(format!("name {name} conflicts with peripheral"));
         }
-        let backing = self.allocate_ram_backing(size as usize)?;
-        if let Err(error) = self.map_alias64(backing, address, size as usize, 0, 1 << hart, false) {
-            self.regions.pop();
-            return Err(format!("memory at {address:#x} conflicts with peripheral: {error}"));
-        }
-        self.register_traceable_memory(name, &[], size);
+        let global_address = if let Some(hart) = hart {
+            let backing = self.allocate_ram_backing(size as usize)?;
+            if let Err(error) = self.map_alias64(backing, address, size as usize, 0, 1 << hart, false) {
+                self.regions.pop();
+                return Err(format!("memory at {address:#x} conflicts with peripheral: {error}"));
+            }
+            None
+        } else {
+            self.map_ram64(address, size as usize)?;
+            u32::try_from(address).ok()
+        };
+        self.register_traceable_memory(name, global_address.as_slice(), size);
         Ok(())
     }
 

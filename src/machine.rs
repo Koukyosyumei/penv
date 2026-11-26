@@ -1195,7 +1195,7 @@ impl Machine {
             if let Some(cpu) = &mut hart.rv64 {
                 cpu.set_program_counter(u64::from(entry));
             }
-            hart.pc = entry;
+            hart.pc = hart.arm32.as_mut().map_or(entry, |cpu| cpu.image_entry(entry));
             hart.pc_written = true;
         }
     }
@@ -1250,6 +1250,10 @@ impl Machine {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             if let Some(cpu) = &hart.rv64 {
                 cpu.validate(&mut self.bus)?;
+                continue;
+            }
+            if let Some(cpu) = &hart.arm32 {
+                cpu.validate_entry(&mut self.bus, hart.slot, hart.pc)?;
                 continue;
             }
             if hart.thumb.is_some() {

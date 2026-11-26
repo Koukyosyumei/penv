@@ -659,7 +659,7 @@ enum Action {
     LogUart(String),
     GpioWire(String, u8, String, u8),
     GpioOverlay(Vec<(String, u8, String, u8)>),
-    ScopedRamOverlay(String, String, u64, u32),
+    RamOverlay(String, Option<String>, u64, u32),
     PeripheralList,
     ExportPeripherals(PathBuf, PathBuf),
     SubobjectTester(String, u32),
@@ -1672,9 +1672,9 @@ fn run_commands<'a>(
                         .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None)
                 }
             }
-            Action::ScopedRamOverlay(name, cpu, address, size) => {
-                let hart = machine.monitor_bus_hart(cpu)?;
-                machine.bus.map_named_cpu_ram(name, hart, *address, *size)
+            Action::RamOverlay(name, cpu, address, size) => {
+                let hart = cpu.as_deref().map(|cpu| machine.monitor_bus_hart(cpu)).transpose()?;
+                machine.bus.map_named_monitor_ram(name, hart, *address, *size)
                     .map_err(|error| format!("KeywordException: Error E39: Exception was thrown during registration: {error}"))?;
                 Ok(None)
             }
@@ -4587,26 +4587,29 @@ fn parse_live_overlay(source: &str, root: &Path) -> Result<Action, String> {
     if let [entry] = entries.as_slice()
         && matches!(entry.model.as_str(), "Memory.ArrayMemory" | "Memory.MappedMemory")
         && let Some(registration) = entry.registration.as_deref()
-        && let Some(fields) = registration.strip_prefix("sysbus new Bus.BusPointRegistration")
-            .and_then(|fields| fields.trim().strip_prefix('{'))
-            .and_then(|fields| fields.strip_suffix('}'))
     {
-        let mut address = None;
-        let mut cpu = None;
-        for field in fields.split(';') {
-            let (name, value) = field.trim().split_once(':').ok_or("invalid scoped memory registration")?;
-            match name.trim() {
-                "address" if address.is_none() => address = Some(crate::parse_address64(value.trim())?),
-                "cpu" if cpu.is_none() => cpu = Some(value.trim().to_owned()),
-                _ => return Err("unknown or duplicate scoped memory registration field".into()),
-            }
-        }
         let [(_, property)] = entry.body.as_slice() else {
-            return Err("scoped memory overlay requires a size".into());
+            return Err("memory overlay requires a size".into());
         };
         let size = crate::parse_address(property.strip_prefix("size:").ok_or("expected memory size")?.trim())?;
-        return Ok(Action::ScopedRamOverlay(entry.name.clone(),
-            cpu.ok_or("scoped memory overlay requires a CPU")?, address.ok_or("missing memory address")?, size));
+        if let Some(fields) = registration.strip_prefix("sysbus new Bus.BusPointRegistration")
+            .and_then(|fields| fields.trim().strip_prefix('{'))
+            .and_then(|fields| fields.strip_suffix('}'))
+        {
+            let mut address = None;
+            let mut cpu = None;
+            for field in fields.split_terminator(';') {
+                let (name, value) = field.trim().split_once(':').ok_or("invalid scoped memory registration")?;
+                match name.trim() {
+                    "address" if address.is_none() => address = Some(crate::parse_address64(value.trim())?),
+                    "cpu" if cpu.is_none() => cpu = Some(value.trim().to_owned()),
+                    _ => return Err("unknown or duplicate scoped memory registration field".into()),
+                }
+            }
+            return Ok(Action::RamOverlay(entry.name.clone(), cpu, address.ok_or("missing memory address")?, size));
+        }
+        let address = registration.strip_prefix("sysbus ").ok_or("memory overlay requires a sysbus address")?;
+        return Ok(Action::RamOverlay(entry.name.clone(), None, crate::parse_address64(address.trim())?, size));
     }
     parse_gpio_overlay(source, root).map(Action::GpioOverlay)
 }
@@ -4734,7 +4737,7 @@ fn execute(
             _ => Err(format!("unsupported peripheral type {identifier:?}")),
         };
     }
-    if let ["emulation", "SetGlobalSerialExecution", value] = words {
+    if let ["emulation", "SetGlobalSerialExecution", value] | ["machine", "SetSerialExecution", value] = words {
         if parse_tester_bool(resolve(value)?)? {
             // This scheduler executes harts serially.
             return Ok(());
@@ -5157,7 +5160,11 @@ fn execute(
                 context.first().map(|name| resolve(name).map(|name| unquote(name).to_owned())).transpose()?,
             ))
         }
-        ["sysbus", "LoadELF", value, options @ ..] if boot.started => {
+        ["sysbus", "LoadELF", value, options @ ..]
+            if boot.started || boot.has_platform() && !boot.runtime.is_empty()
+                && boot.runtime.iter().any(|entry| matches!(entry.action,
+                    Action::ExecutionMode(..) | Action::ArmSystemRegister(..) | Action::CpuStep(..))) =>
+        {
             let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             Some(Action::LoadMonitorElf(Asset::new(file, script), load_elf_address_mode(options)?, root.to_owned()))
         }
@@ -6177,7 +6184,7 @@ fn execute(
                         | Action::InvalidPythonSource(..) | Action::RegisterPyDev(..)
                         | Action::SetCrashOnAbort(..) | Action::InstallInstructionHook(..)
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
-                        | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
+                        | Action::RamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
                         | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuFpuEnabled(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::CpuMpuBackground(..) | Action::CpuTranslateAddress(..)
                         | Action::AssembleBlock(..)

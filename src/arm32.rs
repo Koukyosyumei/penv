@@ -250,6 +250,7 @@ pub(crate) struct Cpu {
     sctlr: u32,
     vbar: u32,
     hsctlr: u32,
+    hactlr: u32,
     hvbar: u32,
     hcr: u32,
     elr_hyp: u32,
@@ -279,6 +280,7 @@ impl Cpu {
             sctlr: 0,
             vbar: 0,
             hsctlr: 0,
+            hactlr: 0,
             hvbar: 0,
             hcr: 0,
             elr_hyp: 0,
@@ -307,6 +309,19 @@ impl Cpu {
             .ok_or("expected CPU interrupt input 0 (IRQ) or 1 (FIQ)")?;
         *level = asserted;
         Ok(())
+    }
+
+    pub(crate) fn image_entry(&mut self, address: u32) -> u32 {
+        self.exchange(address)
+    }
+
+    pub(crate) fn validate_entry(
+        &self,
+        bus: &mut Bus,
+        slot: usize,
+        address: u32,
+    ) -> Result<(), String> {
+        Self::load(bus, slot, address, if self.cpsr & T != 0 { 2 } else { 4 }).map(|_| ())
     }
 
     pub(crate) fn configure_pmsa(
@@ -362,6 +377,7 @@ impl Cpu {
             "sctlr" => 0x0001_0000,
             "vbar" => 0x000c_0000,
             "hsctlr" => 0x0081_0000,
+            "hactlr" => 0x0081_0020,
             "hvbar" => 0x008c_0000,
             "hcr" => 0x0081_0021,
             "dfsr" => 0x0005_0000,
@@ -396,7 +412,9 @@ impl Cpu {
             0x0001_0000 => (&mut self.sctlr, u32::MAX),
             0x000c_0000 => (&mut self.vbar, !31),
             0x0081_0000 if v8r => (&mut self.hsctlr, u32::MAX),
-            0x008c_0000 if v8r => (&mut self.hvbar, !31),
+            0x0081_0020 if v8r => (&mut self.hactlr, u32::MAX),
+            // Renode retains word-aligned values in its AArch32 HVBAR model.
+            0x008c_0000 if v8r => (&mut self.hvbar, !3),
             0x0081_0021 if v8r => (&mut self.hcr, u32::MAX),
             0x0005_0000 if v8r => (&mut self.fault_status[0], u32::MAX),
             0x0005_0020 if v8r => (&mut self.fault_status[1], u32::MAX),
@@ -567,7 +585,59 @@ impl Cpu {
         } else {
             self.vbar
         };
-        base | offset
+        base.wrapping_add(offset)
+    }
+
+    fn banked_register<'a>(
+        &'a mut self,
+        instruction: u32,
+        registers: &'a mut [u32; 32],
+    ) -> Option<&'a mut u32> {
+        let current = Self::bank_for(self.cpsr)?;
+        if self.cpsr & 31 == 0x10 {
+            return None;
+        }
+        let sysm = (((instruction >> 4) & 16) | ((instruction >> 16) & 15)) as usize;
+        if instruction & (1 << 22) != 0 {
+            let bank = match sysm {
+                14 => 1,
+                16 => 2,
+                18 => 3,
+                20 => 5,
+                22 => 7,
+                30 if current == 6 => 6,
+                _ => return None,
+            };
+            return Some(&mut self.banks[bank].spsr);
+        }
+        let (bank, index) = match sysm {
+            0..=4 if current == 1 => return Some(&mut self.shared_high[sysm]),
+            0..=4 => return Some(&mut registers[8 + sysm]),
+            5..=6 => (0, 8 + sysm),
+            8..=12 if current != 1 => return Some(&mut self.fiq_high[sysm - 8]),
+            8..=14 => (1, sysm),
+            16..=23 => ([2, 3, 5, 7][(sysm - 16) / 2], 14 - (sysm & 1)),
+            30 if current == 6 => return Some(&mut self.elr_hyp),
+            31 if current == 6 => (6, 13),
+            _ => return None,
+        };
+        if bank == current {
+            Some(&mut registers[index])
+        } else if index == 13 {
+            Some(&mut self.banks[bank].sp)
+        } else {
+            Some(&mut self.banks[bank].lr)
+        }
+    }
+
+    fn user_register<'a>(&'a mut self, registers: &'a mut [u32; 32], index: usize) -> &'a mut u32 {
+        let bank = Self::bank_for(self.cpsr).unwrap();
+        match index {
+            8..=12 if bank == 1 => &mut self.shared_high[index - 8],
+            13 if bank != 0 => &mut self.banks[0].sp,
+            14 if bank != 0 => &mut self.banks[0].lr,
+            _ => &mut registers[index],
+        }
     }
 
     fn exception_return(
@@ -980,29 +1050,24 @@ impl Cpu {
                     self.set_cpsr(status, registers)?;
                     next = self.elr_hyp & if status & T != 0 { !1 } else { !3 };
                 }
-                _ if self.is_v8r()
-                    && matches!(instruction & 0x0fff_0fff, 0x010e_0300 | 0x014e_0300) =>
-                {
-                    if self.cpsr & 31 == 0x1a && rd != 15 {
-                        registers[rd] = if instruction & (1 << 22) != 0 {
-                            self.banks[6].spsr
-                        } else {
-                            self.elr_hyp
-                        };
+                _ if self.is_v8r() && instruction & 0x0fb0_0eff == 0x0100_0200 => {
+                    if rd != 15
+                        && let Some(value) = self
+                            .banked_register(instruction, registers)
+                            .map(|source| *source)
+                    {
+                        registers[rd] = value;
                     } else {
                         next = self.undefined(address.wrapping_add(4), registers);
                     }
                 }
-                _ if self.is_v8r()
-                    && matches!(instruction & 0x0fff_fff0, 0x012e_f300 | 0x016e_f300) =>
-                {
+                _ if self.is_v8r() && instruction & 0x0fb0_fef0 == 0x0120_f200 => {
                     let source = (instruction & 15) as usize;
-                    if self.cpsr & 31 == 0x1a && source != 15 {
-                        if instruction & (1 << 22) != 0 {
-                            self.banks[6].spsr = registers[source];
-                        } else {
-                            self.elr_hyp = registers[source];
-                        }
+                    let value = registers[source];
+                    if source != 15
+                        && let Some(register) = self.banked_register(instruction, registers)
+                    {
+                        *register = value;
                     } else {
                         next = self.undefined(address.wrapping_add(4), registers);
                     }
@@ -1126,6 +1191,84 @@ impl Cpu {
                     } else {
                         (registers[rd] & 0xffff) | (immediate << 16)
                     };
+                }
+                _ if instruction & 0x0e00_0000 == 0x0800_0000 => {
+                    let list = instruction as u16;
+                    if list == 0 || rn == 15 {
+                        *pc = self.undefined(next, registers);
+                        return Ok(Step::Retired);
+                    }
+                    let load = instruction & (1 << 20) != 0;
+                    let pre = instruction & (1 << 24) != 0;
+                    let increment = instruction & (1 << 23) != 0;
+                    let user = instruction & (1 << 22) != 0;
+                    let return_from_exception = load && user && list & (1 << 15) != 0;
+                    let user_bank = user && !return_from_exception;
+                    let base = registers[rn];
+                    let bytes = 4 * list.count_ones();
+                    let updated = if increment {
+                        base.wrapping_add(bytes)
+                    } else {
+                        base.wrapping_sub(bytes)
+                    };
+                    let low = if increment { base } else { updated };
+                    let mut target = if pre == increment {
+                        low.wrapping_add(4)
+                    } else {
+                        low
+                    };
+                    let access = if load {
+                        pmsa::Access::Read
+                    } else {
+                        pmsa::Access::Write
+                    };
+                    let mut loaded_pc = None;
+                    for index in 0..16 {
+                        if list & (1 << index) == 0 {
+                            continue;
+                        }
+                        if let Some(vector) =
+                            self.check_protection(target, 4, access, address, registers)
+                        {
+                            *pc = vector;
+                            return Ok(Step::Trap);
+                        }
+                        if load {
+                            let value = Self::load(bus, slot, target, 4)?;
+                            if index == 15 {
+                                loaded_pc = Some(value);
+                            } else if user_bank {
+                                *self.user_register(registers, index) = value;
+                            } else {
+                                registers[index] = value;
+                            }
+                        } else {
+                            let value = if user_bank && index != 15 {
+                                *self.user_register(registers, index)
+                            } else {
+                                Self::reg(registers, index, address)
+                            };
+                            Self::store(bus, slot, target, 4, value, output)?;
+                        }
+                        target = target.wrapping_add(4);
+                    }
+                    if instruction & (1 << 21) != 0 && (!load || list & (1 << rn) == 0) {
+                        registers[rn] = updated;
+                    }
+                    if let Some(value) = loaded_pc {
+                        if return_from_exception {
+                            let bank = Self::bank_for(self.cpsr).unwrap();
+                            next = if bank != 0
+                                && self.set_cpsr(self.banks[bank].spsr, registers).is_ok()
+                            {
+                                value & if self.cpsr & T != 0 { !1 } else { !3 }
+                            } else {
+                                self.undefined(next, registers)
+                            };
+                        } else {
+                            next = self.exchange(value);
+                        }
+                    }
                 }
                 _ if instruction & 0x0c00_0000 == 0x0400_0000
                     && (instruction & (1 << 25) == 0 || instruction & 0x10 == 0) =>

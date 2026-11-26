@@ -224,6 +224,7 @@ pub fn load(
         return load_binary(machine, file, u64::from(machine.raw_load_address()));
     }
     let cortex_m = machine.is_cortex_m();
+    let aarch32 = machine.primary.arm32.is_some();
     let length = file.metadata().map_err(|e| e.to_string())?.len();
     let mut header = [0; 52];
     file.read_exact(&mut header)
@@ -254,10 +255,10 @@ pub fn load(
     } else {
         0
     };
-    if cortex_m {
+    if cortex_m || aarch32 {
         if half(&header, 18) != 40
             || flags >> 24 != 5
-            || (flags & 0x400 != 0 && !machine.has_cortex_m4())
+            || (cortex_m && flags & 0x400 != 0 && !machine.has_cortex_m4())
         {
             return Err("expected an ARM EABI5 ELF32 executable with a supported float ABI".into());
         }
@@ -272,13 +273,14 @@ pub fn load(
     }
 
     let entry = word(&header, 24);
+    let entry_address = if aarch32 { entry & !1 } else { entry };
     let table = u64::from(word(&header, 28));
     let count = u64::from(half(&header, 44));
     if table < 52 || count == 0 || count == 0xffff || table + count * 32 > length {
         return Err("invalid ELF program header table".into());
     }
 
-    let minimum_instruction_size = if machine.primary.compressed_instructions() {
+    let minimum_instruction_size = if (aarch32 && entry & 1 != 0) || (!aarch32 && machine.primary.compressed_instructions()) {
         2
     } else {
         4
@@ -351,9 +353,10 @@ pub fn load(
         if file_size != 0 {
             initialized_ranges.push(start..zero_start);
         }
+        let executable_base = if aarch32 { virtual_address } else { address };
         if word(&segment, 24) & 1 != 0
-            && entry >= address
-            && u64::from(entry - address) + minimum_instruction_size <= u64::from(file_size)
+            && entry_address >= executable_base
+            && u64::from(entry_address - executable_base) + minimum_instruction_size <= u64::from(file_size)
         {
             entry_is_executable = true;
         }

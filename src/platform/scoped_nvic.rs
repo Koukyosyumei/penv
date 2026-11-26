@@ -151,7 +151,7 @@ pub(super) fn construct(entries: &[Entry]) -> Result<Machine, String> {
                 _ => return Err(entry.error("invalid or duplicate scoped memory property")),
             }
         }
-        machine.bus.map_named_cpu_ram(&entry.name, cpu.ok_or_else(|| entry.error("unknown scoped memory CPU"))?,
+        machine.bus.map_named_monitor_ram(&entry.name, Some(cpu.ok_or_else(|| entry.error("unknown scoped memory CPU"))?),
             address.ok_or_else(|| entry.error("missing scoped memory address"))?, size)
             .map_err(|error| entry.error(&error))?;
     }
