@@ -86,6 +86,7 @@ pub enum ThumbStep {
 enum InstructionError {
     GuestFault,
     ExceptionTaken(u32),
+    SemihostingExit(crate::semihosting::Exit, u32),
     Host(String),
 }
 
@@ -1082,7 +1083,8 @@ impl Thumb {
             let fault_pc = *pc;
             let fault_itstate = self.itstate;
             bus.thumb_negative_priority = self.faultmask || matches!(self.active_exception, NMI | HARDFAULT);
-            let step = self.step(pc, r, bus, output);
+            let step = bus.thumb_fetch(*pc).map_err(InstructionError::Host)
+                .and_then(|instruction| self.step_fetched(instruction, pc, r, bus, output));
             if let Some(address) = bus.take_thumb_data_fault() {
                 const BUSFAULT: u8 = 5;
                 self.itstate = fault_itstate;
@@ -1101,13 +1103,19 @@ impl Thumb {
                 }
                 return Ok(ThumbStep::Exception);
             }
-            return step.map(|retired| {
-                if retired {
-                    ThumbStep::Retired
-                } else {
-                    ThumbStep::Breakpoint
+            return match step {
+                Ok(true) => {
+                    self.retired_instructions = self.retired_instructions.wrapping_add(1);
+                    Ok(ThumbStep::Retired)
                 }
-            });
+                Ok(false) => Ok(ThumbStep::Breakpoint),
+                Err(InstructionError::SemihostingExit(exit, next)) => {
+                    *pc = next;
+                    Ok(ThumbStep::Semihosting(exit))
+                }
+                Err(InstructionError::Host(error)) => Err(error),
+                _ => Err("Thumb instruction fault".into()),
+            };
         }
         let result = if self.invalid_thumb_state {
             Err(InstructionError::GuestFault)
@@ -1122,6 +1130,10 @@ impl Thumb {
                 Ok(ThumbStep::Retired)
             }
             Ok(false) => Ok(ThumbStep::Breakpoint),
+            Err(InstructionError::SemihostingExit(exit, next)) => {
+                *pc = next;
+                Ok(ThumbStep::Semihosting(exit))
+            }
             Err(InstructionError::Host(error)) => Err(error),
             Err(InstructionError::ExceptionTaken(next)) => {
                 *pc = next;
@@ -1402,6 +1414,22 @@ impl Thumb {
                     3 => ((value as u16).swap_bytes() as i16 as i32) as u32,
                     _ => return Err(unsupported().into()),
                 };
+            }
+            0xbeab => {
+                if let Some(mut handler) = bus.semihosting.take() {
+                    let result = handler.call(bus, r[0], r[1], output);
+                    bus.semihosting = Some(handler);
+                    let (value, exit) = result?;
+                    r[0] = value;
+                    if let Some(exit) = exit {
+                        return Err(InstructionError::SemihostingExit(exit, next));
+                    }
+                } else {
+                    crate::monitor_log::record(2, &format!(
+                        "Semihosting handler is not registered; R0=0x{:X} R1=0x{:X}", r[0], r[1]
+                    ));
+                    r[0] = u32::MAX;
+                }
             }
             0xbe00..=0xbeff => return Ok(false),
             0xbf00 | 0xbf10 => {} // NOP and scheduler yield.
