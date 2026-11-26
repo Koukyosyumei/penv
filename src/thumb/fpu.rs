@@ -7,7 +7,9 @@ use super::Thumb;
 
 impl Thumb {
     pub(crate) fn preserve_lazy_fp(&mut self, bus: &mut Bus) -> Result<bool, String> {
-        let Some((address, hardfault_ready, full_frame)) = bus.nvic.as_ref().and_then(Nvic::pending_lazy_fp) else {
+        let Some((address, hardfault_ready, full_frame)) =
+            bus.nvic.as_ref().and_then(Nvic::pending_lazy_fp)
+        else {
             return Ok(false);
         };
         let mut state = [0; 34];
@@ -37,7 +39,11 @@ impl Thumb {
     }
 
     pub(super) fn transfer_secure_fp(
-        &mut self, instruction: u32, r: &[u32; 32], bus: &mut Bus, output: &mut impl Write,
+        &mut self,
+        instruction: u32,
+        r: &[u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
     ) -> Result<(), String> {
         let rn = (instruction & 15) as usize;
         if rn == 15 {
@@ -46,7 +52,11 @@ impl Thumb {
         self.fp_active = true;
         let mut fp = self.fp;
         let load = instruction & 0x10 != 0;
-        let count = if bus.nvic.as_ref().is_some_and(Nvic::secure_full_fp_frame) { 32 } else { 16 };
+        let count = if bus.nvic.as_ref().is_some_and(Nvic::secure_full_fp_frame) {
+            32
+        } else {
+            16
+        };
         for index in 0..count {
             let offset = if index < 16 { index } else { index + 2 };
             let address = r[rn].wrapping_add(4 * offset as u32);
@@ -66,8 +76,95 @@ impl Thumb {
         Ok(())
     }
 
+    fn fp_round_kind(high: u32, low: u32) -> Option<(u32, bool)> {
+        if !matches!(low & 0xf50, 0xa40 | 0xb40) {
+            return None;
+        }
+        match (high & !0x40, low & 0x80 != 0) {
+            (0xfeb8, false) => Some((4, false)),
+            (0xfeb9, false) => Some((0, false)),
+            (0xfeba, false) => Some((1, false)),
+            (0xfebb, false) => Some((2, false)),
+            (0xeeb6, true) => Some((3, false)),
+            (0xeeb6, false) => Some((5, false)),
+            (0xeeb7, false) => Some((5, true)),
+            _ => None,
+        }
+    }
+
+    fn round_to_integral(&mut self, high: u32, low: u32, kind: u32, exact: bool) -> bool {
+        let double = low & 0x100 != 0;
+        let (destination, source) = if double {
+            (
+                (low >> 12) as usize * 2 + (((high >> 6) & 1) as usize * 32),
+                (low & 15) as usize * 2 + (((low >> 5) & 1) as usize * 32),
+            )
+        } else {
+            (
+                ((low >> 12) * 2 + ((high >> 6) & 1)) as usize,
+                ((low & 15) * 2 + ((low >> 5) & 1)) as usize,
+            )
+        };
+        if destination >= self.fp.len() || source >= self.fp.len() {
+            return false;
+        }
+        let input = if double {
+            u64::from(self.fp[source]) | (u64::from(self.fp[source + 1]) << 32)
+        } else {
+            u64::from(self.fp[source])
+        };
+        let (nan_exponent, quiet) = if double {
+            (0x7ff0_0000_0000_0000, 1 << 51)
+        } else {
+            (0x7f80_0000, 1 << 22)
+        };
+        let result = if input & nan_exponent == nan_exponent && input & (quiet * 2 - 1) != 0 {
+            if input & quiet == 0 {
+                self.fpscr |= 1;
+            }
+            if self.fpscr & (1 << 25) != 0 {
+                nan_exponent | quiet
+            } else {
+                input | quiet
+            }
+        } else {
+            let value = if double {
+                f64::from_bits(input)
+            } else {
+                f64::from(f32::from_bits(input as u32))
+            };
+            let mode = if kind == 5 {
+                (self.fpscr >> 22) & 3
+            } else {
+                kind
+            };
+            let rounded = match mode {
+                0 => value.round_ties_even(),
+                1 => value.ceil(),
+                2 => value.floor(),
+                3 => value.trunc(),
+                _ => value.round(),
+            };
+            if exact && rounded != value {
+                self.fpscr |= 1 << 4;
+            }
+            if double {
+                rounded.to_bits()
+            } else {
+                u64::from((rounded as f32).to_bits())
+            }
+        };
+        self.fp[destination] = result as u32;
+        if double {
+            self.fp[destination + 1] = (result >> 32) as u32;
+        }
+        true
+    }
+
     pub(crate) fn is_fpu_instruction(high: u32, low: u32) -> bool {
-        matches!(high & 0xff00, 0xec00 | 0xed00 | 0xee00) && matches!(low & 0xf00, 0xa00 | 0xb00)
+        Self::fp_round_kind(high, low).is_some()
+            || matches!(high & 0xff00, 0xec00 | 0xed00 | 0xee00)
+                && matches!(low & 0xf00, 0xa00 | 0xb00)
     }
 
     pub(crate) fn execute_fpu(
@@ -86,7 +183,12 @@ impl Thumb {
         let sd = ((low >> 12) * 2 + ((high >> 6) & 1)) as usize;
         let sn = ((high & 15) * 2 + ((low >> 7) & 1)) as usize;
         let sm = ((low & 15) * 2 + ((low >> 5) & 1)) as usize;
-        if high & 0xffe0 == 0xec40 && low & 0xd0 == 0x10 {
+        if let Some((kind, exact)) = Self::fp_round_kind(high, low) {
+            if !(self.armv81m || self.cortex_m33) || !self.round_to_integral(high, low, kind, exact)
+            {
+                return Ok(false);
+            }
+        } else if high & 0xffe0 == 0xec40 && low & 0xd0 == 0x10 {
             let rt = (low >> 12) as usize;
             let rt2 = (high & 15) as usize;
             let first = if low & 0x100 == 0 {

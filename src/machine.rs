@@ -1033,7 +1033,7 @@ impl Machine {
         }
         if let Some(thumb) = &hart.thumb {
             let (triple, features) = if thumb.armv81m {
-                ("thumbv8.1m.main-none-eabi", "+mve.fp")
+                ("thumbv8.1m.main-none-eabi", "+mve.fp,+fp-armv8d16")
             } else if thumb.cortex_m33 {
                 ("thumbv8m.main-none-eabi", "+fp-armv8d16sp")
             } else if thumb.thumb2 {
