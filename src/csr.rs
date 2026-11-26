@@ -382,6 +382,19 @@ impl Csr {
         self.vector_bootstrap = Some(VectorBootstrap::default());
     }
 
+    pub(crate) fn monitor_vector_register(&mut self, address: u32, value: Option<u64>) -> Result<Option<u64>, String> {
+        let vector = self.vector_bootstrap.as_mut().ok_or("vector register requires vector support")?;
+        if let Some(value) = value {
+            let value = u32::try_from(value).map_err(|_| "vector register value exceeds RV32 width")?;
+            if !vector.write(address, value) {
+                return Err("vector register is read-only".into());
+            }
+            Ok(None)
+        } else {
+            Ok(vector.read(address).map(u64::from))
+        }
+    }
+
     pub(crate) fn set_vector_length(&mut self, bits: u64) -> Result<(), String> {
         self.vector_bootstrap.as_mut()
             .ok_or("VectorRegisterLength requires vector support")?

@@ -765,11 +765,27 @@ impl Machine {
                 Ok(Some(*target))
             };
         }
-        if let Some(cpu) = &mut hart.rv64 {
-            if register == "vstart" && value.is_none() {
-                return cpu.monitor_register(&register).map(Some)
-                    .ok_or_else(|| format!("unsupported monitor register {register}"));
+        if let Some(address) = match register.as_str() {
+            "vstart" => Some(0x008),
+            "vxsat" => Some(0x009),
+            "vxrm" => Some(0x00a),
+            "vcsr" => Some(0x00f),
+            "vl" => Some(0xc20),
+            "vtype" => Some(0xc21),
+            "vlenb" => Some(0xc22),
+            _ => None,
+        } {
+            if let Some(cpu) = &mut hart.rv64 {
+                let vector = cpu.privilege.vector.as_mut().ok_or("vector register requires the V extension")?;
+                if let Some(value) = value {
+                    if !vector.write(address, value) {
+                        return Err("vector register is read-only".into());
+                    }
+                    return Ok(None);
+                }
+                return Ok(vector.read(address));
             }
+            return hart.csr.monitor_vector_register(address, value);
         }
         let index = match register.as_str() {
             "fp" => Some(8),
