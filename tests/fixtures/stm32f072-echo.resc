@@ -1,0 +1,6 @@
+mach create
+machine LoadPlatformDescription @platforms/boards/stm32f072b_discovery.repl
+sysbus LoadELF @https://dl.antmicro.com/projects/renode/stm32f072b_disco--zephyr-echo.elf-s_544096-541b7b153ff0a9b30489bd1cc34e693c0ac8b9ea
+waitForUart sysbus.usart1 "Start typing characters to see them echoed back" timeout=8s
+sysbus.usart1 WriteLine "Echo working?"
+waitForUartPrompt sysbus.usart1 "Echo working?" timeout=8s

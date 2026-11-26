@@ -1,0 +1,49 @@
+$ cargo test --locked --bin penv upstream_nunit::elf_merge
+running 19 tests
+test upstream_nunit::elf_merge::should_cover_zero_lenght_symbol ... ok
+test upstream_nunit::elf_merge::should_split_cake ... ok
+test upstream_nunit::elf_merge::should_merge_trim_end_and_beginning ... ok
+test upstream_nunit::elf_merge::should_trim_cake_beginnings ... ok
+test upstream_nunit::elf_merge::should_sorted_intervals_have_expected_layout ... ok
+test upstream_nunit::elf_merge::should_favor_unempty ... ok
+test upstream_nunit::elf_merge::should_split_cake_after_second_tower ... ok
+test upstream_nunit::elf_merge::should_trim_and_over_shadow_on_abase ... ok
+test upstream_nunit::elf_merge::should_trim_and_overshadow ... ok
+test upstream_nunit::elf_merge::should_perserve_symbol ... ok
+test upstream_nunit::elf_merge::should_place_zero_lenght_symbol_before_cake ... ok
+test upstream_nunit::elf_merge::should_trim_end_and_beginning2 ... ok
+test upstream_nunit::elf_merge::should_zero_lenght_symbol_cut_after_cake ... ok
+test upstream_nunit::elf_merge::should_cut_into_cake ... ok
+test upstream_nunit::elf_merge::should_trim_cake_ends ... ok
+test upstream_nunit::elf_merge::should_merge_overlapping_thumb_symbols ... ok
+test upstream_nunit::elf_merge::should_not_destroy_other_symbol_lookup_cache ... ok
+test upstream_nunit::elf_merge::should_have_sliced_symbol_in_name_lookup ... ok
+test upstream_nunit::elf_merge::should_trim_cake_to_top_symbol ... ok
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1632 filtered out; finished in 0.00s
+
+$ cargo test --locked --bin penv upstream_nunit::symbol_lookup
+running 23 tests
+test upstream_nunit::symbol_lookup::should_find_complicated_test ... ok
+test upstream_nunit::symbol_lookup::should_find_double_cut ... ok
+test upstream_nunit::symbol_lookup::should_find_nested_deeper ... ok
+test upstream_nunit::symbol_lookup::should_correctly_guess_zero_length_symbol ... ok
+test upstream_nunit::symbol_lookup::should_find_matroska ... ok
+test upstream_nunit::symbol_lookup::should_find_complicated_from_single_inserts_test ... ok
+test upstream_nunit::symbol_lookup::should_find_ten_symbols ... ok
+test upstream_nunit::symbol_lookup::should_find_nested_and_double_cut ... ok
+test upstream_nunit::symbol_lookup::should_find_not_so_complicated_test ... ok
+test upstream_nunit::symbol_lookup::should_find_one_symbol ... ok
+test upstream_nunit::symbol_lookup::should_find_simply_nested_symbol ... ok
+test upstream_nunit::symbol_lookup::should_find_one_symbol_boundary ... ok
+test upstream_nunit::symbol_lookup::should_find_recursively_nested_symbol ... ok
+test upstream_nunit::symbol_lookup::should_not_find_hole ... ok
+test upstream_nunit::symbol_lookup::should_find_zero_length_symbol ... ok
+test upstream_nunit::symbol_lookup::should_trim_big_symbol ... ok
+test upstream_nunit::symbol_lookup::should_not_find_one_symbol_miss ... ok
+test upstream_nunit::symbol_lookup::should_have_more_and_less_important_via_name ... ok
+test upstream_nunit::symbol_lookup::should_not_find_one_symbol_boundary ... ok
+test upstream_nunit::symbol_lookup::should_work_with_long_series_and_nesting ... ok
+test upstream_nunit::symbol_lookup::should_work_with_stacked_test ... ok
+test upstream_nunit::symbol_lookup::should_not_crash_on_insert_doubled_symbol ... ok
+test upstream_nunit::symbol_lookup::should_have_important_via_address ... ok
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 1628 filtered out; finished in 0.00s

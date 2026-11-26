@@ -1,0 +1,14 @@
+fixture	constructor_parameters	constructor_variants	cases_per_variant	total_cases	method_parameter_cases
+Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	useGeneratedSerializer,useGeneratedDeserializer,supportForIXmlSerializable,useTypeStamping	16	3	48	0
+Antmicro.Migrant.Tests.BuiltinSurrogatesTests	useGeneratedSerializer,useGeneratedDeserializer,useTypeStamping	8	2	16	0
+Antmicro.Migrant.Tests.HooksTests	useGeneratedSerializer,useGeneratedDeserializer,useTypeStamping	8	20	160	0
+Antmicro.Migrant.Tests.IdGeneratorTests	-	1	1	1	0
+Antmicro.Migrant.Tests.ObjectReaderWriterTests	-	1	1	1	0
+Antmicro.Migrant.Tests.OpenStreamSerializationTests	useGeneratedSerializer,useGeneratedDeserializer	4	7	28	20
+Antmicro.Migrant.Tests.PrimitiveReaderWriterTests	buffered	2	51	102	90
+Antmicro.Migrant.Tests.SerializationTests	useGeneratedSerializer,useGeneratedDeserializer,treatCollectionsAsUserObjects,useTypeStamping	16	94	1504	0
+Antmicro.Migrant.Tests.StampingTests	useGeneratedSerialization,useGeneratedDeserialization,serializeWithStamps,deserializeWithStamps	16	1	16	0
+Antmicro.Migrant.Tests.SurrogateTests	useGeneratedSerializer,useGeneratedDeserializer,useTypeStamping	8	22	176	0
+Antmicro.Migrant.Tests.TwoDomainTests	useGeneratedSerialized,useGeneratedDeserialzer	4	9	36	0
+Antmicro.Migrant.Tests.TypeDescriptorComparisonTests	-	1	11	11	0
+Antmicro.Migrant.Tests.VersionToleranceTests	useGeneratedSerializer,useGeneratedDeserializer	4	37	148	140

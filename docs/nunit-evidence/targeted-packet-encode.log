@@ -1,0 +1,14 @@
+$ cargo test --locked --bin penv upstream_nunit::packet_layout
+running 11 tests
+test upstream_nunit::packet_layout::test_decode_edianness ... ok
+test upstream_nunit::packet_layout::test_alignment ... ok
+test upstream_nunit::packet_layout::test_decode ... ok
+test upstream_nunit::packet_layout::test_length_calculation ... ok
+test upstream_nunit::packet_layout::test_decode_field_offsets ... ok
+test upstream_nunit::packet_layout::test_nested_decode ... ok
+test upstream_nunit::packet_layout::test_encode ... ok
+test upstream_nunit::packet_layout::test_nested_encode ... ok
+test upstream_nunit::packet_layout::test_padding_before ... ok
+test upstream_nunit::packet_layout::test_width_in_elements_errors ... ok
+test upstream_nunit::packet_layout::test_width_in_elements ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1576 filtered out; finished in 0.00s

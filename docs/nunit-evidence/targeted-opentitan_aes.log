@@ -1,0 +1,12 @@
+$ cargo test --locked --bin penv upstream_nunit::opentitan_aes
+running 9 tests
+test upstream_nunit::opentitan_aes::should_change_status_when_set_to_automatic_mode ... ok
+test upstream_nunit::opentitan_aes::should_keep_track_of_data_writes ... ok
+test upstream_nunit::opentitan_aes::should_give_correct_decryption_output ... ok
+test upstream_nunit::opentitan_aes::should_be_able_to_do_multiple_transformations_with_a_single_key ... ok
+test upstream_nunit::opentitan_aes::should_randomize_data_output_on_trigger ... ok
+test upstream_nunit::opentitan_aes::should_give_correct_encryption_output ... ok
+test upstream_nunit::opentitan_aes::should_randomize_input_registers_on_trigger ... ok
+test upstream_nunit::opentitan_aes::should_start_in_idle_mode ... ok
+test upstream_nunit::opentitan_aes::should_work_in_manual_mode_too ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1723 filtered out; finished in 0.00s

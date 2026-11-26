@@ -1,0 +1,5 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.PacketTests.TestLengthCalculation	0-1351	upstream_nunit::packet_layout::test_length_calculation	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.PacketTests.TestDecode	0-1352	upstream_nunit::packet_layout::test_decode	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.PacketTests.TestNestedDecode	0-1353	upstream_nunit::packet_layout::test_nested_decode	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.PacketTests.TestDecodeEdianness	0-1354	upstream_nunit::packet_layout::test_decode_edianness	passed

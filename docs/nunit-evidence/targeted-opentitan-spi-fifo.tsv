@@ -1,0 +1,5 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest.ShouldHaveCorrectFifoConfigurationAfterBoot	0-1107	upstream_nunit::opentitan_spi_device::should_have_correct_fifo_configuration_after_boot	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest.ShouldReceiveDataToFifo	0-1108	upstream_nunit::opentitan_spi_device::should_receive_data_to_fifo	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest.ShouldBeAbleToTransmitData	0-1109	upstream_nunit::opentitan_spi_device::should_be_able_to_transmit_data	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest.ShouldBeAbleToResetFifos	0-1110	upstream_nunit::opentitan_spi_device::should_be_able_to_reset_fifos	passed

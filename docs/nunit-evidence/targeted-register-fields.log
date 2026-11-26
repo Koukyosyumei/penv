@@ -1,0 +1,12 @@
+$ cargo test --locked --bin penv upstream_nunit::register_fields
+running 9 tests
+test upstream_nunit::register_fields::should_not_accept_negative_fields ... ok
+test upstream_nunit::register_fields::should_not_accept_out_of_bounds_values ... ok
+test upstream_nunit::register_fields::should_handle_64_bit_wide_registers_properly ... ok
+test upstream_nunit::register_fields::should_handle_32_bit_wide_registers_properly ... ok
+test upstream_nunit::register_fields::should_read_64_bit_wide_enum ... ok
+test upstream_nunit::register_fields::should_not_allow_intersecting_fields ... ok
+test upstream_nunit::register_fields::should_not_exceed_register_size ... ok
+test upstream_nunit::register_fields::should_write_64_bit_wide_enum ... ok
+test upstream_nunit::register_fields::should_write_fields_with_max_length ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1651 filtered out; finished in 0.00s

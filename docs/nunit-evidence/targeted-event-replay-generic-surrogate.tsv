@@ -1,0 +1,4 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::UnitTests.TimeSourceTests.ShouldRecordAndPlayEvents	0-1047	upstream_nunit::time_source::should_record_and_play_events	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.SurrogateTests(False,False,False).ShouldNotGenerateGenericSurrogateTwice	0-3097	upstream_nunit::migrant_surrogate::generic_registration_count_plain	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.SurrogateTests(False,False,True).ShouldNotGenerateGenericSurrogateTwice	0-3005	upstream_nunit::migrant_surrogate::generic_registration_count_stamped	pass

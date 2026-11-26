@@ -1,0 +1,8 @@
+$ cargo test --locked --bin penv upstream_nunit::multi_cpu
+running 5 tests
+test upstream_nunit::multi_cpu::should_enumerate_cpus ... ok
+test upstream_nunit::multi_cpu::should_guard_peripheral_reads_3 ... ok
+test upstream_nunit::multi_cpu::should_guard_peripheral_reads_2 ... ok
+test upstream_nunit::multi_cpu::should_guard_peripheral_reads_1 ... ok
+test upstream_nunit::multi_cpu::should_guard_peripheral_reads_4 ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1755 filtered out; finished in 1.00s

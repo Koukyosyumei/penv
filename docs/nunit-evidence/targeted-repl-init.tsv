@@ -1,0 +1,6 @@
+official_id	nunit_id	rust_test	rust_outcome
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldReplaceInit	0-1067	repl_parser::upstream_verification_tests::should_replace_init	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldAddInit	0-1068	repl_parser::upstream_verification_tests::should_add_init	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldUpdateSysbusInit	0-1069	repl_parser::upstream_verification_tests::should_update_sysbus_init	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldProcessEntryDependantOnSysbus	0-1079	repl_parser::upstream_verification_tests::should_process_entry_dependant_on_sysbus	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldProcessEntryDependantOnSysbusWithUpdateEntry	0-1080	repl_parser::upstream_verification_tests::should_process_entry_dependant_on_sysbus_with_update_entry	passed

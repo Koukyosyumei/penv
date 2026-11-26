@@ -1,0 +1,7 @@
+official_id	nunit_id	rust_test	rust_outcome
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,False).ShouldSerializeBlockingCollectionWithNull	0-1002	upstream_nunit::migrant_blocking_collection::nullable_plain	passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,False).ShouldSerializeBlockingCollectionWithPrimitives	0-1001	upstream_nunit::migrant_blocking_collection::primitives_plain	passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,False).ShouldSerializeBlockingCollectionWithStrings	0-1003	upstream_nunit::migrant_blocking_collection::strings_plain	passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,True).ShouldSerializeBlockingCollectionWithNull	0-1034	upstream_nunit::migrant_blocking_collection::nullable_stamped	passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,True).ShouldSerializeBlockingCollectionWithPrimitives	0-1033	upstream_nunit::migrant_blocking_collection::primitives_stamped	passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,True).ShouldSerializeBlockingCollectionWithStrings	0-1035	upstream_nunit::migrant_blocking_collection::strings_stamped	passed

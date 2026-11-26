@@ -1,0 +1,18 @@
+running 16 tests
+test upstream_nunit::migrant_hooks::cyclic_stamped ... ok
+test upstream_nunit::migrant_hooks::global_stamped ... ok
+test upstream_nunit::migrant_hooks::derived_post_stamped ... ok
+test upstream_nunit::migrant_hooks::derived_post_plain ... ok
+test upstream_nunit::migrant_hooks::chain_stamped ... ok
+test upstream_nunit::migrant_hooks::cyclic_plain ... ok
+test upstream_nunit::migrant_hooks::inheritance_stamped ... ok
+test upstream_nunit::migrant_hooks::referenced_plain ... ok
+test upstream_nunit::migrant_hooks::chain_plain ... ok
+test upstream_nunit::migrant_hooks::post_plain ... ok
+test upstream_nunit::migrant_hooks::inheritance_plain ... ok
+test upstream_nunit::migrant_hooks::post_stamped ... ok
+test upstream_nunit::migrant_hooks::referenced_stamped ... ok
+test upstream_nunit::migrant_hooks::surrogate_conflict_plain ... ok
+test upstream_nunit::migrant_hooks::surrogate_conflict_stamped ... ok
+test upstream_nunit::migrant_hooks::global_plain ... ok
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 1474 filtered out; finished in 0.00s

@@ -1,0 +1,782 @@
+use crate::migrant::generated_record::{generated_record, Codec};
+use crate::migrant::object_stream::{
+    FieldKind, Graph, Object, ObjectId, ObjectReader, ObjectWriter, References, TypeStamp, Value,
+};
+use crate::migrant::surrogate::{RegistrationClosed, Surrogates};
+use std::io::{Cursor, Seek};
+
+const fn stamp(
+    class: &'static str,
+    fields: &'static [(&'static str, FieldKind)],
+) -> TypeStamp<'static> {
+    TypeStamp {
+        class,
+        module: "Tests",
+        revision: 0,
+        fields,
+    }
+}
+
+const STAMPS: &[TypeStamp<'static>] = &[
+    stamp(
+        "ClassWithGenericSurrogates",
+        &[
+            ("fieldA", FieldKind::Reference),
+            ("fieldB", FieldKind::Reference),
+            ("fieldC", FieldKind::Reference),
+        ],
+    ),
+    stamp("SurrogatingClass<int>", &[]),
+    stamp("SurrogatingClass<float>", &[]),
+    stamp("System.Object", &[]),
+    stamp("System.Int32", &[("m_value", FieldKind::Integer)]),
+    stamp("IntSurrogate", &[("Cwi.Field", FieldKind::Integer)]),
+    stamp(
+        "SurrogateMockA",
+        &[("<Field>k__BackingField", FieldKind::Integer)],
+    ),
+    stamp("SurrogateMockB", &[]),
+    stamp("SurrogateMockD", &[]),
+    stamp("SurrogateMockE", &[]),
+    stamp("List<object>", &[("items", FieldKind::Reference)]),
+];
+
+const CODECS: &[Codec] = &[
+    generated_record!("ClassWithGenericSurrogates"; field_a: reference, field_b: reference, field_c: reference),
+    generated_record!("SurrogatingClass<int>";),
+    generated_record!("SurrogatingClass<float>";),
+    generated_record!("System.Object";),
+    generated_record!("System.Int32"; value: integer),
+    generated_record!("IntSurrogate"; value: integer),
+    generated_record!("SurrogateMockA"; value: integer),
+    generated_record!("SurrogateMockB";),
+    generated_record!("SurrogateMockD";),
+    generated_record!("SurrogateMockE";),
+    generated_record!("List<object>"; items: reference),
+];
+
+#[derive(Clone, Copy, Default)]
+struct Method {
+    stamped: bool,
+    write: bool,
+    read: bool,
+}
+
+impl Method {
+    const fn new(stamped: bool, write: bool, read: bool) -> Self {
+        Self {
+            stamped,
+            write,
+            read,
+        }
+    }
+}
+
+fn record(class: &str, fields: Vec<Value>) -> Object {
+    Object::Record {
+        class: class.into(),
+        fields,
+    }
+}
+
+fn a(number: i64) -> Object {
+    record("SurrogateMockA", vec![Value::Integer(number)])
+}
+
+fn round_trip(
+    graph: &Graph,
+    root: ObjectId,
+    method: Method,
+    encode: &mut Surrogates<'_>,
+    restore: &mut Surrogates<'_>,
+    check: impl FnOnce(&Graph, ObjectId),
+) {
+    let mut stream = Cursor::new(Vec::new());
+    let mut writer =
+        ObjectWriter::new(&mut stream, graph, References::Preserve, true).with_surrogates(encode);
+    if method.write {
+        writer = writer.with_generated_records(CODECS);
+    }
+    if method.stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+    stream.rewind().unwrap();
+    let mut reader = ObjectReader::new(stream, References::Preserve, true).with_surrogates(restore);
+    if method.read {
+        reader = reader.with_generated_records(CODECS);
+    }
+    if method.stamped {
+        reader = reader.with_type_stamps(STAMPS);
+    }
+    let root = reader.read_object().unwrap();
+    check(reader.graph(), root);
+    reader.finish().unwrap();
+}
+
+fn place_object_for_surrogate(method: Method) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("SurrogateMockB", vec![]));
+    let mut restore = Surrogates::default();
+    restore
+        .register("SurrogateMockB", |_, _| Ok(a(999)))
+        .unwrap();
+    round_trip(
+        &graph,
+        root,
+        method,
+        &mut Surrogates::default(),
+        &mut restore,
+        |copy, id| assert_eq!(copy.get(id), Some(&a(999))),
+    );
+}
+
+fn place_surrogate_for_object(method: Method) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("SurrogateMockB", vec![]));
+    let mut encode = Surrogates::default();
+    encode.register("SurrogateMockB", |_, _| Ok(a(1))).unwrap();
+    round_trip(
+        &graph,
+        root,
+        method,
+        &mut encode,
+        &mut Surrogates::default(),
+        |copy, id| assert_eq!(copy.get(id), Some(&a(1))),
+    );
+}
+
+fn ref_id(value: &Value) -> ObjectId {
+    let Value::Ref(id) = value else {
+        panic!("expected a reference");
+    };
+    *id
+}
+
+fn place_surrogate_for_object_preserving_identity(method: Method) {
+    let mut graph = Graph::default();
+    let b = graph.insert(record("SurrogateMockB", vec![]));
+    let second = graph.insert(record("SurrogateMockB", vec![]));
+    let items = graph.insert(Object::Array(vec![
+        Value::Ref(b),
+        Value::Ref(second),
+        Value::Ref(b),
+    ]));
+    let root = graph.insert(record("List<object>", vec![Value::Ref(items)]));
+    let counter = std::cell::Cell::new(0);
+    let mut encode = Surrogates::default();
+    encode
+        .register("SurrogateMockB", |_, _| {
+            let value = counter.get();
+            counter.set(value + 1);
+            Ok(a(value))
+        })
+        .unwrap();
+    round_trip(
+        &graph,
+        root,
+        method,
+        &mut encode,
+        &mut Surrogates::default(),
+        |copy, id| {
+            let Some(Object::Record { class, fields }) = copy.get(id) else {
+                panic!("expected a list");
+            };
+            assert_eq!(class, "List<object>");
+            let Some(Object::Array(list)) = copy.get(ref_id(&fields[0])) else {
+                panic!("expected list items");
+            };
+            assert_eq!(list[0], list[2]);
+            assert_ne!(list[0], list[1]);
+            assert_eq!(copy.get(ref_id(&list[0])), Some(&a(counter.get() - 2)));
+            assert_eq!(copy.get(ref_id(&list[1])), Some(&a(counter.get() - 1)));
+        },
+    );
+}
+
+fn do_surrogate_object_swap(method: Method, times: usize) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("SurrogateMockB", vec![]));
+    let mut encode = Surrogates::default();
+    let mut restore = Surrogates::default();
+    encode.register("SurrogateMockB", |_, _| Ok(a(1))).unwrap();
+    restore
+        .register("SurrogateMockA", |_, _| {
+            Ok(record("SurrogateMockC", vec![]))
+        })
+        .unwrap();
+    for _ in 0..times {
+        round_trip(
+            &graph,
+            root,
+            method,
+            &mut encode,
+            &mut restore,
+            |copy, id| assert_eq!(copy.get(id), Some(&record("SurrogateMockC", vec![]))),
+        );
+    }
+}
+
+fn deserialize_surrogate_pointing_to_itself(method: Method) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("System.Object", vec![]));
+    let mut restore = Surrogates::default();
+    restore
+        .register("System.Object", |id, _| {
+            Ok(record("SurrogateMockJ", vec![Value::Ref(id)]))
+        })
+        .unwrap();
+    round_trip(
+        &graph,
+        root,
+        method,
+        &mut Surrogates::default(),
+        &mut restore,
+        |copy, id| {
+            assert_eq!(
+                copy.get(id),
+                Some(&record("SurrogateMockJ", vec![Value::Ref(id)]))
+            )
+        },
+    );
+}
+
+macro_rules! modes {
+    ($plain:ident, $stamped:ident, $check:ident $(, $argument:expr)*) => {
+        #[test]
+        fn $plain() { $check(Method::default() $(, $argument)*); }
+        #[test]
+        fn $stamped() { $check(Method::new(true, false, false) $(, $argument)*); }
+        mod $plain {
+            use super::*;
+            #[test]
+            fn reader_plain() {
+                $check(Method::new(false, false, true) $(, $argument)*);
+            }
+            #[test]
+            fn reader_stamped() {
+                $check(Method::new(true, false, true) $(, $argument)*);
+            }
+            #[test]
+            fn writer_plain() {
+                $check(Method::new(false, true, false) $(, $argument)*);
+            }
+            #[test]
+            fn writer_stamped() {
+                $check(Method::new(true, true, false) $(, $argument)*);
+            }
+            #[test]
+            fn both_plain() {
+                $check(Method::new(false, true, true) $(, $argument)*);
+            }
+            #[test]
+            fn both_stamped() {
+                $check(Method::new(true, true, true) $(, $argument)*);
+            }
+        }
+    };
+}
+
+modes!(
+    place_read_plain,
+    place_read_stamped,
+    place_object_for_surrogate
+);
+modes!(
+    place_write_plain,
+    place_write_stamped,
+    place_surrogate_for_object
+);
+modes!(
+    place_write_identity_plain,
+    place_write_identity_stamped,
+    place_surrogate_for_object_preserving_identity
+);
+modes!(swap_plain, swap_stamped, do_surrogate_object_swap, 1);
+modes!(
+    swap_twice_plain,
+    swap_twice_stamped,
+    do_surrogate_object_swap,
+    2
+);
+modes!(
+    self_plain,
+    self_stamped,
+    deserialize_surrogate_pointing_to_itself
+);
+
+const C: &str = "SurrogateMockC";
+const D: &str = "SurrogateMockD";
+const E: &str = "SurrogateMockE";
+const H: &str = "SurrogateMockH";
+const IE: &str = "ISurrogateMockE";
+const IG: &str = "ISurrogateMockG";
+const OPEN_F: &str = "SurrogateMockF<>";
+const OPEN_I: &str = "SurrogateMockI<>";
+const F_STRING: &str = "SurrogateMockF<string>";
+const I_STRING: &str = "SurrogateMockI<string>";
+
+fn describe_types(rules: &mut Surrogates<'_>) {
+    rules.describe(D, &[C]).unwrap();
+    rules.describe(E, &[IE]).unwrap();
+    rules.describe(H, &[IE, IG]).unwrap();
+    rules.describe(F_STRING, &[OPEN_F]).unwrap();
+    rules.describe(OPEN_I, &[OPEN_F]).unwrap();
+    rules.describe(I_STRING, &[F_STRING, OPEN_I]).unwrap();
+}
+
+fn empty_case(
+    method: Method,
+    class: &str,
+    encode: &mut Surrogates<'_>,
+    restore: &mut Surrogates<'_>,
+    expected: Object,
+) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record(class, vec![]));
+    round_trip(&graph, root, method, encode, restore, |copy, id| {
+        assert_eq!(copy.get(id), Some(&expected));
+    });
+}
+
+fn match_parent(method: Method, source: &str, target: &str, on_read: bool) {
+    let mut encode = Surrogates::default();
+    let mut restore = Surrogates::default();
+    let rules = if on_read { &mut restore } else { &mut encode };
+    describe_types(rules);
+    rules
+        .register(target, |_, _| Ok(record("SurrogateMockB", vec![])))
+        .unwrap();
+    empty_case(
+        method,
+        source,
+        &mut encode,
+        &mut restore,
+        record("SurrogateMockB", vec![]),
+    );
+}
+
+fn prefer_specific(method: Method) {
+    let mut encode = Surrogates::default();
+    describe_types(&mut encode);
+    encode.register(C, |_, _| Ok(a(1))).unwrap();
+    encode
+        .register(D, |_, _| Ok(record("SurrogateMockB", vec![])))
+        .unwrap();
+    empty_case(
+        method,
+        D,
+        &mut encode,
+        &mut Surrogates::default(),
+        record("SurrogateMockB", vec![]),
+    );
+}
+
+fn prefer_first_interface(method: Method) {
+    let mut encode = Surrogates::default();
+    describe_types(&mut encode);
+    encode
+        .register(IG, |_, _| Ok(Object::String("g".into())))
+        .unwrap();
+    encode
+        .register(IE, |_, _| Ok(Object::String("e".into())))
+        .unwrap();
+    empty_case(
+        method,
+        H,
+        &mut encode,
+        &mut Surrogates::default(),
+        Object::String("g".into()),
+    );
+}
+
+fn generic_case(
+    method: Method,
+    class: &str,
+    value: &str,
+    configure: impl for<'g> FnOnce(&'g Graph, &mut Surrogates<'g>),
+    expected: Option<&str>,
+) {
+    let mut graph = Graph::default();
+    let value = graph.insert(Object::String(value.into()));
+    let root = graph.insert(record(class, vec![Value::Ref(value)]));
+    let mut encode = Surrogates::default();
+    describe_types(&mut encode);
+    configure(&graph, &mut encode);
+    round_trip(
+        &graph,
+        root,
+        method,
+        &mut encode,
+        &mut Surrogates::default(),
+        |copy, id| {
+            let Some(Object::String(result)) = copy.get(id) else {
+                panic!("expected a string");
+            };
+            if let Some(expected) = expected {
+                assert_eq!(result, expected);
+            }
+        },
+    );
+}
+
+fn extract_generic_field(method: Method) {
+    generic_case(
+        method,
+        F_STRING,
+        "test",
+        |graph, encode| {
+            // As in the upstream callback, use the first instance field.
+            encode
+                .register(OPEN_F, move |_, object| {
+                    let Object::Record { fields, .. } = object else {
+                        unreachable!()
+                    };
+                    Ok(graph.get(ref_id(&fields[0])).unwrap().clone())
+                })
+                .unwrap();
+        },
+        None,
+    );
+}
+
+fn prefer_closed_generic(method: Method) {
+    generic_case(
+        method,
+        F_STRING,
+        "test",
+        |_, encode| {
+            encode
+                .register(OPEN_F, |_, _| Ok(Object::String("general".into())))
+                .unwrap();
+            encode
+                .register(F_STRING, |_, _| Ok(Object::String("special".into())))
+                .unwrap();
+        },
+        Some("special"),
+    );
+}
+
+fn match_generic_base(method: Method, also_register_derived: bool) {
+    generic_case(
+        method,
+        I_STRING,
+        "something",
+        |_, encode| {
+            encode
+                .register(OPEN_F, move |_, _| {
+                    Ok(Object::String(
+                        if also_register_derived {
+                            "fail"
+                        } else {
+                            "success"
+                        }
+                        .into(),
+                    ))
+                })
+                .unwrap();
+            if also_register_derived {
+                encode
+                    .register(OPEN_I, |_, _| Ok(Object::String("success".into())))
+                    .unwrap();
+            }
+        },
+        Some("success"),
+    );
+}
+
+fn disable_specific(method: Method) {
+    let mut encode = Surrogates::default();
+    describe_types(&mut encode);
+    encode
+        .register(C, |_, _| Ok(Object::String("fail".into())))
+        .unwrap();
+    encode.disable(D).unwrap();
+    empty_case(
+        method,
+        D,
+        &mut encode,
+        &mut Surrogates::default(),
+        record(D, vec![]),
+    );
+}
+
+modes!(
+    derived_read_plain,
+    derived_read_stamped,
+    match_parent,
+    D,
+    C,
+    true
+);
+modes!(
+    derived_write_plain,
+    derived_write_stamped,
+    match_parent,
+    D,
+    C,
+    false
+);
+modes!(
+    interface_read_plain,
+    interface_read_stamped,
+    match_parent,
+    E,
+    IE,
+    true
+);
+modes!(
+    interface_write_plain,
+    interface_write_stamped,
+    match_parent,
+    E,
+    IE,
+    false
+);
+modes!(specific_plain, specific_stamped, prefer_specific);
+modes!(first_plain, first_stamped, prefer_first_interface);
+modes!(
+    generic_field_plain,
+    generic_field_stamped,
+    extract_generic_field
+);
+modes!(closed_plain, closed_stamped, prefer_closed_generic);
+modes!(
+    generic_base_plain,
+    generic_base_stamped,
+    match_generic_base,
+    false
+);
+modes!(
+    generic_specific_plain,
+    generic_specific_stamped,
+    match_generic_base,
+    true
+);
+modes!(disable_plain, disable_stamped, disable_specific);
+
+fn should_reject_registration_after_write(method: Method) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("System.Object", vec![]));
+    let mut rules = Surrogates::default();
+    let mut writer = ObjectWriter::new(std::io::sink(), &graph, References::Preserve, true)
+        .with_surrogates(&mut rules);
+    if method.write {
+        writer = writer.with_generated_records(CODECS);
+    }
+    if method.stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+    assert_eq!(
+        rules.register("System.Object", |_, _| Ok(record("System.Object", vec![]))),
+        Err(RegistrationClosed)
+    );
+}
+
+fn should_reject_registration_after_read(method: Method) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("System.Object", vec![]));
+    let mut rules = Surrogates::default();
+    round_trip(
+        &graph,
+        root,
+        method,
+        &mut Surrogates::default(),
+        &mut rules,
+        |_, _| {},
+    );
+    assert_eq!(
+        rules.register("System.Object", |_, _| Ok(record("System.Object", vec![]))),
+        Err(RegistrationClosed)
+    );
+}
+
+modes!(
+    registration_after_write_plain,
+    registration_after_write_stamped,
+    should_reject_registration_after_write
+);
+modes!(
+    registration_after_read_plain,
+    registration_after_read_stamped,
+    should_reject_registration_after_read
+);
+
+fn boxed_value_surrogate(method: Method) {
+    fn integer_field(source: &Object) -> i64 {
+        let Object::Record { fields, .. } = source else {
+            panic!("expected surrogate record");
+        };
+        let [Value::Integer(number)] = fields.as_slice() else {
+            panic!("expected one integer field");
+        };
+        *number
+    }
+
+    let mut graph = Graph::default();
+    let original = graph.insert(record("System.Int32", vec![Value::Integer(199)]));
+    let mut encode = Surrogates::default();
+    encode
+        .register("System.Int32", |_, value| {
+            Ok(record(
+                "IntSurrogate",
+                vec![Value::Integer(integer_field(value) + 100)],
+            ))
+        })
+        .unwrap();
+    let mut restore = Surrogates::default();
+    restore
+        .register("IntSurrogate", |_, value| {
+            Ok(record(
+                "System.Int32",
+                vec![Value::Integer(integer_field(value))],
+            ))
+        })
+        .unwrap();
+    round_trip(
+        &graph,
+        original,
+        method,
+        &mut encode,
+        &mut restore,
+        |graph, copy| {
+            assert_eq!(
+                graph.get(copy),
+                Some(&record("System.Int32", vec![Value::Integer(299)]))
+            );
+        },
+    );
+}
+
+modes!(
+    boxed_value_surrogate_plain,
+    boxed_value_surrogate_stamped,
+    boxed_value_surrogate
+);
+
+fn generic_registration_count(method: Method) {
+    const DEFINITION: &str = "ClassToBeSurrogated<>";
+    let mut graph = Graph::default();
+    let elements = [
+        "ClassToBeSurrogated<int>",
+        "ClassToBeSurrogated<float>",
+        "ClassToBeSurrogated<int>",
+    ]
+    .map(|class| Value::Ref(graph.insert(record(class, vec![]))));
+    let root = graph.insert(record("ClassWithGenericSurrogates", elements.to_vec()));
+
+    let mut encode = Surrogates::default();
+    for class in ["ClassToBeSurrogated<int>", "ClassToBeSurrogated<float>"] {
+        encode.describe(class, &[DEFINITION]).unwrap();
+    }
+    encode
+        .register_generic_record(DEFINITION, "SurrogatingClass", |_, _| Ok(Vec::new()))
+        .unwrap();
+    let before = encode.registration_count();
+    round_trip(
+        &graph,
+        root,
+        method,
+        &mut encode,
+        &mut Surrogates::default(),
+        |copy, id| {
+            let Some(Object::Record { class, fields }) = copy.get(id) else {
+                panic!("expected custom object");
+            };
+            assert_eq!(class, "ClassWithGenericSurrogates");
+            assert_eq!(fields.len(), 3);
+            let expected = [
+                "SurrogatingClass<int>",
+                "SurrogatingClass<float>",
+                "SurrogatingClass<int>",
+            ];
+            for (field, expected) in fields.iter().zip(expected) {
+                assert_eq!(copy.get(ref_id(field)), Some(&record(expected, vec![])));
+            }
+        },
+    );
+    assert_eq!(
+        encode.registration_count() - before,
+        if method.write { 2 } else { 0 }
+    );
+}
+
+modes!(
+    generic_registration_count_plain,
+    generic_registration_count_stamped,
+    generic_registration_count
+);
+
+fn place_object_for_surrogate_preserving_identity(method: Method) {
+    let mut graph = Graph::default();
+    let b = graph.insert(record("SurrogateMockB", vec![]));
+    let nested_items = graph.insert(Object::Array(vec![Value::Ref(b)]));
+    let nested = graph.insert(record("List<object>", vec![Value::Ref(nested_items)]));
+    let second = graph.insert(record("SurrogateMockB", vec![]));
+    let items = graph.insert(Object::Array(vec![
+        Value::Ref(b),
+        Value::Ref(nested),
+        Value::Ref(second),
+    ]));
+    let root = graph.insert(record("List<object>", vec![Value::Ref(items)]));
+
+    let counter = std::cell::Cell::new(0);
+    let factory = |_, _: &Object| {
+        let value = counter.get();
+        counter.set(value + 1);
+        Ok(a(value))
+    };
+    let mut probe = Surrogates::default();
+    probe.register("SurrogateMockB", factory).unwrap();
+    let mut restore = Surrogates::default();
+    restore.register("SurrogateMockB", factory).unwrap();
+
+    let mut bytes = Vec::new();
+    let mut writer = ObjectWriter::new(&mut bytes, &graph, References::Preserve, true)
+        .with_restore_prototypes(&mut probe);
+    if method.write {
+        writer = writer.with_generated_records(CODECS);
+    }
+    if method.stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+
+    let mut reader = ObjectReader::new(Cursor::new(bytes), References::Preserve, true)
+        .with_surrogates(&mut restore);
+    if method.read {
+        reader = reader.with_generated_records(CODECS);
+    }
+    if method.stamped {
+        reader = reader.with_type_stamps(STAMPS);
+    }
+    let id = reader.read_object().unwrap();
+    fn list(graph: &Graph, id: ObjectId) -> &[Value] {
+        let Some(Object::Record { class, fields }) = graph.get(id) else {
+            panic!("expected list");
+        };
+        assert_eq!(class, "List<object>");
+        let Some(Object::Array(items)) = graph.get(ref_id(&fields[0])) else {
+            panic!("expected list items");
+        };
+        items
+    }
+    let graph = reader.graph();
+    let outer = list(graph, id);
+    let nested = list(graph, ref_id(&outer[1]));
+    assert_eq!(outer[0], nested[0]);
+    assert_ne!(outer[0], outer[2]);
+    assert_eq!(graph.get(ref_id(&outer[0])), Some(&a(3)));
+    assert_eq!(graph.get(ref_id(&outer[2])), Some(&a(2)));
+    reader.finish().unwrap();
+}
+
+modes!(
+    place_read_identity_plain,
+    place_read_identity_stamped,
+    place_object_for_surrogate_preserving_identity
+);

@@ -5,7 +5,7 @@ use std::{
 
 pub struct Ns16550 {
     pub base: u32,
-    pub source: u32,
+    pub source: Option<u32>,
     pub wide: bool,
     receive: VecDeque<u8>,
     ier: u8,
@@ -18,7 +18,11 @@ pub struct Ns16550 {
 }
 
 impl Ns16550 {
-    pub fn new(base: u32, source: u32, wide: bool) -> Self {
+    pub(crate) fn reset(&mut self) {
+        *self = Self::new(self.base, self.source, self.wide);
+    }
+
+    pub fn new(base: u32, source: Option<u32>, wide: bool) -> Self {
         Self {
             base,
             source,
@@ -34,6 +38,38 @@ impl Ns16550 {
         }
     }
 
+    pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[
+            u64::from(self.base), self.source.map_or(u64::MAX, u64::from), u64::from(self.wide),
+            u64::from(self.fifo), u64::from(self.transmit_interrupt), self.receive.len() as u64,
+        ])?;
+        output.write_all(&[self.ier, self.lcr, self.mcr, self.scratch, self.divisor[0], self.divisor[1]])?;
+        let (first, second) = self.receive.as_slices();
+        output.write_all(first)?;
+        output.write_all(second)
+    }
+
+    pub(crate) fn read_snapshot(&self, input: &mut impl io::Read) -> io::Result<Self> {
+        use crate::snapshot::{invalid, read_bool, read_words};
+        let [base, source, wide, fifo, transmit_interrupt, length] = read_words(input)?;
+        if base != u64::from(self.base) || source != self.source.map_or(u64::MAX, u64::from)
+            || read_bool(wide)? != self.wide || length > 1 << 20
+        {
+            return Err(invalid("invalid NS16550 snapshot configuration or receive buffer"));
+        }
+        let mut registers = [0; 6];
+        input.read_exact(&mut registers)?;
+        let [ier, lcr, mcr, scratch, low, high] = registers;
+        let mut receive = vec![0; length as usize];
+        input.read_exact(&mut receive)?;
+        Ok(Self {
+            base: self.base, source: self.source, wide: self.wide, receive: receive.into(),
+            ier, lcr, mcr, scratch, divisor: [low, high], fifo: read_bool(fifo)?,
+            transmit_interrupt: read_bool(transmit_interrupt)?,
+        })
+    }
+
     pub fn size(&self) -> u64 {
         if self.wide { 32 } else { 8 }
     }
@@ -43,11 +79,10 @@ impl Ns16550 {
         if u64::from(offset) >= self.size() {
             return None;
         }
-        match (self.wide, width) {
-            (false, 1) => Some(offset),
-            (true, 4) if offset & 3 == 0 => Some(offset >> 2),
-            _ => None,
+        if !matches!(width, 1 | 2 | 4) {
+            return None;
         }
+        Some(if self.wide && offset & 3 == 0 { offset >> 2 } else { offset })
     }
 
     pub fn queue_input(&mut self, bytes: Vec<u8>) {
@@ -123,5 +158,25 @@ impl Ns16550 {
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn ns16550_snapshot_preserves_receive_order_and_interrupt_enable() {
+        let mut uart = Ns16550::new(0x1000, Some(4), true);
+        uart.queue_input(vec![0x41, 0x42]);
+        uart.write(1, 1, &mut io::sink()).unwrap();
+        let mut snapshot = Vec::new();
+        uart.save_snapshot(&mut snapshot).unwrap();
+
+        let initial = Ns16550::new(0x1000, Some(4), true);
+        let mut restored = initial.read_snapshot(&mut snapshot.as_slice()).unwrap();
+        assert!(restored.interrupt_pending());
+        assert_eq!((restored.read(0), restored.read(0)), (0x41, 0x42));
+        assert!(!restored.interrupt_pending());
     }
 }

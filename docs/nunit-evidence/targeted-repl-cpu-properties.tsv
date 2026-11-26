@@ -1,0 +1,5 @@
+official_id	nunit_id	rust_test	rust_outcome
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldHandleAlias	0-1004	repl_parser::upstream_verification_tests::should_handle_alias	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldUpdateProperty	0-1005	repl_parser::upstream_verification_tests::should_update_property	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldHandleEscapedOuoteInString	0-1006	repl_parser::upstream_verification_tests::should_handle_escaped_ouote_in_string	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldHandleNoneInProperty	0-1025	repl_parser::upstream_verification_tests::should_handle_none_in_property	passed

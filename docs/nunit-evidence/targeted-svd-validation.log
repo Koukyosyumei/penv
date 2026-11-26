@@ -1,0 +1,21 @@
+$ cargo test --locked --bin penv upstream_nunit::svd
+running 18 tests
+test upstream_nunit::svd::should_throw_on_cpu_without_endianness ... ok
+test upstream_nunit::svd::should_throw_on_device_with_invalid_reset_value ... ok
+test upstream_nunit::svd::should_throw_on_cpu_with_invalid_endianness ... ok
+test upstream_nunit::svd::should_throw_on_device_with_invalid_access ... ok
+test upstream_nunit::svd::should_throw_on_device_with_invalid_size ... ok
+test upstream_nunit::svd::should_throw_on_cluster_without_mandatory_fields ... ok
+test upstream_nunit::svd::should_throw_on_device_with_no_mandatory_fields ... ok
+test upstream_nunit::svd::should_throw_on_device_with_no_peripherals_tag ... ok
+test upstream_nunit::svd::should_throw_on_empty_file ... ok
+test upstream_nunit::svd::should_throw_on_invalid_svd ... ok
+test upstream_nunit::svd::should_throw_on_invalid_xml ... ok
+test upstream_nunit::svd::should_throw_on_nonexisting_file ... ok
+test upstream_nunit::svd::should_throw_on_device_with_not_every_mandatory_field ... ok
+test upstream_nunit::svd::should_throw_on_peripheral_with_not_every_mandatory_field_base_address ... ok
+test upstream_nunit::svd::should_throw_on_peripheral_with_not_every_mandatory_field_name ... ok
+test upstream_nunit::svd::should_throw_on_register_with_not_every_mandatory_field_address_offset ... ok
+test upstream_nunit::svd::should_throw_on_register_without_determined_size_and_reset_value ... ok
+test upstream_nunit::svd::should_throw_on_register_with_not_every_mandatory_field_name ... ok
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1685 filtered out; finished in 0.00s

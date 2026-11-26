@@ -1,0 +1,24 @@
+$ cargo test --locked --bin penv upstream_nunit::migrant_object_stream::open_generated_
+running 21 tests
+test upstream_nunit::migrant_object_stream::open_generated_both::shouldnt_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::open_generated_reader::basic_do_not_preserve ... ok
+test upstream_nunit::migrant_object_stream::open_generated_both::basic_preserve ... ok
+test upstream_nunit::migrant_object_stream::open_generated_both::should_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::open_generated_reader::basic_preserve ... ok
+test upstream_nunit::migrant_object_stream::open_generated_reader::basic_open_stream_weak ... ok
+test upstream_nunit::migrant_object_stream::open_generated_both::should_deserialize_many ... ok
+test upstream_nunit::migrant_object_stream::open_generated_both::should_preserve_weak_references ... ok
+test upstream_nunit::migrant_object_stream::open_generated_both::basic_open_stream_weak ... ok
+test upstream_nunit::migrant_object_stream::open_generated_both::basic_do_not_preserve ... ok
+test upstream_nunit::migrant_object_stream::open_generated_reader::should_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::open_generated_reader::should_deserialize_many ... ok
+test upstream_nunit::migrant_object_stream::open_generated_reader::shouldnt_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::open_generated_writer::basic_do_not_preserve ... ok
+test upstream_nunit::migrant_object_stream::open_generated_reader::should_preserve_weak_references ... ok
+test upstream_nunit::migrant_object_stream::open_generated_writer::basic_preserve ... ok
+test upstream_nunit::migrant_object_stream::open_generated_writer::basic_open_stream_weak ... ok
+test upstream_nunit::migrant_object_stream::open_generated_writer::should_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::open_generated_writer::should_preserve_weak_references ... ok
+test upstream_nunit::migrant_object_stream::open_generated_writer::shouldnt_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::open_generated_writer::should_deserialize_many ... ok
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 1826 filtered out; finished in 0.00s

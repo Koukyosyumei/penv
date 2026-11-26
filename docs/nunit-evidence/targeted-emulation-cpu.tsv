@@ -1,0 +1,6 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(1)	0-1469	upstream_nunit::emulation_serialization::serialize_one_cpu	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(2)	0-1470	upstream_nunit::emulation_serialization::serialize_two_cpus	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(3)	0-1471	upstream_nunit::emulation_serialization::serialize_three_cpus	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(4)	0-1472	upstream_nunit::emulation_serialization::serialize_four_cpus	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SerializationTests.ShouldRememberCpuNames	0-1474	upstream_nunit::emulation_serialization::remember_cpu_names	passed

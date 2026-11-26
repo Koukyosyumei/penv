@@ -118,10 +118,57 @@ fn walk(
             if !csr.permits_page_table(address, WRITE) {
                 return Err(BusError::Denied(va));
             }
-            bus.atomic_update(address, |old| old | update)
+            bus.atomic_update(address, 4, |old| old | update)
                 .map_err(|_| BusError::Denied(va))?;
         }
         return Ok(physical);
     }
     Err(BusError::Page(va))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn separates_supervisor_sum_and_mxr_permissions_in_cached_translations() {
+        const ROOT: u32 = 0x8000_0000;
+        const LEAF: u32 = ROOT + 0x1000;
+        const PAGE: u32 = ROOT + 0x2000;
+        const VA: u32 = 0x4000_0000;
+        const SUM: u32 = 1 << 18;
+        const MXR: u32 = 1 << 19;
+        let mut bus = Bus::new(0x3000).unwrap();
+        for (address, pte) in [
+            (ROOT + (VA >> 22) * 4, ((LEAF >> 12) << 10) | VALID),
+            (
+                LEAF,
+                ((PAGE >> 12) << 10) | VALID | USER | (u32::from(EXECUTE) << 1),
+            ),
+        ] {
+            bus.memory(address, 4)
+                .unwrap()
+                .copy_from_slice(&pte.to_le_bytes());
+        }
+        let mut csr = Csr::default();
+        csr.enable_user_mode();
+        csr.enable_supervisor_mode();
+        csr.access(0x1800_9073, 0x8000_0000 | (ROOT >> 12)).unwrap();
+        csr.access(0x3000_9073, 1 << 11).unwrap();
+        csr.return_from_trap().unwrap();
+        let mut cache = TranslationCache::default();
+        for status in [MXR | SUM, MXR, SUM, 0, MXR | SUM] {
+            csr.access(0x1000_9073, status).unwrap();
+            let result = cache.translate(&mut bus, &csr, VA, READ);
+            if status == MXR | SUM {
+                assert_eq!(result.unwrap(), PAGE);
+            } else {
+                assert!(matches!(result, Err(BusError::Page(VA))));
+            }
+            assert!(matches!(
+                cache.translate(&mut bus, &csr, VA, EXECUTE),
+                Err(BusError::Page(VA))
+            ));
+        }
+    }
 }

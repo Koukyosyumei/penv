@@ -1,0 +1,5 @@
+mach create
+machine LoadPlatformDescription @platforms/boards/stm32f072b_discovery.repl
+sysbus LoadHEX @https://dl.antmicro.com/projects/renode/stm32f072b_disco--zephyr-hello_world.hex-s_34851-4e97c68491cf652d0becd549526cd3df56e8ae66
+sysbus.cpu VectorTableOffset 0x08000000
+waitForUart sysbus.usart1 "Hello World! stm32f072b_disco"

@@ -1,0 +1,2 @@
+official_id	nunit_id	rust_test	rust_outcome
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldNotDetectCycleInPerCoreRegistration	0-1060	repl_parser::upstream_verification_tests::should_not_detect_cycle_in_per_core_registration	passed

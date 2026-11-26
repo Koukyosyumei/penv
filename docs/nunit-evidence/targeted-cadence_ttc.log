@@ -1,0 +1,9 @@
+$ cargo test --locked --bin penv upstream_nunit::cadence_ttc
+running 6 tests
+test upstream_nunit::cadence_ttc::should_count_down_in_interval_mode ... ok
+test upstream_nunit::cadence_ttc::should_count_down_in_overflow_mode ... ok
+test upstream_nunit::cadence_ttc::should_count_independently ... ok
+test upstream_nunit::cadence_ttc::should_count_up_in_interval_mode ... ok
+test upstream_nunit::cadence_ttc::should_count_up_in_overflow_mode ... ok
+test upstream_nunit::cadence_ttc::should_reset_counter ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1547 filtered out; finished in 0.00s

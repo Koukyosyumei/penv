@@ -1,0 +1,8 @@
+$ cargo test --locked --bin penv upstream_nunit::machine_registry
+running 5 tests
+test upstream_nunit::machine_registry::should_handle_managed_threads ... ok
+test upstream_nunit::machine_registry::should_throw_on_null_or_empty_peripheral_name ... ok
+test upstream_nunit::machine_registry::should_find_peripheral_by_path_when_there_are_two ... ok
+test upstream_nunit::machine_registry::should_throw_on_registering_another_peripheral_with_the_same_name ... ok
+test upstream_nunit::machine_registry::should_find_peripheral_by_path ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1612 filtered out; finished in 0.00s

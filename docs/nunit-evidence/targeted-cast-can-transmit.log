@@ -1,0 +1,10 @@
+$ cargo test --locked --bin penv upstream_nunit::cast_canctrl
+running 7 tests
+test upstream_nunit::cast_canctrl::abort_queued_secondary_frames_without_transmitting ... ok
+test upstream_nunit::cast_canctrl::discard_secondary_requests_on_empty_buffer ... ok
+test upstream_nunit::cast_canctrl::documented_registers_and_reset_values ... ok
+test upstream_nunit::cast_canctrl::access_counter_with_bytes ... ok
+test upstream_nunit::cast_canctrl::accept_tsnext_and_tsone_in_same_double_word_write ... ok
+test upstream_nunit::cast_canctrl::keep_primary_buffer_when_writing_secondary_buffer ... ok
+test upstream_nunit::cast_canctrl::transmit_full_length_fd_frame ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3860 filtered out; finished in 0.00s

@@ -1,0 +1,5 @@
+$ cargo test --locked --bin penv upstream_nunit::emulation_serialization
+running 2 tests
+test upstream_nunit::emulation_serialization::serialize_gpios ... ok
+test upstream_nunit::emulation_serialization::serialize_memory ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3882 filtered out; finished in 1.52s

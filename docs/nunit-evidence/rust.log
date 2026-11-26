@@ -1,0 +1,1237 @@
+   Compiling penv v0.1.0 (/home/ec2-user/Dev/penv-renode-nunit)
+warning: variant `Report` is never constructed
+   --> src/bus.rs:177:5
+    |
+175 | pub enum UnhandledAccess {
+    |          --------------- variant in this enum
+176 |     DoNotReport,
+177 |     Report,
+    |     ^^^^^^
+    |
+    = note: `UnhandledAccess` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `name`, `offset`, `width`, and `value` are never read
+   --> src/bus.rs:310:5
+    |
+309 | struct RamIoRead {
+    |        --------- fields in this struct
+310 |     name: String,
+    |     ^^^^
+311 |     offset: usize,
+    |     ^^^^^^
+312 |     width: usize,
+    |     ^^^^^
+313 |     value: u32,
+    |     ^^^^^
+
+warning: fields `0` and `1` are never read
+   --> src/bus.rs:318:13
+    |
+318 |     Write32(u32, u32),
+    |     ------- ^^^  ^^^
+    |     |
+    |     fields in this variant
+    |
+    = note: `CpuHook` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+help: consider changing the fields to be of unit type to suppress this warning while preserving the field numbering, or remove the fields
+    |
+318 -     Write32(u32, u32),
+318 +     Write32((), ()),
+    |
+
+warning: field `0` is never read
+   --> src/bus.rs:319:9
+    |
+319 |     Log(String),
+    |     --- ^^^^^^
+    |     |
+    |     field in this variant
+    |
+    = note: `CpuHook` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+    |
+319 -     Log(String),
+319 +     Log(()),
+    |
+
+warning: fields `mock_byte_peripherals`, `thumb_block_pc_log`, `itstate_log_hook`, and `h7_sdmmc_names` are never read
+   --> src/bus.rs:363:5
+    |
+348 | pub struct Bus {
+    |            --- fields in this struct
+...
+363 |     mock_byte_peripherals: Vec<(std::ops::Range<u64>, std::collections::HashMap<u32, u8>)>,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+...
+386 |     pub thumb_block_pc_log: bool,
+    |         ^^^^^^^^^^^^^^^^^^
+387 |     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
+    |         ^^^^^^^^^^^^^^^^
+...
+486 |     h7_sdmmc_names: Vec<String>,
+    |     ^^^^^^^^^^^^^^
+
+warning: function `invalidate_reservations` is never used
+   --> src/bus.rs:584:4
+    |
+584 | fn invalidate_reservations(reservations: &mut [Option<u32>], written: std::ops::Range<u64>) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> src/bus.rs:1017:12
+     |
+ 713 | impl Bus {
+     | -------- methods in this implementation
+...
+1017 |     pub fn write_ram_io_logs(&mut self, pc: u32, output: &mut impl Write) -> Result<(), String> {
+     |            ^^^^^^^^^^^^^^^^^
+...
+1652 |     pub(crate) fn tag_with_policy(
+     |                   ^^^^^^^^^^^^^^^
+...
+2637 |     pub fn nrf_uart_irq(&mut self, name: &str, level: Option<bool>) -> Result<bool, String> {
+     |            ^^^^^^^^^^^^
+...
+2996 |     pub fn map_trivial_uart(&mut self, base: u32) -> Result<(), String> {
+     |            ^^^^^^^^^^^^^^^^
+...
+3674 |     pub fn add_thumb_read_watchpoint(&mut self, address: u32, width: usize) {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+5014 |     pub fn map_command_error_peripheral(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+5364 |     pub fn guest_memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
+     |            ^^^^^^^^^^^^
+...
+5608 |     pub fn apply_cpu_hooks(&mut self, pc: u32, output: &mut impl Write) -> Result<bool, BusError> {
+     |            ^^^^^^^^^^^^^^^
+...
+5718 |     pub fn take_thumb_data_fault(&mut self) -> Option<u32> {
+     |            ^^^^^^^^^^^^^^^^^^^^^
+...
+5740 |     pub fn read_cortex_m_ram_or_mock_word(&self, address: u32) -> Result<u32, BusError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+6487 |     pub fn write_cortex_m_exception_stack(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `zeroed` is never used
+  --> src/constant_mmio.rs:52:12
+   |
+14 | impl ConstantMmio {
+   | ----------------- associated function in this implementation
+...
+52 |     pub fn zeroed(base: u32, size: u32) -> Self {
+   |            ^^^^^^
+
+warning: field `uart_line_start` is never read
+   --> src/machine.rs:142:5
+    |
+126 | pub struct Machine {
+    |            ------- field in this struct
+...
+142 |     uart_line_start: bool,
+    |     ^^^^^^^^^^^^^^^
+
+warning: variant `RetiredAndPaused` is never constructed
+   --> src/machine.rs:248:5
+    |
+246 | pub(crate) enum Step {
+    |                 ---- variant in this enum
+247 |     Retired,
+248 |     RetiredAndPaused,
+    |     ^^^^^^^^^^^^^^^^
+
+warning: methods `arm_frame_waits` and `execute_hart` are never used
+    --> src/machine.rs:946:12
+     |
+ 350 | impl Machine {
+     | ------------ methods in this implementation
+...
+ 946 |     pub fn arm_frame_waits(&mut self, trigger: Rc<Cell<bool>>, budget: u64) {
+     |            ^^^^^^^^^^^^^^^
+...
+1492 |     fn execute_hart(&mut self, index: usize, output: &mut impl Write) -> Result<Step, String> {
+     |        ^^^^^^^^^^^^
+
+warning: struct `StepUart` is never constructed
+    --> src/machine.rs:1511:8
+     |
+1511 | struct StepUart<'a, W> {
+     |        ^^^^^^^^
+
+warning: method `initialize_reset_pc` is never used
+    --> src/machine.rs:1829:12
+     |
+1534 | impl Hart {
+     | --------- method in this implementation
+...
+1829 |     pub fn initialize_reset_pc(&mut self) {
+     |            ^^^^^^^^^^^^^^^^^^^
+
+warning: function `upstream_rv32_writes_invalidate_other_harts_reservations` is never used
+    --> src/machine.rs:3913:8
+     |
+3913 |     fn upstream_rv32_writes_invalidate_other_harts_reservations() {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `load_parsed` is never used
+   --> src/network_repl.rs:404:15
+    |
+404 | pub(crate) fn load_parsed(path: &Path, root: &Path) -> Result<Machine, String> {
+    |               ^^^^^^^^^^^
+
+warning: method `set_uart_irq` is never used
+   --> src/nrf52840.rs:766:12
+    |
+158 | impl Peripheral {
+    | --------------- method in this implementation
+...
+766 |     pub fn set_uart_irq(&mut self, level: bool) {
+    |            ^^^^^^^^^^^^
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:39:11
+   |
+39 |     Pause(bool),
+   |     ----- ^^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+39 -     Pause(bool),
+39 +     Pause(()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:40:10
+   |
+40 |     Halt(bool),
+   |     ---- ^^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+40 -     Halt(bool),
+40 +     Halt(()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:41:10
+   |
+41 |     Step(u64),
+   |     ---- ^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+41 -     Step(u64),
+41 +     Step(()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:43:27
+   |
+43 |     RequireSynchronizedPc(bool),
+   |     --------------------- ^^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+43 -     RequireSynchronizedPc(bool),
+43 +     RequireSynchronizedPc(()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:44:35
+   |
+44 |     RequireSingleInstructionBlock(u32),
+   |     ----------------------------- ^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+44 -     RequireSingleInstructionBlock(u32),
+44 +     RequireSingleInstructionBlock(()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:45:12
+   |
+45 |     Read32(u32),
+   |     ------ ^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+45 -     Read32(u32),
+45 +     Read32(()),
+   |
+
+warning: fields `0` and `1` are never read
+  --> src/nrf_monitor.rs:46:20
+   |
+46 |     ReadWatchpoint(u32, usize),
+   |     -------------- ^^^  ^^^^^
+   |     |
+   |     fields in this variant
+   |
+help: consider changing the fields to be of unit type to suppress this warning while preserving the field numbering, or remove the fields
+   |
+46 -     ReadWatchpoint(u32, usize),
+46 +     ReadWatchpoint((), ()),
+   |
+
+warning: fields `0` and `1` are never read
+  --> src/nrf_monitor.rs:47:11
+   |
+47 |     Clock(String, bool),
+   |     ----- ^^^^^^  ^^^^
+   |     |
+   |     fields in this variant
+   |
+help: consider changing the fields to be of unit type to suppress this warning while preserving the field numbering, or remove the fields
+   |
+47 -     Clock(String, bool),
+47 +     Clock((), ()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:48:11
+   |
+48 |     Reset(crate::machine::CpuResetKind),
+   |     ----- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+48 -     Reset(crate::machine::CpuResetKind),
+48 +     Reset(()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:49:14
+   |
+49 |     ResetLog(String),
+   |     -------- ^^^^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+49 -     ResetLog(String),
+49 +     ResetLog(()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:53:16
+   |
+53 |     Unregister(String),
+   |     ---------- ^^^^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+53 -     Unregister(String),
+53 +     Unregister(()),
+   |
+
+warning: fields `0` and `1` are never read
+  --> src/nrf_monitor.rs:54:12
+   |
+54 |     Bridge(String, String),
+   |     ------ ^^^^^^  ^^^^^^
+   |     |
+   |     fields in this variant
+   |
+help: consider changing the fields to be of unit type to suppress this warning while preserving the field numbering, or remove the fields
+   |
+54 -     Bridge(String, String),
+54 +     Bridge((), ()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:55:21
+   |
+55 |     RemoveConnector(String),
+   |     --------------- ^^^^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+55 -     RemoveConnector(String),
+55 +     RemoveConnector(()),
+   |
+
+warning: field `0` is never read
+  --> src/nrf_monitor.rs:59:10
+   |
+59 |     Read(String),
+   |     ---- ^^^^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+59 -     Read(String),
+59 +     Read(()),
+   |
+
+warning: fields `0` and `1` are never read
+  --> src/nrf_monitor.rs:60:9
+   |
+60 |     Set(String, bool),
+   |     --- ^^^^^^  ^^^^
+   |     |
+   |     fields in this variant
+   |
+help: consider changing the fields to be of unit type to suppress this warning while preserving the field numbering, or remove the fields
+   |
+60 -     Set(String, bool),
+60 +     Set((), ()),
+   |
+
+warning: function `map_gpio_attachment` is never used
+   --> src/platform/nrf52840.rs:662:15
+    |
+662 | pub(super) fn map_gpio_attachment(
+    |               ^^^^^^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+   --> src/nvic.rs:290:12
+    |
+124 | impl Nvic {
+    | --------- methods in this implementation
+...
+290 |     pub fn fpu_access(&self) -> bool {
+    |            ^^^^^^^^^^
+...
+351 |     pub fn take_event(&mut self) -> bool {
+    |            ^^^^^^^^^^
+...
+421 |     pub fn enter_lockup(&mut self) {
+    |            ^^^^^^^^^^^^
+...
+425 |     pub fn leave_lockup(&mut self) {
+    |            ^^^^^^^^^^^^
+...
+429 |     pub fn ignores_negative_priority_data_fault(&self) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+433 |     pub fn record_stacking_fault(&mut self) {
+    |            ^^^^^^^^^^^^^^^^^^^^^
+...
+437 |     pub fn record_unstacking_fault(&mut self) {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+441 |     pub fn record_lazy_fault(&mut self) {
+    |            ^^^^^^^^^^^^^^^^^
+...
+445 |     pub fn pend_hardfault(&mut self) {
+    |            ^^^^^^^^^^^^^^
+...
+449 |     pub fn take_pending_hardfault(&mut self) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+453 |     pub fn lazy_fp_enabled(&self) -> bool {
+    |            ^^^^^^^^^^^^^^^
+...
+457 |     pub fn reserve_lazy_fp(&mut self, address: u32, hardfault_ready: bool) {
+    |            ^^^^^^^^^^^^^^^
+...
+464 |     pub fn clear_lazy_fp(&mut self) {
+    |            ^^^^^^^^^^^^^
+...
+470 |     pub fn record_vector_fault(&mut self) {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+474 |     pub fn record_instruction_fault(&mut self, invalid_state: bool) {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+478 |     pub fn record_fault(&mut self, address: Option<u32>) {
+    |            ^^^^^^^^^^^^
+...
+487 |     pub fn fault_enabled(&self, exception: u8) -> bool {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `BusPoint` is never constructed
+   --> src/platform.rs:140:8
+    |
+140 | struct BusPoint<'a> {
+    |        ^^^^^^^^
+
+warning: function `conditional_bus_point` is never used
+   --> src/platform.rs:145:4
+    |
+145 | fn conditional_bus_point(entry: &Entry) -> Result<Option<BusPoint<'_>>, String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_bus_point` is never used
+   --> src/platform.rs:189:4
+    |
+189 | fn validate_bus_point(
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `apply_overrides` is never used
+ --> src/platform/nrf52840.rs:8:15
+  |
+8 | pub(super) fn apply_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
+  |               ^^^^^^^^^^^^^^^
+
+warning: function `acceleration` is never used
+  --> src/platform/nrf52840.rs:41:4
+   |
+41 | fn acceleration(entry: &Entry) -> Result<[i16; 3], String> {
+   |    ^^^^^^^^^^^^
+
+warning: function `lis2ds12_config` is never used
+  --> src/platform/nrf52840.rs:57:15
+   |
+57 | pub(super) fn lis2ds12_config(
+   |               ^^^^^^^^^^^^^^^
+
+warning: function `validate_bme280` is never used
+   --> src/platform/nrf52840.rs:111:15
+    |
+111 | pub(super) fn validate_bme280(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    |               ^^^^^^^^^^^^^^^
+
+warning: function `validate_twi_target` is never used
+   --> src/platform/nrf52840.rs:116:4
+    |
+116 | fn validate_twi_target(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `bmp180_config` is never used
+   --> src/platform/nrf52840.rs:132:15
+    |
+132 | pub(super) fn bmp180_config(entry: &Entry, entries: &[Entry]) -> Result<(f64, u32), String> {
+    |               ^^^^^^^^^^^^^
+
+warning: function `lsm303_config` is never used
+   --> src/platform/nrf52840.rs:154:15
+    |
+154 | pub(super) fn lsm303_config(
+    |               ^^^^^^^^^^^^^
+
+warning: function `lsm330_config` is never used
+   --> src/platform/nrf52840.rs:210:15
+    |
+210 | pub(super) fn lsm330_config(entry: &Entry, entries: &[Entry]) -> Result<([f64; 3], bool), String> {
+    |               ^^^^^^^^^^^^^
+
+warning: function `camera_routes` is never used
+   --> src/platform/nrf52840.rs:230:15
+    |
+230 | pub(super) fn camera_routes<'a>(
+    |               ^^^^^^^^^^^^^
+
+warning: function `validate_lsm9ds1` is never used
+   --> src/platform/nrf52840.rs:263:15
+    |
+263 | pub(super) fn validate_lsm9ds1(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    |               ^^^^^^^^^^^^^^^^
+
+warning: function `validate_adxl` is never used
+   --> src/platform/nrf52840.rs:268:15
+    |
+268 | pub(super) fn validate_adxl(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    |               ^^^^^^^^^^^^^
+
+warning: function `spi_cs` is never used
+   --> src/platform/nrf52840.rs:285:4
+    |
+285 | fn spi_cs(entry: &Entry, entries: &[Entry]) -> Result<(u32, u32), String> {
+    |    ^^^^^^
+
+warning: function `spi_cs_line` is never used
+   --> src/platform/nrf52840.rs:289:4
+    |
+289 | fn spi_cs_line(entry: &Entry, entries: &[Entry], line: u32) -> Result<(u32, u32), String> {
+    |    ^^^^^^^^^^^
+
+warning: function `map_aliases` is never used
+   --> src/platform/nrf52840.rs:312:15
+    |
+312 | pub(super) fn map_aliases(entry: &Entry, bus: &mut Bus, size: usize) -> Result<(), String> {
+    |               ^^^^^^^^^^^
+
+warning: function `map_peripheral` is never used
+   --> src/platform/nrf52840.rs:335:15
+    |
+335 | pub(super) fn map_peripheral(
+    |               ^^^^^^^^^^^^^^
+
+warning: function `init_arguments` is never used
+   --> src/platform/nrf52840.rs:573:4
+    |
+573 | fn init_arguments<'a>(entry: &'a Entry, command: &str) -> Result<Vec<u32>, String> {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `mux_slave_address` is never used
+   --> src/platform/nrf52840.rs:588:4
+    |
+588 | fn mux_slave_address<'a>(entry: &'a Entry, entries: &[Entry]) -> Result<(&'a str, u32), String> {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: function `validate_mux_slave` is never used
+   --> src/platform/nrf52840.rs:603:15
+    |
+603 | pub(super) fn validate_mux_slave(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_mux` is never used
+   --> src/platform/nrf52840.rs:608:15
+    |
+608 | pub(super) fn validate_mux(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    |               ^^^^^^^^^^^^
+
+warning: function `spi_mux_ports` is never used
+   --> src/platform/nrf52840.rs:618:4
+    |
+618 | fn spi_mux_ports(entry: &Entry, entries: &[Entry]) -> Result<Vec<SpiMuxPort>, String> {
+    |    ^^^^^^^^^^^^^
+
+warning: function `validate_spi_loopback` is never used
+   --> src/platform/nrf52840.rs:651:15
+    |
+651 | pub(super) fn validate_spi_loopback(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    |               ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `map_gpio` is never used
+   --> src/platform/nrf52840.rs:733:15
+    |
+733 | pub(super) fn map_gpio(entry: &Entry, entries: &[Entry], bus: &mut Bus) -> Result<(), String> {
+    |               ^^^^^^^^
+
+warning: function `map_tags` is never used
+   --> src/platform/nrf52840.rs:767:15
+    |
+767 | pub(super) fn map_tags(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
+    |               ^^^^^^^^
+
+warning: field `alias` is never read
+  --> src/repl_parser.rs:29:5
+   |
+25 | struct Entry {
+   |        ----- field in this struct
+...
+29 |     alias: Option<String>,
+   |     ^^^^^
+   |
+   = note: `Entry` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: methods `sysbus`, `sized_sysbus_address`, and `address` are never used
+  --> src/repl_parser.rs:46:19
+   |
+36 | impl Entry {
+   | ---------- methods in this implementation
+...
+46 |     pub(crate) fn sysbus(&self) -> Result<Option<u32>, String> {
+   |                   ^^^^^^
+...
+61 |     pub(crate) fn sized_sysbus_address(&self, size: u32) -> Result<u32, String> {
+   |                   ^^^^^^^^^^^^^^^^^^^^
+...
+69 |     fn address(&self) -> Result<u32, String> {
+   |        ^^^^^^^
+
+warning: constant `FEATURES` is never used
+  --> src/semihosting.rs:36:7
+   |
+36 | const FEATURES: &[u8] = b"SHFB\x03";
+   |       ^^^^^^^^
+
+warning: variants `Console`, `Features`, and `File` are never constructed
+  --> src/semihosting.rs:39:5
+   |
+38 | enum Descriptor {
+   |      ---------- variants in this enum
+39 |     Console(u32),
+   |     ^^^^^^^
+40 |     Features(usize),
+   |     ^^^^^^^^
+41 |     File(File),
+   |     ^^^^
+
+warning: fields `program_arguments`, `working_directory`, and `temporary_files_directory` are never read
+  --> src/semihosting.rs:48:9
+   |
+45 | pub struct Semihosting {
+   |            ----------- fields in this struct
+...
+48 |     pub program_arguments: String,
+   |         ^^^^^^^^^^^^^^^^^
+49 |     pub working_directory: Option<PathBuf>,
+   |         ^^^^^^^^^^^^^^^^^
+50 |     pub temporary_files_directory: Option<String>,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `file_path`, `open_file`, `temporary_name`, `ensure_temporary_directory`, and `call` are never used
+   --> src/semihosting.rs:72:8
+    |
+ 59 | impl Semihosting {
+    | ---------------- methods in this implementation
+...
+ 72 |     fn file_path(&self, name: &[u8]) -> io::Result<PathBuf> {
+    |        ^^^^^^^^^
+...
+100 |     fn open_file(&self, name: &[u8], mode: u32) -> io::Result<File> {
+    |        ^^^^^^^^^
+...
+116 |     fn temporary_name(&self) -> Option<&str> {
+    |        ^^^^^^^^^^^^^^
+...
+122 |     fn ensure_temporary_directory(&mut self) -> io::Result<&str> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+176 |     pub fn call(
+    |            ^^^^
+
+warning: variant `FindMemoryBytes` is never constructed
+   --> src/simulation.rs:153:5
+    |
+ 28 | pub enum Action {
+    |          ------ variant in this enum
+...
+153 |     FindMemoryBytes {
+    |     ^^^^^^^^^^^^^^^
+
+warning: associated function `for_nrf` is never used
+  --> src/stm32_gpio_board.rs:11:12
+   |
+10 | impl GpioLed {
+   | ------------ associated function in this implementation
+11 |     pub fn for_nrf(name: String, parent: Option<String>, invert: bool) -> Self {
+   |            ^^^^^^^
+
+warning: variant `Semihosting` is never constructed
+  --> src/thumb.rs:83:5
+   |
+79 | pub enum ThumbStep {
+   |          --------- variant in this enum
+...
+83 |     Semihosting(crate::semihosting::Exit),
+   |     ^^^^^^^^^^^
+   |
+   = note: `ThumbStep` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `mask` and `value` are never read
+  --> src/thumb/opcode_counter.rs:9:5
+   |
+ 7 | struct Counter {
+   |        ------- fields in this struct
+ 8 |     name: String,
+ 9 |     mask: u32,
+   |     ^^^^
+10 |     value: u32,
+   |     ^^^^^
+
+warning: method `record` is never used
+  --> src/thumb/opcode_counter.rs:45:12
+   |
+14 | impl OpcodeCounters {
+   | ------------------- method in this implementation
+...
+45 |     pub fn record(&mut self, opcode: u32) {
+   |            ^^^^^^
+
+warning: methods `is_empty` and `emit` are never used
+   --> src/thumb/opcode_counter.rs:168:12
+    |
+163 | impl OpcodeLogHooks {
+    | ------------------- methods in this implementation
+...
+168 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+172 |     pub fn emit(
+    |            ^^^^
+
+warning: fields `path` and `binary` are never read
+ --> src/thumb/trace.rs:8:9
+  |
+7 | pub struct TraceConfig {
+  |            ----------- fields in this struct
+8 |     pub path: PathBuf,
+  |         ^^^^
+9 |     pub binary: bool,
+  |         ^^^^^^
+
+warning: field `binary` is never read
+  --> src/thumb/trace.rs:26:5
+   |
+24 | pub struct Trace {
+   |            ----- field in this struct
+25 |     output: BufWriter<File>,
+26 |     binary: bool,
+   |     ^^^^^^
+
+warning: associated items `create`, `record`, and `write_record` are never used
+  --> src/thumb/trace.rs:30:12
+   |
+29 | impl Trace {
+   | ---------- associated items in this implementation
+30 |     pub fn create(path: &Path, binary: bool) -> Result<Self, String> {
+   |            ^^^^^^
+...
+42 |     pub fn record(&mut self, address: u32, opcode: u32, wide: bool) -> Result<(), String> {
+   |            ^^^^^^
+...
+47 |     fn write_record(&mut self, address: u32, opcode: u32, wide: bool) -> std::io::Result<()> {
+   |        ^^^^^^^^^^^^
+
+warning: unused `Result` that must be used
+   --> src/stm32_uart.rs:706:9
+    |
+706 |         bus.queue_uart_input(b"A".to_vec());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: use `let _ = ...` to ignore the resulting value
+    |
+706 |         let _ = bus.queue_uart_input(b"A".to_vec());
+    |         +++++++
+
+warning: `penv` (bin "penv" test) generated 76 warnings (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
+     Running unittests src/main.rs (target/debug/build/penv/ef98090358d6baa7/out/penv-ef98090358d6baa7)
+
+running 422 tests
+test bus::gpio_connector_tests::upstream_gpio_external_removal_disconnects_source_endpoint ... ok
+test bus::gpio_connector_tests::upstream_gpio_source_machine_disposal_preserves_external_destination ... ok
+test bus::gpio_connector_tests::upstream_gpio_source_unregister_preserves_external_destination ... ok
+test bus::memory_segment_cases::upstream_find_byte_pattern ... ok
+test bus::memory_segment_cases::upstream_overlapping_write ... ok
+test bus::memory_segment_cases::upstream_partial_write_at_beginning ... ok
+test bus::memory_segment_cases::upstream_partial_write_at_end ... ok
+test bus::memory_segment_cases::upstream_read_bytes_both_memory ... ok
+test bus::memory_segment_cases::upstream_read_bytes_both_peripherals ... ok
+test bus::memory_segment_cases::upstream_read_bytes_memory_peripheral ... ok
+test bus::memory_segment_cases::upstream_read_bytes_peripheral_memory ... ok
+test bus::memory_segment_cases::upstream_write_to_hole ... ok
+test bus::memory_segment_cases::upstream_write_to_memory_segment ... ok
+test bus::tests::renode_systembus_propagates_peripheral_command_error_identity ... ok
+test bus::unhandled_access_cases::upstream_default_unmapped_read_returns_zero ... ok
+test bus::unhandled_access_cases::upstream_preserve_exception_when_splitting_tag ... ok
+test bus::unhandled_access_cases::upstream_tag_exception_reporting_disabled ... ok
+test bus::unhandled_access_cases::upstream_tag_forces_exception ... ok
+test bus::unhandled_access_cases::upstream_tag_without_exception ... ok
+test bus::unhandled_access_cases::upstream_tagged_throw_if_not_tagged ... ok
+test bus::unhandled_access_cases::upstream_unmapped_throw_exception ... ok
+test bus::unhandled_access_cases::upstream_unmapped_throw_if_not_tagged ... ok
+test crc::tests::renode_crc_16 ... ok
+test crc::tests::renode_crc_16_ccitt ... ok
+test crc::tests::renode_crc_31_philips ... ok
+test crc::tests::renode_crc_32 ... ok
+test crc::tests::renode_crc_32_bzip ... ok
+test crc::tests::renode_crc_32_jam ... ok
+test crc::tests::renode_crc_32_mpeg2 ... ok
+test crc::tests::renode_crc_32_posix ... ok
+test crc::tests::renode_crc_32_sata ... ok
+test crc::tests::renode_crc_7 ... ok
+test crc::tests::renode_crc_8 ... ok
+test crc::tests::renode_crc_calculates_multiple_updates ... ok
+test crc::tests::renode_crc_handles_independent_reflections ... ok
+test crc::tests::renode_crc_initializes_named_polynomial_configurations ... ok
+test crc::tests::renode_crc_rejects_invalid_configuration ... ok
+test ft5336::tests::inverted_test ... ok
+test ft5336::tests::normal_test ... ok
+test ft5336::tests::rotated_inverted_test ... ok
+test ft5336::tests::rotated_test ... ok
+test nrf52840::gpio_line::tests::upstream_gpio_connects_bounded_receiver ... ok
+test nrf52840::gpio_line::tests::upstream_gpio_endpoints_are_empty_when_not_connected ... ok
+test nrf52840::gpio_line::tests::upstream_gpio_propagates_connected_endpoint ... ok
+test nrf52840::gpio_line::tests::upstream_gpio_rejects_illegal_input_number ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_local_receiver ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_multi_irq ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_multiplexed_groups ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_simple ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_simple_multiplexed ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_attribute_and_non_identifier_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_empty_statement_and_one_attribute_in_braces_with_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_no_attrbutes_and_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_one_attribute_in_braces_with_multiple_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_two_attributes_and_non_identifier_in_braces_and_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_two_attributes_in_braces_with_trailing_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_multiple_registration_points_with_non_identifier_in_braces_with_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_in_braces_and_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_registration_point_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_registration_point_in_braces_with_leading_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_registration_point_in_braces_with_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_with_with_multiple_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_not_parse_dict_with_comma ... ok
+test repl_parser::upstream_parser_tests::should_not_parse_dict_with_missing_closing_brace ... ok
+test repl_parser::upstream_parser_tests::should_not_parse_dict_with_missing_colon ... ok
+test repl_parser::upstream_parser_tests::should_not_parse_dict_with_missing_separator ... ok
+test repl_parser::upstream_parser_tests::should_parse_bool ... ok
+test repl_parser::upstream_parser_tests::should_parse_dict_with_trailing_separator ... ok
+test repl_parser::upstream_parser_tests::should_parse_empty_dict ... ok
+test repl_parser::upstream_parser_tests::should_parse_empty_file ... ok
+test repl_parser::upstream_parser_tests::should_parse_empty_list ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_all_attributes ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_many_attributes_with_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_many_registration_points ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_many_registration_points_with_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_no_attrbutes ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_one_attribute ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_one_attribute_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_one_attribute_in_braces_with_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_range_registration_point ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_shorthand_enum_value ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_simple_registration_info ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_string_registration_point ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_two_attributes ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_two_attributes_in_braces_and_all_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_two_attributes_in_braces_and_one_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_parse_example ... ok
+test repl_parser::upstream_parser_tests::should_parse_init_attribute_with_more_lines ... ok
+test repl_parser::upstream_parser_tests::should_parse_init_attribute_with_one_line ... ok
+test repl_parser::upstream_parser_tests::should_parse_init_attribute_with_semicolon_in_quotes ... ok
+test repl_parser::upstream_parser_tests::should_parse_list_of_numbers_with_trailing_comma ... ok
+test repl_parser::upstream_parser_tests::should_parse_list_with_inline_object ... ok
+test repl_parser::upstream_parser_tests::should_parse_list_with_mixed_simple_values ... ok
+test repl_parser::upstream_parser_tests::should_parse_local_and_non_local_entry ... ok
+test repl_parser::upstream_parser_tests::should_parse_nested_lists ... ok
+test repl_parser::upstream_parser_tests::should_parse_object_value ... ok
+test repl_parser::upstream_parser_tests::should_parse_simple_dict ... ok
+test repl_parser::upstream_parser_tests::should_parse_simple_entry ... ok
+test repl_parser::upstream_parser_tests::should_parse_single_registration_point_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_parse_single_registration_point_in_braces_with_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_parse_string_with_escaped_backslashes ... ok
+test repl_parser::upstream_parser_tests::should_parse_two_entries ... ok
+test repl_parser::upstream_parser_tests::should_parse_two_short_entries ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_and_entry ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry2 ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry3 ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry4 ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry5 ... ok
+test repl_parser::upstream_parser_tests::should_parse_with_mixed_line_endings ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_beginning_line_comment ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_correct_line_comment ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_empty_lines_at_the_end_of_source ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_initial_indent ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_multiline_comments ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_multiline_comments_in_one_line ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_multiline_comments_within_braces ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_text_on_the_first_line ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_line_comments_and_strings ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_multiline_comment_closes_before_end_of_line ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_not_process_indent_in_braces ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_brace_in_string ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_double_dedent ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_double_dedent_at_the_end_of_file ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_empty_file ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_simple_file ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_two_lines_with_no_indent ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_two_lines_with_no_indent_and_separation ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_single_line_multiline_comment ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_uncorrect_line_comment ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_unterminated_string ... ok
+test repl_parser::upstream_using_tests::backslash_should_not_be_path_separator_on_unix ... ok
+test repl_parser::upstream_using_tests::should_fail_on_directly_recurring_usings ... ok
+test repl_parser::upstream_using_tests::should_fail_on_duplicate_using_entry ... ok
+test repl_parser::upstream_using_tests::should_fail_on_non_existing_using_file ... ok
+test repl_parser::upstream_using_tests::should_fail_on_recurring_usings ... ok
+test repl_parser::upstream_using_tests::should_handle_absolute_path_unix ... ok
+test repl_parser::upstream_using_tests::should_handle_relative_path_in_parent_directory_unix ... ok
+test repl_parser::upstream_using_tests::should_handle_relative_path_in_same_directory_unix ... ok
+test stm32_can::f4::tests::renode_stmcan_init_test ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_keep_hsecsson_enabled ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_disabling_csi ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_disabling_hse ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_disabling_hsi ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_disabling_pll1 ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_invalid_writes_to_divp1 ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_plls_modification_while_running ... ok
+test stm32h7_timer::comparing_timer_cases::should_clear_when_value_set_to_zero ... ok
+test stm32h7_timer::comparing_timer_cases::should_generate_compare_event_at_compare_after_clear ... ok
+test stm32h7_timer::comparing_timer_cases::should_handle_compare_value_change_when_enabled ... ok
+test stm32h7_timer::comparing_timer_cases::should_not_generate_additional_compare_event ... ok
+test stm32h7_timer::limit_timer_cases::upstream_alarm_disabled ... ok
+test stm32h7_timer::limit_timer_cases::upstream_alarm_enabled ... ok
+test stm32h7_timer::limit_timer_cases::upstream_microsecond_precision_events ... ok
+test stm32h7_timer::limit_timer_cases::upstream_should_be_ascending ... ok
+test stm32h7_timer::limit_timer_cases::upstream_should_be_descending ... ok
+test stm32h7_timer::limit_timer_cases::upstream_should_not_exceed_limit_ascending ... ok
+test stm32h7_timer::limit_timer_cases::upstream_should_not_exceed_limit_descending ... ok
+test stm32h7_timer::limit_timer_cases::upstream_submicrosecond_precision_events ... ok
+test stm32h7_timer::limit_timer_cases::upstream_switch_direction_at_zero ... ok
+test sync_action::tests::renode_time_source_should_execute_delayed_action_added_later_in_nearest_synced_state ... ok
+test sync_action::tests::renode_time_source_should_execute_delayed_action_in_nearest_synced_state_exactly_once ... ok
+test sync_action::tests::renode_time_source_should_execute_delayed_action_in_synced_state_exactly_once ... ok
+test sync_action::tests::renode_time_source_should_execute_non_aligned_delayed_action_in_synced_state_exactly_once ... ok
+test time_handle::tests::renode_time_handle_disabling_blocked_sink_completes_the_remaining_grant ... ok
+test time_handle::tests::renode_time_handle_disposal_disables_grant_readiness ... ok
+test time_handle::tests::renode_time_handle_reenabled_sink_waits_without_consuming_unrequested_grant ... ok
+test time_handle::tests::renode_time_handle_reports_progress_without_counting_residuum_twice ... ok
+test time_handle::tests::renode_time_handle_request_returns_immediately_after_grant_on_reactivated_source ... ok
+test time_handle::tests::renode_time_handle_request_returns_without_grant_when_disabled ... ok
+test time_handle::tests::renode_time_handle_second_wait_after_break_returns_zero ... ok
+test time_handle::tests::renode_time_handle_wait_without_request_returns_without_progress ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_break_wakes_wait_after_unblock ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_break_wakes_wait_grant_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_break_wakes_wait_request_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_continue_wakes_wait_after_unblock ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_continue_wakes_wait_grant_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_continue_wakes_wait_request_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_deactivating_source_wakes_request ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_disabling_sink_wakes_request ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_latch_defers_reenable_until_unlatch ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_reactivation_allows_a_later_grant ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_request_blocks_after_break ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_request_observes_source_activity_changes ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_request_wakes_on_grant ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_after_break_is_immediate ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_after_continue_is_immediate ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_blocks_grant_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_blocks_request_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_on_disabled_sink_is_immediate ... ok
+test time_handle::threaded::tests::upstream_unblock_handle_after_break ... ok
+test time_handle::threaded::tests::upstream_wait_after_break_grant_first ... ok
+test time_handle::threaded::tests::upstream_wait_after_continue_grant_first ... ok
+test time_source::grants::dispatch_tests::renode_time_source_dispatches_blocking_at_end_of_grant ... ok
+test time_source::grants::dispatch_tests::renode_time_source_dispatches_two_blocking_sinks ... ok
+test time_source::grants::dispatch_tests::renode_time_source_dispatches_updates_after_blocking ... ok
+test time_source::tests::renode_time_source_should_handle_multiple_sinks ... ok
+test time_source::tests::renode_time_source_should_handle_slave_time_source_with_different_quantum ... ok
+test time_source::tests::renode_time_source_should_handle_slave_time_source_with_not_aligned_quantum ... ok
+test time_source::tests::renode_time_source_should_handle_slave_time_source_with_same_quantum ... ok
+test upstream_nunit::bit_helper::should_calculate_double_word_mask ... ok
+test upstream_nunit::bit_helper::should_calculate_quad_word_mask ... ok
+test upstream_nunit::bit_helper::should_get_double_word_masked_value ... ok
+test upstream_nunit::bit_helper::should_get_quad_word_masked_value ... ok
+test upstream_nunit::bit_helper::should_reverse_bits_by_byte ... ok
+test upstream_nunit::bit_helper::should_reverse_bits_by_word ... ok
+test upstream_nunit::bit_helper::should_reverse_double_word_bits ... ok
+test upstream_nunit::bit_helper::should_reverse_quadruple_word_bits ... ok
+test upstream_nunit::bit_helper::should_set_double_word_masked_value ... ok
+test upstream_nunit::bit_helper::should_set_quad_word_masked_value ... ok
+test upstream_nunit::circular_buffer::should_detect_overflow ... ok
+test upstream_nunit::circular_buffer::should_enqueue_and_dequeue_with_wrap ... ok
+test upstream_nunit::circular_buffer::should_enqueue_and_dequeue_without_wrap ... ok
+test upstream_nunit::circular_buffer::should_enqueue_and_peek_with_wrap ... ok
+test upstream_nunit::circular_buffer::should_enqueue_and_peek_without_wrap ... ok
+test upstream_nunit::circular_buffer::should_never_wrap_with_single_element ... ok
+test upstream_nunit::circular_buffer::should_not_change_count_when_peeked ... ok
+test upstream_nunit::circular_buffer::should_not_dequeue_when_empty ... ok
+test upstream_nunit::circular_buffer::should_not_detect_overflow ... ok
+test upstream_nunit::circular_buffer::should_not_peek_when_empty ... ok
+test upstream_nunit::circular_buffer::should_save_with_exact_size ... ok
+test upstream_nunit::circular_buffer::should_save_with_wrap ... ok
+test upstream_nunit::circular_buffer::should_save_with_wrap_array ... ok
+test upstream_nunit::circular_buffer::should_save_without_wrap ... ok
+test upstream_nunit::circular_buffer::should_save_without_wrap_array ... ok
+test upstream_nunit::dma_engine::array_to_array_1_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_1_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_1_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_1_8 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_8 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_8 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_8 ... ok
+test upstream_nunit::hexadecimal_unsigned_long_0ff ... ok
+test upstream_nunit::hexadecimal_unsigned_long_1000 ... ok
+test upstream_nunit::hexadecimal_unsigned_long_12ab ... ok
+test upstream_nunit::memory::read_write_memory_bigger_than_2gb ... ok
+test upstream_nunit::misc::bytes_from_hex_string ... ok
+test upstream_nunit::parser_primitives::decimal_range ... ok
+test upstream_nunit::parser_primitives::hexadecimal_range ... ok
+test upstream_nunit::parser_primitives::hexadecimal_range_with_plus ... ok
+test upstream_nunit::parser_primitives::irq_sources ... ok
+test upstream_nunit::parser_primitives::mixed_range_with_plus ... ok
+test upstream_nunit::parser_primitives::negative_irq_range ... ok
+test upstream_nunit::parser_primitives::number_decimal ... ok
+test upstream_nunit::parser_primitives::number_fractional ... ok
+test upstream_nunit::parser_primitives::number_hex ... ok
+test upstream_nunit::parser_primitives::number_negative_decimal ... ok
+test upstream_nunit::parser_primitives::number_negative_fractional ... ok
+test upstream_nunit::parser_primitives::number_negative_hex ... ok
+test upstream_nunit::parser_primitives::number_spaced_negative_decimal ... ok
+test upstream_nunit::parser_primitives::number_spaced_negative_hex ... ok
+test upstream_nunit::parser_primitives::positive_irq_range ... ok
+test upstream_nunit::parser_primitives::rejects_invalid_hex ... ok
+test upstream_nunit::parser_primitives::rejects_missing_integer ... ok
+test upstream_nunit::parser_primitives::rejects_negative_range ... ok
+test upstream_nunit::parser_primitives::rejects_spaced_fraction ... ok
+test upstream_nunit::parser_primitives::rejects_trailing_minus ... ok
+test upstream_nunit::quoted_string ... ok
+test upstream_nunit::quoted_string_with_semicolon ... ok
+test upstream_nunit::range::create_range_with_extensions ... ok
+test upstream_nunit::range::minimal_ranges_collection_add ... ok
+test upstream_nunit::range::minimal_ranges_collection_remove_outside ... ok
+test upstream_nunit::range::minimal_ranges_collection_remove_subrange ... ok
+test upstream_nunit::range::should_contain_first_address ... ok
+test upstream_nunit::range::should_contain_itself ... ok
+test upstream_nunit::range::should_contain_last_address ... ok
+test upstream_nunit::range::should_handle_creating_range_from_zero_to_ulong_max_value ... ok
+test upstream_nunit::range::should_handle_creating_range_with_invalid_end_address ... ok
+test upstream_nunit::range::should_handle_creating_range_with_invalid_size ... ok
+test upstream_nunit::range::should_intersect_range ... ok
+test upstream_nunit::range::should_intersect_ranges_with_one_common_address ... ok
+test upstream_nunit::range::should_not_contain_nearby_addresses ... ok
+test upstream_nunit::range::should_shift_range ... ok
+test upstream_nunit::range::subtract_contained ... ok
+test upstream_nunit::range::subtract_containing ... ok
+test upstream_nunit::range::subtract_itself ... ok
+test upstream_nunit::range::subtract_left ... ok
+test upstream_nunit::range::subtract_no_intersection ... ok
+test upstream_nunit::range::subtract_right ... ok
+test upstream_nunit::system_bus::find_after_many_registrations ... ok
+test upstream_nunit::system_bus::find_after_registration ... ok
+test upstream_nunit::time_interval::should_not_allow_overflow_on_addition ... ok
+test upstream_nunit::time_interval::should_not_allow_overflow_on_substraction ... ok
+test upstream_nunit::time_interval::should_return_correct_result_from_substraction ... ok
+
+test result: ok. 422 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 0.09s
+

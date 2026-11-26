@@ -1,0 +1,9 @@
+$ cargo test --locked --bin penv upstream_nunit::cadence_uart
+running 6 tests
+test upstream_nunit::cadence_uart::should_generate_rx_overflows_when_enabled ... ok
+test upstream_nunit::cadence_uart::should_clear_interrupt_status_on_write_one ... ok
+test upstream_nunit::cadence_uart::should_clear_interrupt_status_on_read ... ok
+test upstream_nunit::cadence_uart::should_generate_tx_almost_full_interrupt_when_tx_disabled ... ok
+test upstream_nunit::cadence_uart::should_generate_tx_full_interrupt_when_tx_disabled ... ok
+test upstream_nunit::cadence_uart::should_generate_tx_overflow_interrupt_when_tx_disabled ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1553 filtered out; finished in 0.00s

@@ -1,0 +1,17 @@
+mach create
+machine LoadPlatformDescription @platforms/boards/stm32f072b_discovery.repl
+sysbus LoadELF @https://dl.antmicro.com/projects/renode/stm32f072b_disco--zephyr-button.elf-s_466084-bd8983bad3182e3a36ca6120a629093bd24426c8
+emulation RunFor "0.001s"
+sysbus.gpioPortA.button Press
+emulation RunFor "0.3s"
+sysbus.gpioPortA.button Release
+emulation RunFor "0.001s"
+waitForUart sysbus.usart1 "Button pressed at "
+sysbus.gpioPortA.button Press
+waitForLed sysbus.gpioPortC.led false "1s" "1s"
+sysbus.gpioPortA.button Release
+waitForLed sysbus.gpioPortC.led true "1s" "1s"
+sysbus.gpioPortA.button Press
+waitForLed sysbus.gpioPortC.led false "1s" "1s"
+sysbus.gpioPortA.button Release
+emulation RunFor "0.001s"

@@ -1,0 +1,6 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.ChangeDirectionToOutput	0-1067	upstream_nunit::lpc43xx_gpio::change_direction_to_output	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.ChangeMask	0-1069	upstream_nunit::lpc43xx_gpio::change_mask	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.ChangeMaskedOuputState	0-1070	upstream_nunit::lpc43xx_gpio::change_masked_ouput_state	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.ChangeOutputsState	0-1068	upstream_nunit::lpc43xx_gpio::change_outputs_state	passed
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test.InitTest	0-1066	upstream_nunit::lpc43xx_gpio::init_test	passed

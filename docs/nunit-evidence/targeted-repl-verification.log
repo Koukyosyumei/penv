@@ -1,0 +1,11 @@
+$ cargo test --locked --bin penv repl_parser::upstream_verification_tests
+running 8 tests
+test repl_parser::upstream_verification_tests::should_fail_on_not_existing_type ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_empty_entry ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_double_attribute ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_string_mismatch ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_non_writable_property ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_missing_reference ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_non_existing_property ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_numeric_enum_mismatch ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 3455 filtered out; finished in 0.00s

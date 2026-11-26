@@ -1,0 +1,1014 @@
+//! ARM interrupt distributor, private interrupt banks, and CPU arbitration.
+
+use std::{collections::BTreeSet, io::{self, Read, Write}};
+
+const PRIVATE_INTERRUPTS: usize = 32;
+pub(crate) const SPURIOUS_INTERRUPT: u16 = 1023;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Version {
+    V2,
+    V3,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowKind {
+    Distributor,
+    CpuInterface,
+    Redistributor(usize),
+}
+
+pub(crate) struct Window {
+    pub(crate) base: u32,
+    pub(crate) size: u32,
+    pub(crate) kind: WindowKind,
+}
+
+impl Window {
+    pub(crate) fn offset(&self, address: u32) -> Option<u32> {
+        let offset = address.wrapping_sub(self.base);
+        (offset < self.size).then_some(offset)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Interrupt {
+    group: usize,
+    priority: u8,
+    targets: u8,
+    route: u64,
+    enabled: bool,
+    pending: bool,
+    active: bool,
+    asserted: bool,
+    edge: bool,
+}
+
+impl Default for Interrupt {
+    fn default() -> Self {
+        Self {
+            group: 0,
+            priority: 0,
+            targets: 1,
+            route: 0,
+            enabled: false,
+            pending: false,
+            active: false,
+            asserted: false,
+            edge: false,
+        }
+    }
+}
+
+impl Interrupt {
+    fn set_input(&mut self, asserted: bool) {
+        if self.edge && asserted && !self.asserted {
+            self.pending = true;
+        }
+        self.asserted = asserted;
+    }
+
+    fn save_snapshot(self, output: &mut impl Write) -> io::Result<()> {
+        let flags = u64::from(self.enabled)
+            | (u64::from(self.pending) << 1)
+            | (u64::from(self.active) << 2)
+            | (u64::from(self.asserted) << 3)
+            | (u64::from(self.edge) << 4);
+        crate::snapshot::write_words(output, &[
+            self.group as u64, u64::from(self.priority), u64::from(self.targets), self.route, flags,
+        ])
+    }
+
+    fn load_snapshot(input: &mut impl Read) -> io::Result<Self> {
+        let [group, priority, targets, route, flags] = crate::snapshot::read_words(input)?;
+        if group > 1 || flags > 31 {
+            return Err(crate::snapshot::invalid("invalid snapshot ARM interrupt state"));
+        }
+        Ok(Self {
+            group: group as usize,
+            priority: u8::try_from(priority).map_err(io::Error::other)?,
+            targets: u8::try_from(targets).map_err(io::Error::other)?,
+            route,
+            enabled: flags & 1 != 0,
+            pending: flags & 2 != 0,
+            active: flags & 4 != 0,
+            asserted: flags & 8 != 0,
+            edge: flags & 16 != 0,
+        })
+    }
+
+    fn pending(self) -> bool {
+        self.pending || self.asserted && !self.edge
+    }
+}
+
+#[derive(Clone)]
+struct CpuInterface {
+    affinity: u32,
+    private: [Interrupt; PRIVATE_INTERRUPTS],
+    enabled_groups: u8,
+    split_eoi: bool,
+    virtual_enabled: bool,
+    virtual_control: u32,
+    virtual_list: [u64; 16],
+    virtual_active_priorities: [u32; 2],
+    priority_mask: u8,
+    binary_point: [u8; 2],
+    active: Vec<(u16, u8)>,
+    processor_sleep: bool,
+}
+
+impl CpuInterface {
+    fn new(affinity: u32) -> Self {
+        let mut private = [Interrupt::default(); PRIVATE_INTERRUPTS];
+        for interrupt in &mut private[..16] {
+            interrupt.enabled = true;
+            interrupt.edge = true;
+        }
+        Self {
+            affinity,
+            private,
+            enabled_groups: 0,
+            split_eoi: false,
+            virtual_enabled: false,
+            virtual_control: 0xff00_0000,
+            virtual_list: [0; 16],
+            virtual_active_priorities: [0; 2],
+            priority_mask: 0,
+            binary_point: [0; 2],
+            active: Vec::new(),
+            processor_sleep: true,
+        }
+    }
+    fn virtual_running_priority(&self) -> u32 {
+        let active = self.virtual_active_priorities[0] | self.virtual_active_priorities[1];
+        (active.trailing_zeros() << 3).min(0xff)
+    }
+
+    fn pending_virtual_entry(&self, group: Option<usize>) -> Option<usize> {
+        if !self.virtual_enabled {
+            return None;
+        }
+        let limit = (self.virtual_control >> 24).min(self.virtual_running_priority());
+        self.virtual_list.iter().enumerate().filter_map(|(index, &entry)| {
+            let entry_group = ((entry >> 60) & 1) as usize;
+            let priority = ((entry >> 48) as u32) & 0xf8;
+            (entry >> 62 == 1
+                && group.is_none_or(|group| group == entry_group)
+                && self.virtual_control & (1 << entry_group) != 0
+                && priority < limit)
+                .then_some((priority, index))
+        }).min().map(|(_, index)| index)
+    }
+
+}
+
+#[derive(Clone)]
+pub(crate) struct Gic {
+    version: Version,
+    distributor: u32,
+    shared: Vec<Interrupt>,
+    shared_candidates: BTreeSet<usize>,
+    cpus: Vec<CpuInterface>,
+}
+
+impl Gic {
+    pub(crate) fn new(
+        version: Version,
+        shared_count: usize,
+        affinities: &[u32],
+    ) -> Result<Self, String> {
+        if !(1..=988).contains(&shared_count) || affinities.is_empty() || affinities.len() > 8 {
+            return Err("invalid ARM interrupt controller size".into());
+        }
+        Ok(Self {
+            version,
+            distributor: 0,
+            shared: vec![Interrupt::default(); shared_count],
+            shared_candidates: BTreeSet::new(),
+            cpus: affinities.iter().copied().map(CpuInterface::new).collect(),
+        })
+    }
+
+    fn interrupt(&self, cpu: usize, id: usize) -> Option<&Interrupt> {
+        if id < PRIVATE_INTERRUPTS {
+            self.cpus.get(cpu)?.private.get(id)
+        } else {
+            self.shared.get(id - PRIVATE_INTERRUPTS)
+        }
+    }
+
+    fn interrupt_mut(&mut self, cpu: usize, id: usize) -> Option<&mut Interrupt> {
+        if id < PRIVATE_INTERRUPTS {
+            self.cpus.get_mut(cpu)?.private.get_mut(id)
+        } else {
+            self.shared.get_mut(id - PRIVATE_INTERRUPTS)
+        }
+    }
+
+    pub(crate) fn set_private(&mut self, cpu: usize, id: usize, asserted: bool) {
+        if id < PRIVATE_INTERRUPTS
+            && let Some(interrupt) = self.interrupt_mut(cpu, id)
+        {
+            interrupt.set_input(asserted);
+        }
+    }
+
+    pub(crate) fn set_shared(&mut self, input: usize, asserted: bool) {
+        if let Some(interrupt) = self.shared.get_mut(input)
+            && interrupt.asserted != asserted
+        {
+            interrupt.set_input(asserted);
+            self.update_shared_candidate(input);
+        }
+    }
+
+    fn update_shared_candidate(&mut self, index: usize) {
+        if self
+            .shared
+            .get(index)
+            .is_some_and(|interrupt| interrupt.enabled && interrupt.pending())
+        {
+            self.shared_candidates.insert(index);
+        } else {
+            self.shared_candidates.remove(&index);
+        }
+    }
+
+    fn routed(&self, cpu: usize, interrupt: &Interrupt) -> bool {
+        if self.version == Version::V3 && self.distributor & 0x10 != 0 {
+            !self.cpus[cpu].processor_sleep
+                && (interrupt.route & (1 << 31) != 0
+                    || (interrupt.route & 0x00ff_ffff) as u32
+                        == self.cpus[cpu].affinity & 0x00ff_ffff)
+        } else {
+            interrupt.targets & (1 << cpu) != 0
+        }
+    }
+
+    pub(crate) fn highest_pending(&self, cpu: usize, group: Option<usize>) -> u16 {
+        let Some(interface) = self.cpus.get(cpu) else {
+            return SPURIOUS_INTERRUPT;
+        };
+        if interface.enabled_groups & self.distributor as u8 == 0 || interface.priority_mask == 0 {
+            return SPURIOUS_INTERRUPT;
+        }
+        let running = interface
+            .active
+            .last()
+            .map_or(0x100, |(_, priority)| u16::from(*priority));
+        let eligible = |interrupt: &Interrupt| {
+            let group_bit = 1 << interrupt.group;
+            let preemption_shift = interface.binary_point[interrupt.group].saturating_add(1);
+            interrupt.enabled
+                && interrupt.pending()
+                && !interrupt.active
+                && interface.enabled_groups & group_bit != 0
+                && self.distributor & u32::from(group_bit) != 0
+                && group.is_none_or(|group| group == interrupt.group)
+                && interrupt.priority < interface.priority_mask
+                && (u16::from(interrupt.priority) >> preemption_shift)
+                    < (running >> preemption_shift)
+        };
+        interface
+            .private
+            .iter()
+            .enumerate()
+            .filter(|(_, interrupt)| eligible(interrupt))
+            .chain(self.shared_candidates.iter().filter_map(|&index| {
+                let interrupt = &self.shared[index];
+                (eligible(interrupt) && self.routed(cpu, interrupt))
+                    .then_some((index + PRIVATE_INTERRUPTS, interrupt))
+            }))
+            .min_by_key(|(id, interrupt)| (interrupt.priority, *id))
+            .map_or(SPURIOUS_INTERRUPT, |(id, _)| id as u16)
+    }
+
+    pub(crate) fn cpu_inputs(&self, cpu: usize) -> (bool, bool) {
+        match self.version {
+            Version::V2 => (self.highest_pending(cpu, None) != SPURIOUS_INTERRUPT, false),
+            Version::V3 => (
+                self.highest_pending(cpu, Some(1)) != SPURIOUS_INTERRUPT,
+                self.highest_pending(cpu, Some(0)) != SPURIOUS_INTERRUPT,
+            ),
+        }
+    }
+
+    pub(crate) fn virtual_cpu_inputs(&self, cpu: usize) -> (bool, bool) {
+        let Some(interface) = self.cpus.get(cpu) else { return (false, false) };
+        let Some(index) = interface.pending_virtual_entry(None) else { return (false, false) };
+        let fiq = interface.virtual_list[index] & (1 << 60) == 0 && interface.virtual_control & 8 != 0;
+        (!fiq, fiq)
+    }
+
+    pub(crate) fn acknowledge(&mut self, cpu: usize, group: Option<usize>) -> u16 {
+        let id = self.highest_pending(cpu, group);
+        if id != SPURIOUS_INTERRUPT {
+            let interrupt = self.interrupt_mut(cpu, usize::from(id)).unwrap();
+            interrupt.pending = false;
+            interrupt.active = true;
+            let priority = interrupt.priority;
+            if let Some(index) = usize::from(id).checked_sub(PRIVATE_INTERRUPTS) {
+                self.update_shared_candidate(index);
+            }
+            self.cpus[cpu].active.push((id, priority));
+        }
+        id
+    }
+
+    pub(crate) fn end_interrupt(&mut self, cpu: usize, id: u16) {
+        let Some(interface) = self.cpus.get_mut(cpu) else {
+            return;
+        };
+        if interface
+            .active
+            .last()
+            .is_some_and(|(active, _)| *active == id)
+        {
+            interface.active.pop();
+            if !interface.split_eoi {
+                self.deactivate(cpu, id);
+            }
+        }
+    }
+
+    fn deactivate(&mut self, cpu: usize, id: u16) {
+        if let Some(interrupt) = self.interrupt_mut(cpu, usize::from(id)) {
+            interrupt.active = false;
+            if let Some(index) = usize::from(id).checked_sub(PRIVATE_INTERRUPTS) {
+                self.update_shared_candidate(index);
+            }
+        }
+    }
+
+    pub(crate) fn set_cpu_groups(&mut self, cpu: usize, mask: u8) {
+        if let Some(interface) = self.cpus.get_mut(cpu) {
+            interface.enabled_groups = mask & 3;
+        }
+    }
+
+    pub(crate) fn set_priority_mask(&mut self, cpu: usize, mask: u8) {
+        if let Some(interface) = self.cpus.get_mut(cpu) {
+            interface.priority_mask = mask;
+        }
+    }
+
+    pub(crate) fn access_virtual_aarch32(
+        &mut self,
+        cpu: usize,
+        key: u32,
+        value: Option<u32>,
+        irq: bool,
+        fiq: bool,
+    ) -> Option<Option<u32>> {
+        if self.version != Version::V3 {
+            return None;
+        }
+        let interface = self.cpus.get_mut(cpu)?;
+        let group = match key {
+            0x000c_0008 | 0x000c_0028 | 0x000c_0048 | 0x000c_0068 | 0x000c_00cc if fiq => 0,
+            0x000c_000c | 0x000c_002c | 0x000c_004c | 0x000c_006c | 0x000c_00ec if irq => 1,
+            0x0004_0006 | 0x000c_006b | 0x000c_008c | 0x000c_002b if irq || fiq => 0,
+            _ => return None,
+        };
+        let field = match key {
+            0x0004_0006 => Some((24, 0xff)),
+            0x000c_0068 => Some((21, 7)),
+            0x000c_006c => Some((18, 7)),
+            0x000c_00cc | 0x000c_00ec => Some((group as u32, 1)),
+            _ => None,
+        };
+        if let Some((shift, mask)) = field {
+            if let Some(value) = value {
+                interface.virtual_control = (interface.virtual_control & !(mask << shift))
+                    | ((value & mask) << shift);
+                return Some(None);
+            }
+            return Some(Some((interface.virtual_control >> shift) & mask));
+        }
+        let split = interface.virtual_control & (1 << 9) != 0;
+        let reply = match (key, value) {
+            (0x000c_008c, None) => 0x400 | (u32::from(split) << 1),
+            (0x000c_008c, Some(value)) => {
+                interface.virtual_control = (interface.virtual_control & !(1 << 9)) | ((value & 2) << 8);
+                return Some(None);
+            }
+            (0x000c_006b, None) => interface.virtual_running_priority(),
+            (0x000c_0008 | 0x000c_000c | 0x000c_0048 | 0x000c_004c, None) => {
+                let Some(index) = interface.pending_virtual_entry(Some(group)) else {
+                    return Some(Some(u32::from(SPURIOUS_INTERRUPT)));
+                };
+                let entry = &mut interface.virtual_list[index];
+                if key & 0x40 == 0 {
+                    *entry = (*entry & !(3 << 62)) | (2 << 62);
+                    interface.virtual_active_priorities[group] |= 1 << ((*entry >> 51) & 31);
+                }
+                *entry as u32
+            }
+            (0x000c_0028 | 0x000c_002c | 0x000c_002b, Some(id)) => {
+                let deactivate_only = key == 0x000c_002b;
+                let mut physical = None;
+                if (!deactivate_only || split)
+                    && let Some(entry) = interface.virtual_list.iter_mut().find(|entry| {
+                        **entry >> 63 != 0 && **entry as u32 == id
+                            && (deactivate_only || ((**entry >> 60) & 1) as usize == group)
+                    })
+                {
+                    if !deactivate_only {
+                        interface.virtual_active_priorities[group] &= !(1 << ((*entry >> 51) & 31));
+                    }
+                    if deactivate_only || !split {
+                        if *entry & (1 << 61) != 0 {
+                            physical = Some(((*entry >> 32) & 0x1fff) as u16);
+                        }
+                        *entry &= !(2 << 62);
+                    }
+                }
+                if let Some(id) = physical {
+                    self.deactivate(cpu, id);
+                }
+                return Some(None);
+            }
+            _ => return None,
+        };
+        Some(Some(reply))
+    }
+
+    pub(crate) fn access_aarch32(
+        &mut self,
+        cpu: usize,
+        register: u32,
+        value: Option<u32>,
+    ) -> Option<Option<u32>> {
+        if self.version != Version::V3 {
+            return None;
+        }
+        let interface = self.cpus.get_mut(cpu)?;
+        let reply = match (register, value) {
+            (0x0004_0006, None) => u32::from(interface.priority_mask), // ICC_PMR
+            (0x0004_0006, Some(value)) => {
+                return Some({
+                    interface.priority_mask = value as u8;
+                    None
+                });
+            }
+            (0x000c_0008 | 0x000c_000c, None) => {
+                let group = usize::from(register & 4 != 0);
+                u32::from(self.acknowledge(cpu, Some(group))) // ICC_IAR0/1
+            }
+            (0x000c_0028 | 0x000c_002c, Some(value)) => {
+                self.end_interrupt(cpu, (value & 0x3ff) as u16); // ICC_EOIR0/1
+                return Some(None);
+            }
+            (0x000c_0048 | 0x000c_004c, None) => {
+                let group = usize::from(register & 4 != 0);
+                u32::from(self.highest_pending(cpu, Some(group))) // ICC_HPPIR0/1
+            }
+            (0x000c_0068 | 0x000c_006c, value) => {
+                // ICC_BPR0/1
+                let group = usize::from(register & 4 != 0);
+                if let Some(value) = value {
+                    interface.binary_point[group] = value as u8 & 7;
+                    return Some(None);
+                }
+                u32::from(interface.binary_point[group])
+            }
+            (0x000c_006b, None) => interface
+                .active
+                .last()
+                .map_or(0xff, |(_, priority)| u32::from(*priority)), // ICC_RPR
+            (0x000c_00cc | 0x000c_00ec, value) => {
+                // ICC_IGRPEN0/1
+                let group = u32::from(register & 0x20 != 0);
+                if let Some(value) = value {
+                    interface.enabled_groups =
+                        (interface.enabled_groups & !(1 << group)) | (((value & 1) as u8) << group);
+                    return Some(None);
+                }
+                u32::from(interface.enabled_groups >> group) & 1
+            }
+            (0x000c_008c, None) => 0x400 | (u32::from(interface.split_eoi) << 1), // ICC_CTLR
+            (0x000c_008c, Some(value)) => {
+                interface.split_eoi = value & 2 != 0;
+                return Some(None);
+            }
+            (0x000c_002b, Some(value)) => {
+                if interface.split_eoi {
+                    self.deactivate(cpu, (value & 0x3ff) as u16); // ICC_DIR
+                }
+                return Some(None);
+            }
+            (0x000c_00ac, value) => return Some(value.is_none().then_some(7)), // ICC_SRE
+            (0x008c_0008 | 0x008c_0009, value) => {
+                let register = &mut interface.virtual_active_priorities[(register & 1) as usize];
+                if let Some(value) = value {
+                    *register = value;
+                    return Some(None);
+                }
+                *register
+            }
+            (0x008c_002b, None) => (4 << 29) | (interface.virtual_list.len() as u32 - 1), // ICH_VTR
+            (0x008c_000b, None) => u32::from(interface.virtual_enabled), // ICH_HCR
+            (0x008c_000b, Some(value)) => {
+                interface.virtual_enabled = value & 1 != 0;
+                return Some(None);
+            }
+            (0x008c_00eb, None) => interface.virtual_control, // ICH_VMCR
+            (0x008c_00eb, Some(value)) => {
+                interface.virtual_control = value & 0xfffc_021f;
+                return Some(None);
+            }
+            (0x008c_00ab, None) => interface.virtual_list.iter().enumerate().fold(0, |mask, (index, entry)| {
+                mask | (u32::from(entry >> 62 == 0) << index)
+            }), // ICH_ELRSR
+            (key, value) if key & 0xffff_ff1c == 0x008c_000c => {
+                let index = ((key & 1) * 8 + ((key >> 5) & 7)) as usize;
+                let shift = (key & 2) * 16;
+                let entry = &mut interface.virtual_list[index];
+                if let Some(value) = value {
+                    let mask = if shift == 0 { u32::MAX } else { 0xf0ff_1fff };
+                    *entry = (*entry & !(u64::from(u32::MAX) << shift))
+                        | (u64::from(value & mask) << shift);
+                    return Some(None);
+                }
+                (*entry >> shift) as u32
+            }
+            (0x008c_00a9, value) => return Some(value.is_none().then_some(15)), // ICC_HSRE
+            _ => return None,
+        };
+        Some(Some(reply))
+    }
+
+    pub(crate) fn send_aarch32_sgi(&mut self, source: usize, operation: u32, value: u64) -> bool {
+        if self.version != Version::V3 || operation > 2 || source >= self.cpus.len() {
+            return false;
+        }
+        let group = usize::from(operation != 2);
+        let id = ((value >> 24) & 15) as usize;
+        let broadcast = value & (1 << 40) != 0;
+        let affinity_prefix = (((value >> 48) & 255) << 24)
+            | (((value >> 32) & 255) << 16)
+            | (((value >> 16) & 255) << 8);
+        let range = ((value >> 44) & 15) as u32;
+        for (slot, target) in self.cpus.iter_mut().enumerate() {
+            let affinity = target.affinity;
+            let target_index = affinity & 255;
+            let routed = if broadcast {
+                slot != source
+            } else {
+                u64::from(affinity & !255) == affinity_prefix
+                    && target_index / 16 == range
+                    && value & (1 << (target_index % 16)) != 0
+            };
+            if routed && target.private[id].group == group {
+                target.private[id].pending = true;
+            }
+        }
+        true
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl Write) -> io::Result<()> {
+        use crate::snapshot::write_words;
+        let version = if self.version == Version::V3 { 3 } else { 2 };
+        write_words(output, &[version, self.cpus.len() as u64, self.shared.len() as u64,
+            u64::from(self.distributor)])?;
+        for irq in &self.shared {
+            irq.save_snapshot(output)?;
+        }
+        for cpu in &self.cpus {
+            let [first, second] = cpu.binary_point;
+            write_words(output, &[
+                u64::from(cpu.affinity), u64::from(cpu.enabled_groups), u64::from(cpu.priority_mask),
+                u64::from(first), u64::from(second), u64::from(cpu.processor_sleep), cpu.active.len() as u64,
+            ])?;
+            write_words(output, &[u64::from(cpu.split_eoi), u64::from(cpu.virtual_enabled), u64::from(cpu.virtual_control)])?;
+            write_words(output, &cpu.virtual_list)?;
+            write_words(output, &cpu.virtual_active_priorities.map(u64::from))?;
+            for &(id, priority) in &cpu.active {
+                write_words(output, &[u64::from(id), u64::from(priority)])?;
+            }
+            for irq in &cpu.private {
+                irq.save_snapshot(output)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl Read, snapshot_version: u8) -> io::Result<()> {
+        use crate::snapshot::{invalid, read_bool, read_words};
+        let [version, cpus, shared, distributor] = read_words(input)?;
+        let expected_version = if self.version == Version::V3 { 3 } else { 2 };
+        if version != expected_version || cpus != self.cpus.len() as u64 || shared != self.shared.len() as u64 {
+            return Err(invalid("snapshot ARM interrupt controller differs from the platform"));
+        }
+        let distributor = u32::try_from(distributor).map_err(io::Error::other)?;
+        self.write_distributor(0, 0, distributor);
+        for index in 0..self.shared.len() {
+            self.shared[index] = Interrupt::load_snapshot(input)?;
+            self.update_shared_candidate(index);
+        }
+        let byte = |value| u8::try_from(value).map_err(io::Error::other);
+        for cpu in &mut self.cpus {
+            let [affinity, groups, mask, first, second, sleep, active] = read_words(input)?;
+            if affinity != u64::from(cpu.affinity) || active > u64::from(SPURIOUS_INTERRUPT) {
+                return Err(invalid("invalid snapshot ARM interrupt CPU interface"));
+            }
+            cpu.enabled_groups = byte(groups)?;
+            cpu.priority_mask = byte(mask)?;
+            cpu.binary_point = [byte(first)?, byte(second)?];
+            cpu.processor_sleep = read_bool(sleep)?;
+            cpu.split_eoi = snapshot_version >= 6 && read_bool(read_words::<1>(input)?[0])?;
+            if snapshot_version >= 7 {
+                let [enabled, control] = read_words(input)?;
+                cpu.virtual_enabled = read_bool(enabled)?;
+                cpu.virtual_control = u32::try_from(control).map_err(io::Error::other)?;
+                cpu.virtual_list = read_words(input)?;
+            }
+            if snapshot_version >= 11 {
+                let [group0, group1] = read_words(input)?;
+                cpu.virtual_active_priorities = [
+                    u32::try_from(group0).map_err(io::Error::other)?,
+                    u32::try_from(group1).map_err(io::Error::other)?,
+                ];
+            }
+            cpu.active.clear();
+            for _ in 0..active {
+                let [id, priority] = read_words(input)?;
+                if id >= shared + PRIVATE_INTERRUPTS as u64 {
+                    return Err(invalid("invalid snapshot ARM active interrupt"));
+                }
+                cpu.active.push((id as u16, byte(priority)?));
+            }
+            for irq in &mut cpu.private {
+                *irq = Interrupt::load_snapshot(input)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn read_window(&mut self, cpu: usize, kind: WindowKind, offset: u32) -> u32 {
+        match kind {
+            WindowKind::Distributor => self.read_distributor(cpu, offset),
+            WindowKind::CpuInterface => self.read_cpu_interface(cpu, offset),
+            WindowKind::Redistributor(target) => self.read_redistributor(target, offset),
+        }
+    }
+
+    pub(crate) fn write_window(&mut self, cpu: usize, kind: WindowKind, offset: u32, value: u32) {
+        match kind {
+            WindowKind::Distributor => self.write_distributor(cpu, offset, value),
+            WindowKind::CpuInterface => self.write_cpu_interface(cpu, offset, value),
+            WindowKind::Redistributor(target) => self.write_redistributor(target, offset, value),
+        }
+    }
+
+    fn read_bank(&self, cpu: usize, word: usize, read: impl Fn(Interrupt) -> bool) -> u32 {
+        (0..32).fold(0, |result, bit| {
+            result
+                | (u32::from(
+                    self.interrupt(cpu, word * 32 + bit)
+                        .is_some_and(|irq| read(*irq)),
+                ) << bit)
+        })
+    }
+
+    fn write_bank(
+        &mut self,
+        cpu: usize,
+        word: usize,
+        bits: u32,
+        mut write: impl FnMut(&mut Interrupt, bool),
+    ) {
+        for bit in 0..32 {
+            if let Some(interrupt) = self.interrupt_mut(cpu, word * 32 + bit) {
+                write(interrupt, bits & (1 << bit) != 0);
+            }
+        }
+    }
+
+    fn read_register(&self, cpu: usize, offset: u32) -> Option<u32> {
+        let word = ((offset & 0x7f) / 4) as usize;
+        Some(match offset {
+            0x080..=0x0fc => self.read_bank(cpu, word, |irq| irq.group != 0),
+            0x100..=0x1fc => self.read_bank(cpu, word, |irq| irq.enabled),
+            0x200..=0x2fc => self.read_bank(cpu, word, Interrupt::pending),
+            0x300..=0x3fc => self.read_bank(cpu, word, |irq| irq.active),
+            0x400..=0x7fc | 0x800..=0xbfc => {
+                let first = (offset & 0x3ff) as usize;
+                (0..4).fold(0, |result, byte| {
+                    let value = self.interrupt(cpu, first + byte).map_or(0, |irq| {
+                        if offset < 0x800 {
+                            irq.priority
+                        } else if first + byte < 32 {
+                            1 << cpu
+                        } else {
+                            irq.targets
+                        }
+                    });
+                    result | (u32::from(value) << (8 * byte))
+                })
+            }
+            0xc00..=0xcfc => {
+                let first = ((offset - 0xc00) as usize / 4) * 16;
+                (0..16).fold(0, |result, field| {
+                    let edge = self
+                        .interrupt(cpu, first + field)
+                        .is_some_and(|irq| irq.edge);
+                    result | (u32::from(edge) << (2 * field + 1))
+                })
+            }
+            _ => return None,
+        })
+    }
+
+    fn write_register(&mut self, cpu: usize, offset: u32, value: u32) -> bool {
+        let word = ((offset & 0x7f) / 4) as usize;
+        match offset {
+            0x080..=0x0fc => {
+                self.write_bank(cpu, word, value, |irq, set| irq.group = usize::from(set))
+            }
+            0x100..=0x17c => self.write_bank(cpu, word, value, |irq, set| irq.enabled |= set),
+            0x180..=0x1fc => self.write_bank(cpu, word, value, |irq, set| irq.enabled &= !set),
+            0x200..=0x27c => self.write_bank(cpu, word, value, |irq, set| irq.pending |= set),
+            0x280..=0x2fc => self.write_bank(cpu, word, value, |irq, set| irq.pending &= !set),
+            0x300..=0x37c => self.write_bank(cpu, word, value, |irq, set| irq.active |= set),
+            0x380..=0x3fc => self.write_bank(cpu, word, value, |irq, set| irq.active &= !set),
+            0x400..=0x7fc | 0x800..=0xbfc => {
+                let first = (offset & 0x3ff) as usize;
+                for byte in 0..4 {
+                    if let Some(irq) = self.interrupt_mut(cpu, first + byte) {
+                        let value = (value >> (8 * byte)) as u8;
+                        if offset < 0x800 {
+                            irq.priority = value;
+                        } else if first + byte >= 32 {
+                            irq.targets = value;
+                        }
+                    }
+                }
+            }
+            0xc00..=0xcfc => {
+                let first = ((offset - 0xc00) as usize / 4) * 16;
+                for field in 0..16 {
+                    if first + field >= 16
+                        && let Some(irq) = self.interrupt_mut(cpu, first + field)
+                    {
+                        irq.edge = value & (1 << (2 * field + 1)) != 0;
+                    }
+                }
+            }
+            _ => return false,
+        }
+        let changed_range = match offset {
+            0x100..=0x2fc if word != 0 => Some((word * 32, 32)),
+            0xc00..=0xcfc if offset >= 0xc08 => Some((((offset - 0xc00) / 4) as usize * 16, 16)),
+            _ => None,
+        };
+        if let Some((first, count)) = changed_range {
+            for id in first..first + count {
+                self.update_shared_candidate(id - PRIVATE_INTERRUPTS);
+            }
+        }
+        true
+    }
+
+    pub(crate) fn read_distributor(&self, cpu: usize, offset: u32) -> u32 {
+        match offset {
+            0 => self.distributor | if self.version == Version::V3 { 1 << 6 } else { 0 },
+            4 => {
+                (self.shared.len() / 32) as u32
+                    | ((self.cpus.len() - 1) as u32) << 5
+                    | 9 << 19
+                    | 31 << 27
+            }
+            8 => 0x43b,
+            0xfe8 if self.version == Version::V2 => 0x20,
+            0xffe8 if self.version == Version::V3 => 0x30,
+            0x6100..=0x7fdc if self.version == Version::V3 => {
+                let route = (offset - 0x6100) as usize / 8;
+                self.shared.get(route).map_or(0, |interrupt| {
+                    (interrupt.route >> ((offset & 4) * 8)) as u32
+                })
+            }
+            _ => self.read_register(cpu, offset).unwrap_or(0),
+        }
+    }
+
+    pub(crate) fn write_distributor(&mut self, cpu: usize, offset: u32, value: u32) {
+        match offset {
+            0 => self.distributor = value & if self.version == Version::V3 { 0x13 } else { 3 },
+            0xf00 if self.version == Version::V2 => {
+                let id = (value & 15) as usize;
+                let filter = (value >> 24) & 3;
+                for (index, interface) in self.cpus.iter_mut().enumerate() {
+                    if match filter {
+                        0 => (value >> 16) & (1 << index) != 0,
+                        1 => index != cpu,
+                        2 => index == cpu,
+                        _ => false,
+                    } {
+                        interface.private[id].pending = true;
+                    }
+                }
+            }
+            0x6100..=0x7fdc if self.version == Version::V3 => {
+                let route = (offset - 0x6100) as usize / 8;
+                if let Some(interrupt) = self.shared.get_mut(route) {
+                    let shift = (offset & 4) * 8;
+                    interrupt.route = (interrupt.route & !(u64::from(u32::MAX) << shift))
+                        | (u64::from(value) << shift);
+                }
+            }
+            _ => {
+                self.write_register(cpu, offset, value);
+            }
+        }
+    }
+
+    pub(crate) fn read_cpu_interface(&mut self, cpu: usize, offset: u32) -> u32 {
+        let Some(interface) = self.cpus.get(cpu) else {
+            return 0;
+        };
+        match offset {
+            0 => u32::from(interface.enabled_groups),
+            4 => u32::from(interface.priority_mask),
+            8 => u32::from(interface.binary_point[0]),
+            0x0c => u32::from(self.acknowledge(cpu, None)),
+            0x14 => interface
+                .active
+                .last()
+                .map_or(0xff, |(_, priority)| u32::from(*priority)),
+            0x18 => u32::from(self.highest_pending(cpu, None)),
+            0x1c => u32::from(interface.binary_point[1]),
+            0x20 => u32::from(self.acknowledge(cpu, Some(1))),
+            0x28 => u32::from(self.highest_pending(cpu, Some(1))),
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn write_cpu_interface(&mut self, cpu: usize, offset: u32, value: u32) {
+        match offset {
+            0 => self.set_cpu_groups(cpu, value as u8),
+            4 => self.set_priority_mask(cpu, value as u8),
+            8 | 0x1c if cpu < self.cpus.len() => {
+                self.cpus[cpu].binary_point[usize::from(offset != 8)] = value as u8 & 7
+            }
+            0x10 | 0x24 => self.end_interrupt(cpu, (value & 0x3ff) as u16),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn read_redistributor(&self, cpu: usize, offset: u32) -> u32 {
+        let Some(interface) = self.cpus.get(cpu) else {
+            return 0;
+        };
+        match offset {
+            4 => 0x43b,
+            8 => (cpu as u32) << 8 | (u32::from(cpu + 1 == self.cpus.len()) << 4),
+            0x0c => interface.affinity,
+            0x14 => {
+                if interface.processor_sleep {
+                    6
+                } else {
+                    0
+                }
+            }
+            0xffe8 => 0x30,
+            0x1_0080
+            | 0x1_0100
+            | 0x1_0180
+            | 0x1_0200
+            | 0x1_0280
+            | 0x1_0300
+            | 0x1_0380
+            | 0x1_0400..=0x1_041c
+            | 0x1_0c00
+            | 0x1_0c04 => self.read_register(cpu, offset - 0x1_0000).unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn write_redistributor(&mut self, cpu: usize, offset: u32, value: u32) {
+        match offset {
+            0x14 if cpu < self.cpus.len() => self.cpus[cpu].processor_sleep = value & 2 != 0,
+            0x1_0080
+            | 0x1_0100
+            | 0x1_0180
+            | 0x1_0200
+            | 0x1_0280
+            | 0x1_0300
+            | 0x1_0380
+            | 0x1_0400..=0x1_041c
+            | 0x1_0c00
+            | 0x1_0c04 => {
+                self.write_register(cpu, offset - 0x1_0000, value);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arm_gic_v3_sgi_targets_affinity_and_excludes_broadcast_source() {
+        let mut gic = Gic::new(Version::V3, 32, &[0, 1, 0x101]).unwrap();
+        for slot in 0..3 {
+            gic.write_redistributor(slot, 0x1_0080, 1 << 4);
+            gic.set_cpu_groups(slot, 2);
+            gic.set_priority_mask(slot, 0xff);
+        }
+        gic.write_distributor(0, 0, 2);
+        assert!(gic.send_aarch32_sgi(0, 0, (4 << 24) | (1 << 16) | 2));
+        assert_eq!(gic.highest_pending(0, Some(1)), SPURIOUS_INTERRUPT);
+        assert_eq!(gic.highest_pending(1, Some(1)), SPURIOUS_INTERRUPT);
+        assert_eq!(gic.acknowledge(2, Some(1)), 4);
+        gic.end_interrupt(2, 4);
+        assert!(gic.send_aarch32_sgi(0, 0, (1 << 40) | (4 << 24)));
+        assert_eq!(gic.highest_pending(0, Some(1)), SPURIOUS_INTERRUPT);
+        assert_eq!(gic.highest_pending(1, Some(1)), 4);
+        assert_eq!(gic.highest_pending(2, Some(1)), 4);
+    }
+
+    #[test]
+    fn distributor_routes_spi_to_selected_cpu_and_reasserts_level() {
+        let mut gic = Gic::new(Version::V2, 64, &[0, 1]).unwrap();
+        gic.write_distributor(0, 0, 3);
+        gic.write_distributor(0, 0x104, 1 << 5);
+        gic.write_distributor(0, 0x824, 2 << 8);
+        gic.write_distributor(0, 0x424, 0x20 << 8);
+        for cpu in 0..2 {
+            gic.write_cpu_interface(cpu, 0, 3);
+            gic.write_cpu_interface(cpu, 4, 0xff);
+        }
+        gic.set_shared(5, true);
+        assert_eq!(gic.read_cpu_interface(0, 0x0c), 1023);
+        assert_eq!(gic.read_cpu_interface(1, 0x0c), 37);
+        assert_eq!(gic.read_cpu_interface(1, 0x18), 1023);
+        gic.write_cpu_interface(1, 0x10, 37);
+        assert_eq!(gic.read_cpu_interface(1, 0x18), 37);
+        gic.set_shared(5, false);
+        assert_eq!(gic.read_cpu_interface(1, 0x18), 1023);
+    }
+
+    #[test]
+    fn arm_gic_virtual_list_register_halves_share_state() {
+        let mut gic = Gic::new(Version::V3, 32, &[0]).unwrap();
+        assert_eq!(gic.access_aarch32(0, 0x008c_002b, None), Some(Some(0x8000_000f)));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00ad, Some(53)), Some(None));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00af, Some(0x50a0_0000)), Some(None));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00ad, None), Some(Some(53)));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00ab, None), Some(Some(0xdfff)));
+    }
+
+    #[test]
+    fn arm_gic_virtual_irq_acknowledge_and_eoi_update_list_state() {
+        let mut gic = Gic::new(Version::V3, 32, &[0, 1]).unwrap();
+        gic.access_aarch32(0, 0x008c_000b, Some(1)); // ICH_HCR.En
+        gic.access_aarch32(0, 0x008c_00eb, Some(0xff00_0002)); // Group 1, VPMR
+        gic.access_aarch32(0, 0x008c_000c, Some(53));
+        gic.access_aarch32(0, 0x008c_000e, Some(0x5080_0000)); // Pending, group 1
+        assert_eq!(gic.virtual_cpu_inputs(0), (true, false));
+        assert_eq!(gic.virtual_cpu_inputs(1), (false, false));
+        assert_eq!(gic.access_virtual_aarch32(0, 0x000c_000c, None, true, false), Some(Some(53)));
+        assert_eq!(gic.virtual_cpu_inputs(0), (false, false));
+        assert_eq!(gic.access_aarch32(0, 0x008c_0009, None), Some(Some(1 << 16)));
+        gic.access_virtual_aarch32(0, 0x000c_002c, Some(53), true, false);
+        assert_eq!(gic.access_aarch32(0, 0x008c_0009, None), Some(Some(0)));
+        assert_eq!(gic.access_aarch32(0, 0x008c_00ab, None), Some(Some(0xffff)));
+    }
+
+    #[test]
+    fn split_end_of_interrupt_keeps_the_source_active_until_deactivation() {
+        let mut gic = Gic::new(Version::V3, 32, &[0]).unwrap();
+        gic.write_distributor(0, 0, 2);
+        gic.write_redistributor(0, 0x1_0080, 1 << 27);
+        gic.write_redistributor(0, 0x1_0100, 1 << 27);
+        gic.set_cpu_groups(0, 2);
+        gic.set_priority_mask(0, 0xff);
+        gic.set_private(0, 27, true);
+        assert_eq!(gic.access_aarch32(0, 0x000c_008c, Some(2)), Some(None));
+        assert_eq!(gic.acknowledge(0, Some(1)), 27);
+        gic.end_interrupt(0, 27);
+        assert_eq!(gic.highest_pending(0, Some(1)), SPURIOUS_INTERRUPT);
+        assert_eq!(gic.access_aarch32(0, 0x000c_002b, Some(27)), Some(None));
+        assert_eq!(gic.highest_pending(0, Some(1)), 27);
+    }
+
+    #[test]
+    fn redistributor_private_interrupts_stay_in_their_cpu_bank() {
+        let mut gic = Gic::new(Version::V3, 64, &[0, 1]).unwrap();
+        gic.write_distributor(0, 0, 3);
+        gic.write_redistributor(1, 0x1_0080, 1 << 27);
+        gic.write_redistributor(1, 0x1_0100, 1 << 27);
+        gic.set_priority_mask(1, 0x80);
+        gic.set_cpu_groups(1, 3);
+        gic.set_private(1, 27, true);
+        assert_eq!(gic.read_redistributor(0, 0x1_0100), 0xffff);
+        assert_eq!(gic.acknowledge(1, Some(0)), 1023);
+        assert_eq!(gic.acknowledge(1, Some(1)), 27);
+        gic.end_interrupt(1, 27);
+        assert_eq!(gic.highest_pending(1, Some(1)), 27);
+    }
+}
