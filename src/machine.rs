@@ -3043,7 +3043,7 @@ impl Hart {
         if let Some(cpu) = &mut self.arm32 {
             if index == 25 {
                 if let Some(value) = value {
-                    cpu.set_cpsr(value);
+                    cpu.set_cpsr(value, &mut self.registers)?;
                     return Ok(None);
                 }
                 return Ok(Some(cpu.cpsr()));

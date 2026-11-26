@@ -4349,6 +4349,7 @@ fn execute(
             let triple = match options {
                 [] | ["false"] | ["null"] | ["null", "false"] => "default",
                 [triple] | [triple, "false"] if triple.starts_with('"') && triple.ends_with('"') => unquote(triple),
+                [triple] if triple.starts_with("triple=") => unquote(&triple["triple=".len()..]),
                 _ => return Err("unsupported AssembleBlock triple or alternate dialect".into()),
             };
             let token = resolve(address)?;

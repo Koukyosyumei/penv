@@ -29,11 +29,21 @@ impl Profile {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct Bank {
+    sp: u32,
+    lr: u32,
+    spsr: u32,
+}
+
 #[derive(Clone)]
 pub(crate) struct Cpu {
     pub(crate) profile: Profile,
     cpsr: u32,
     thumb: Thumb,
+    banks: [Bank; 8],
+    shared_high: [u32; 5],
+    fiq_high: [u32; 5],
 }
 
 impl Cpu {
@@ -44,6 +54,9 @@ impl Cpu {
             profile,
             cpsr: 0x1d3,
             thumb,
+            banks: [Bank::default(); 8],
+            shared_high: [0; 5],
+            fiq_high: [0; 5],
         }
     }
 
@@ -51,8 +64,131 @@ impl Cpu {
         self.cpsr
     }
 
-    pub(crate) fn set_cpsr(&mut self, value: u32) {
+    fn bank_for(status: u32) -> Option<usize> {
+        Some(match status & 31 {
+            0x10 | 0x1f => 0,
+            0x11 => 1,
+            0x12 => 2,
+            0x13 => 3,
+            0x16 => 4,
+            0x17 => 5,
+            0x1a => 6,
+            0x1b => 7,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn set_cpsr(&mut self, value: u32, registers: &mut [u32; 32]) -> Result<(), String> {
+        let old = Self::bank_for(self.cpsr).expect("current CPSR has a valid mode");
+        let new = Self::bank_for(value).ok_or("invalid AArch32 mode")?;
+        if old != new {
+            self.banks[old].sp = registers[13];
+            self.banks[old].lr = registers[14];
+            registers[13] = self.banks[new].sp;
+            registers[14] = self.banks[new].lr;
+            if old == 1 {
+                self.fiq_high.copy_from_slice(&registers[8..13]);
+                registers[8..13].copy_from_slice(&self.shared_high);
+            } else if new == 1 {
+                self.shared_high.copy_from_slice(&registers[8..13]);
+                registers[8..13].copy_from_slice(&self.fiq_high);
+            }
+        }
         self.cpsr = value;
+        Ok(())
+    }
+
+    fn undefined(&mut self, return_address: u32, registers: &mut [u32; 32]) -> u32 {
+        let status = self.cpsr;
+        let updated = (status & !(31 | T | (0b11 << 25) | (0x3f << 10))) | 0x9b;
+        self.set_cpsr(updated, registers)
+            .expect("valid Undefined mode");
+        self.banks[7].spsr = status;
+        registers[14] = return_address;
+        4
+    }
+
+    fn exception_return(
+        &mut self,
+        opcode: u32,
+        low: u32,
+        pc: u32,
+        registers: &mut [u32; 32],
+        bus: &mut Bus,
+        slot: usize,
+        output: &mut impl Write,
+    ) -> Result<Option<u32>, String> {
+        if !matches!(opcode & 0xffc0, 0xe800 | 0xe980) || low & 0xffe0 != 0xc000 {
+            return Ok(None);
+        }
+        let load = opcode & 0x10 != 0;
+        if !load && opcode & 15 != 13 || load && low != 0xc000 {
+            return Ok(None);
+        }
+        let current = Self::bank_for(self.cpsr).unwrap();
+        if current == 0 {
+            return Ok(Some(self.undefined(pc.wrapping_add(4), registers)));
+        }
+        let increment = opcode & 0x100 != 0;
+        let update = opcode & 0x20 != 0;
+        if load {
+            let index = (opcode & 15) as usize;
+            let base = registers[index];
+            let target = if increment {
+                base
+            } else {
+                base.wrapping_sub(8)
+            };
+            let address = Self::load(bus, slot, target, 4)?;
+            let status = Self::load(bus, slot, target.wrapping_add(4), 4)?;
+            if Self::bank_for(status).is_none() {
+                return Ok(Some(self.undefined(pc.wrapping_add(4), registers)));
+            }
+            if update {
+                registers[index] = if increment {
+                    base.wrapping_add(8)
+                } else {
+                    target
+                };
+            }
+            self.set_cpsr(status, registers)?;
+            return Ok(Some(address & if status & T == 0 { !3 } else { !1 }));
+        }
+        let Some(bank) = Self::bank_for(low) else {
+            return Ok(Some(self.undefined(pc.wrapping_add(4), registers)));
+        };
+        let base = if bank == current {
+            registers[13]
+        } else {
+            self.banks[bank].sp
+        };
+        let target = if increment {
+            base
+        } else {
+            base.wrapping_sub(8)
+        };
+        Self::store(bus, slot, target, 4, registers[14], output)?;
+        Self::store(
+            bus,
+            slot,
+            target.wrapping_add(4),
+            4,
+            self.banks[current].spsr,
+            output,
+        )?;
+        if update {
+            let final_sp = if increment {
+                base.wrapping_add(8)
+            } else {
+                target
+            };
+            if bank == current {
+                registers[13] = final_sp;
+            } else {
+                self.banks[bank].sp = final_sp;
+            }
+        }
+        Ok(Some(pc.wrapping_add(4)))
     }
 
     fn reg(registers: &[u32; 32], index: usize, address: u32) -> u32 {
@@ -238,6 +374,15 @@ impl Cpu {
                 *pc = self.exchange(target);
                 return Ok(Step::Retired);
             }
+            if matches!(raw & 0xffc0, 0xe800 | 0xe980) {
+                let low = Self::load(bus, slot, pc.wrapping_add(2), 2)?;
+                if let Some(next) =
+                    self.exception_return(raw, low, *pc, registers, bus, slot, output)?
+                {
+                    *pc = next;
+                    return Ok(Step::Retired);
+                }
+            }
             self.thumb.set_apsr(self.cpsr);
             let retired = self.thumb.step(pc, registers, bus, output)?;
             self.cpsr = (self.cpsr & !FLAGS) | (self.thumb.apsr() & FLAGS);
@@ -255,10 +400,45 @@ impl Cpu {
             let offset = (((instruction << 8) as i32 >> 6) as u32) | ((instruction >> 23) & 2);
             registers[14] = next;
             next = self.exchange(address.wrapping_add(8).wrapping_add(offset) | 1);
+        } else if condition == 15 {
+            if !matches!(
+                instruction & 0xffff_fff0,
+                0xf57f_f040 | 0xf57f_f050 | 0xf57f_f060
+            ) {
+                return Err(format!(
+                    "unsupported unconditional A32 instruction {instruction:#010x} at {address:#010x}"
+                ));
+            }
         } else if self.condition(condition) {
             let rn = ((instruction >> 16) & 15) as usize;
             let rd = ((instruction >> 12) & 15) as usize;
             match instruction {
+                _ if instruction & 0x0fbf_0fff == 0x010f_0000 && rd != 15 => {
+                    registers[rd] = if instruction & (1 << 22) == 0 {
+                        self.cpsr
+                    } else {
+                        self.banks[Self::bank_for(self.cpsr).unwrap()].spsr
+                    };
+                }
+                _ if instruction & 0x0db0_f000 == 0x0120_f000 => {
+                    let (value, _) = self.operand(instruction, registers, address);
+                    let mut fields = 0;
+                    for field in 0..4 {
+                        if instruction & (1 << (16 + field)) != 0 {
+                            fields |= 0xff << (field * 8);
+                        }
+                    }
+                    if instruction & (1 << 22) == 0 {
+                        let updated = (self.cpsr & !fields) | (value & fields);
+                        if self.set_cpsr(updated, registers).is_err() {
+                            next = self.undefined(address.wrapping_add(4), registers);
+                        }
+                    } else {
+                        let bank = Self::bank_for(self.cpsr).unwrap();
+                        self.banks[bank].spsr =
+                            (self.banks[bank].spsr & !fields) | (value & fields);
+                    }
+                }
                 _ if matches!(instruction & 0x0fff_fff0, 0x012f_ff10 | 0x012f_ff30) => {
                     let target = Self::reg(registers, (instruction & 15) as usize, address);
                     if instruction & 0x20 != 0 {

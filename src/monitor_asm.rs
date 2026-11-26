@@ -62,11 +62,14 @@ pub(crate) fn assemble_source(
             rest = comment.split_once("*/").ok_or("unterminated ARM assembly comment")?.1;
         }
         cleaned.push_str(rest);
-        cleaned = cleaned.lines().map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+        cleaned = cleaned.lines().map(|line| {
+            let line = line.split_once("//").map_or(line, |(code, _)| code);
+            line.split_once("  # ").map_or(line, |(code, _)| code)
+        })
             .collect::<Vec<_>>().join("\n");
     }
     let source = if arm { cleaned.as_str() } else { source };
-    let comment = if thumb { '@' } else { '#' };
+    let comment = if arm { '@' } else { '#' };
     let instructions: Vec<_> = source
         .lines()
         .map(|line| line.split_once(comment).map_or(line, |(code, _)| code))
@@ -147,6 +150,7 @@ fn unsupported_assembly_directive(instruction: &str, thumb: bool) -> bool {
     let mut words = instruction.split_ascii_whitespace();
     match words.next() {
         Some(".word" | ".short" | ".byte") => false,
+        Some(".thumb" | ".arm") => words.next().is_some(),
         Some(".align") => !words.next().and_then(|word| word.parse::<u8>().ok())
             .is_some_and(|alignment| alignment <= 12 && words.next().is_none()),
         Some(".balign") => !words.next().and_then(|word| word.parse::<u32>().ok())
@@ -461,11 +465,13 @@ fn link_instructions(
     fs::create_dir(&dir).map_err(|e| format!("assembly scratch directory: {e}"))?;
     let dir = Scratch(dir);
     let attributes = match triple {
-        "thumbv6m-none-eabi" => Some(11),
-        "thumbv7em-none-eabi" => Some(13),
-        "thumbv8.1m.main-none-eabi" => Some(21),
+        "thumbv6m-none-eabi" => Some((11, 77, ".thumb")),
+        "thumbv7em-none-eabi" => Some((13, 77, ".thumb")),
+        "thumbv8.1m.main-none-eabi" => Some((21, 77, ".thumb")),
+        "armv7a-none-eabi" => Some((10, 65, ".arm")),
+        "armv7r-none-eabi" => Some((10, 82, ".arm")),
         _ => None,
-    }.map(|arch| format!(".eabi_attribute 6, {arch}\n.eabi_attribute 7, 77\n.thumb\n{source}"));
+    }.map(|(arch, profile, mode)| format!(".eabi_attribute 6, {arch}\n.eabi_attribute 7, {profile}\n{mode}\n{source}"));
     let source = attributes.as_deref().unwrap_or(source);
     let object = crate::llvm_mc_for(triple, features, "--filetype=obj", source)?;
     if !object.status.success() {
