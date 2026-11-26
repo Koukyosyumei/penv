@@ -718,6 +718,7 @@ fn sifive_pending(receive: usize, tx_control: u32, rx_control: u32) -> u32 {
     u32::from(tx_control >> 16 != 0) | (u32::from(receive > (rx_control >> 16) as usize) << 1)
 }
 
+#[derive(Clone)]
 pub struct Plic {
     pub base: u32,
     priorities: bool,
@@ -728,6 +729,7 @@ pub struct Plic {
     contexts: Vec<Context>,
 }
 
+#[derive(Clone)]
 struct Context {
     route: Option<(usize, u32)>,
     enable: Vec<u32>,
@@ -758,6 +760,73 @@ impl Plic {
                 })
                 .collect(),
         }
+    }
+
+    pub(crate) fn save_snapshot(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        use crate::snapshot::write_words;
+        write_words(output, &[
+            u64::from(self.base), self.priority.len() as u64,
+            self.contexts.len() as u64, u64::from(self.priorities),
+        ])?;
+        for field in [&self.priority, &self.level, &self.pending] {
+            for &value in field {
+                write_words(output, &[u64::from(value)])?;
+            }
+        }
+        for &owner in &self.claimed_by {
+            write_words(output, &[owner.map_or(0, |context| context as u64 + 1)])?;
+        }
+        for context in &self.contexts {
+            let [hart, pin] = context.route.map_or([u64::MAX, 0], |(hart, pin)| [hart as u64, u64::from(pin)]);
+            write_words(output, &[hart, pin])?;
+            for &word in &context.enable {
+                write_words(output, &[u64::from(word)])?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_snapshot(&mut self, input: &mut impl std::io::Read) -> std::io::Result<()> {
+        use crate::snapshot::{invalid, read_words};
+        let [base, sources, contexts, priorities] = read_words(input)?;
+        if [base, sources, contexts, priorities] != [
+            u64::from(self.base), self.priority.len() as u64,
+            self.contexts.len() as u64, u64::from(self.priorities),
+        ] {
+            return Err(invalid("PLIC snapshot layout differs from the platform"));
+        }
+        fn read_word(input: &mut impl std::io::Read) -> std::io::Result<u32> {
+            u32::try_from(read_words::<1>(input)?[0]).map_err(std::io::Error::other)
+        }
+        for field in [&mut self.priority, &mut self.level, &mut self.pending] {
+            for value in field {
+                *value = read_word(input)?;
+            }
+        }
+        let last = ((self.priority.len() - 1) % 32) + 1;
+        let outside_sources = u32::MAX.checked_shl(last as u32).unwrap_or(0);
+        if [&self.level, &self.pending].into_iter().any(|bits| {
+            bits[0] & 1 != 0 || bits.last().is_some_and(|word| word & outside_sources != 0)
+        }) {
+            return Err(invalid("invalid PLIC snapshot source bitmap"));
+        }
+        for owner in &mut self.claimed_by {
+            let [context] = read_words(input)?;
+            if context > contexts {
+                return Err(invalid("invalid PLIC snapshot claim owner"));
+            }
+            *owner = (context as usize).checked_sub(1);
+        }
+        for context in &mut self.contexts {
+            let route = context.route.map_or([u64::MAX, 0], |(hart, pin)| [hart as u64, u64::from(pin)]);
+            if read_words::<2>(input)? != route {
+                return Err(invalid("PLIC snapshot output differs from the platform"));
+            }
+            for word in &mut context.enable {
+                *word = read_word(input)?;
+            }
+        }
+        Ok(())
     }
 
     fn contains(&self, address: u32) -> bool {
@@ -896,5 +965,32 @@ impl Plic {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn plic_snapshot_preserves_the_claiming_context() {
+        let routes = vec![Some((0, 11)), Some((1, 9))];
+        let mut plic = Plic::new(0, 52, routes.clone(), true);
+        plic.write(12, 2);
+        plic.write(0x2000, 1 << 3);
+        plic.write(0x2080, 1 << 3);
+        plic.line(3, true);
+        assert_eq!(plic.read(0x201004), 3);
+        let mut snapshot = Vec::new();
+        plic.save_snapshot(&mut snapshot).unwrap();
+
+        let mut restored = Plic::new(0, 52, routes, true);
+        restored.load_snapshot(&mut snapshot.as_slice()).unwrap();
+        assert_eq!(restored.outputs(0), 0);
+        restored.write(0x200004, 3);
+        assert_eq!(restored.outputs(0), 0);
+        restored.write(0x201004, 3);
+        assert_eq!(restored.outputs(0), 1 << 11);
+        assert_eq!(restored.outputs(1), 1 << 9);
     }
 }
