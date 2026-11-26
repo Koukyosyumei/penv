@@ -13,6 +13,21 @@ pub(crate) struct Bmp180 {
 }
 
 impl Bmp180 {
+    pub(super) fn set_property(&mut self, property: &str, value: &str) -> Result<(), String> {
+        match property {
+            "Temperature" => {
+                self.temperature = value.parse::<f64>().ok().filter(|value| (-40.0..=85.0).contains(value))
+                    .ok_or("BMP180 temperature is outside the model's range")?;
+            }
+            "UncompensatedPressure" => {
+                self.pressure = crate::parse_address(value).ok().filter(|&value| value <= 0x7ffff)
+                    .ok_or("BMP180 uncompensated pressure exceeds 19 bits")?;
+            }
+            _ => return Err(format!("unsupported BMP180 property {property:?}")),
+        }
+        Ok(())
+    }
+
     pub(crate) fn new(temperature: f64, pressure: u32) -> Self {
         Self {
             temperature,

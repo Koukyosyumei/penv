@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use super::{arducam::Ov2640, lsm9ds1::Lsm9ds1};
 use crate::stm32_i2c::Eeprom;
@@ -7,6 +7,18 @@ use super::{
     Adxl372, Spi, bme280::Bme280, bmp180::Bmp180, lis2ds12::Lis2ds12, lsm303::Lsm303,
     lsm330::Lsm330,
 };
+
+pub(super) fn set_axis(values: &mut [f64; 3], prefix: &str, property: &str, value: &str) -> Result<(), String> {
+    let axis = match property.strip_prefix(prefix) {
+        Some("X") => 0,
+        Some("Y") => 1,
+        Some("Z") => 2,
+        _ => return Err(format!("unsupported sensor property {property:?}")),
+    };
+    values[axis] = value.parse::<f64>().ok().filter(|number| number.is_finite())
+        .ok_or_else(|| format!("invalid sensor value {value:?}"))?;
+    Ok(())
+}
 
 pub(super) enum Target {
     Eeprom(Eeprom),
@@ -81,6 +93,7 @@ enum Direction {
 
 pub(super) struct Twi {
     targets: Vec<(u32, Target)>,
+    named_targets: BTreeMap<String, usize>,
     spi: Spi,
     spi_enabled: bool,
     active: Option<(usize, Direction)>,
@@ -101,6 +114,7 @@ impl Default for Twi {
     fn default() -> Self {
         Self {
             targets: Vec::new(),
+            named_targets: BTreeMap::new(),
             spi: Spi::new(false),
             spi_enabled: false,
             active: None,
@@ -128,6 +142,29 @@ impl Twi {
         }
         self.targets.push((address, target));
         Ok(())
+    }
+
+    pub(super) fn attach_named(&mut self, address: u32, name: String, target: Target) -> Result<(), String> {
+        if self.named_targets.contains_key(&name) {
+            return Err(format!("duplicate TWI target name {name:?}"));
+        }
+        let index = self.targets.len();
+        self.attach(address, target)?;
+        self.named_targets.insert(name, index);
+        Ok(())
+    }
+
+    pub(super) fn set_sensor_property(
+        &mut self, name: &str, property: &str, value: &str,
+    ) -> Option<Result<(), String>> {
+        let index = *self.named_targets.get(name)?;
+        let sensor = &mut self.targets[index].1;
+        Some(match sensor {
+            Target::Bmp180(sensor) => sensor.set_property(property, value),
+            Target::Lsm330(sensor) => sensor.set_property(property, value),
+            Target::Lsm303(sensor) => sensor.set_property(property, value),
+            _ => Err(format!("unsupported sensor property {property:?}")),
+        })
     }
 
     pub(super) fn adxl(&mut self, name: &str) -> Option<&mut Adxl372> {
@@ -186,6 +223,7 @@ impl Twi {
         }
         *self = Self {
             targets: std::mem::take(&mut self.targets),
+            named_targets: std::mem::take(&mut self.named_targets),
             ..Self::default()
         };
     }

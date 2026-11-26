@@ -1804,10 +1804,18 @@ fn run_commands<'a>(
             Action::CpuWait(cpu, asserted) => {
                 machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
             }
-            Action::I2cAcceleration(target, axis, value, default) => machine.bus.lis2dw12(target).map(|sensor| {
-                sensor.set_axis(*axis, *value, *default);
-                None
-            }),
+            Action::I2cAcceleration(target, axis, value, default) => {
+                if let Ok(sensor) = machine.bus.lis2dw12(target) {
+                    sensor.set_axis(*axis, *value, *default);
+                } else if !default {
+                    let property = ["AccelerationX", "AccelerationY", "AccelerationZ"][*axis];
+                    let value = (f64::from(*value) / 1_000_000.0).to_string();
+                    machine.bus.set_i2c_sensor_property(target, property, &value)?;
+                } else {
+                    return Err(format!("unknown LIS2DW12 sensor {target:?}"));
+                }
+                Ok(None)
+            }
             Action::I2cAccelerationFeed(target, path, multi_frequency) => {
                 let now_ns = machine.monitor_elapsed_ns().min(u128::from(u64::MAX)) as u64;
                 machine.bus.lis2dw12(target).and_then(|sensor| sensor.feed(path, now_ns, *multi_frequency))
@@ -5464,7 +5472,9 @@ fn execute(
                 .ok_or("expected a nonnegative supply voltage")?;
             Some(Action::Stm32SupplyVoltage(resolve(target)?.into(), voltage))
         }
-        [target, property @ ("Temperature" | "Humidity" | "Pressure" | "SerialNumber"), value]
+        [target, property @ ("Temperature" | "Humidity" | "Pressure" | "SerialNumber"
+            | "UncompensatedPressure" | "AngularRateX" | "AngularRateY" | "AngularRateZ"
+            | "MagneticFieldX" | "MagneticFieldY" | "MagneticFieldZ"), value]
             if target.trim_start_matches("sysbus.").contains('.') =>
         {
             Some(Action::I2cSensorProperty(resolve(target)?.into(), (*property).into(), resolve(value)?.into()))
@@ -6000,6 +6010,7 @@ fn execute(
                         | Action::CheckMemory(..) | Action::AddMemorySymbol(..) | Action::ResolveMemorySymbols(..)
                         | Action::PeripheralLog(..)
                         | Action::I2cAccelerationFeed(..) | Action::I2cAccelerationRead(..) | Action::I2cSampleRate(..) | Action::I2cAcceleration(..)
+                        | Action::I2cSensorProperty(..)
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint

@@ -528,19 +528,19 @@ pub(super) fn map_peripheral(
                     twi.attach_lis2ds12(address, acceleration, gpio, pin)
                 } else if child.model == "Sensors.BMP180" {
                     let (temperature, pressure) = bmp180_config(child, entries)?;
-                    twi.attach_bmp180(address, temperature, pressure)
+                    twi.attach_bmp180(address, child.name.clone(), temperature, pressure)
                 } else if matches!(
                     child.model.as_str(),
                     "Sensors.LSM330_Accelerometer" | "Sensors.LSM330_Gyroscope"
                 ) {
                     let (values, gyro) = lsm330_config(child, entries)?;
-                    twi.attach_lsm330(address, values, gyro)
+                    twi.attach_lsm330(address, child.name.clone(), values, gyro)
                 } else if matches!(
                     child.model.as_str(),
                     "Sensors.LSM303DLHC_Accelerometer" | "Sensors.LSM303DLHC_Gyroscope"
                 ) {
                     let (values, irq) = lsm303_config(child, entries)?;
-                    twi.attach_lsm303(address, values, irq)
+                    twi.attach_lsm303(address, child.name.clone(), values, irq)
                 } else if matches!(
                     child.model.as_str(),
                     "Sensors.LSM9DS1_IMU" | "Sensors.LSM9DS1_Magnetic"

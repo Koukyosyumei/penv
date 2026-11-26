@@ -9,6 +9,11 @@ pub(super) struct Lsm303 {
 }
 
 impl Lsm303 {
+    pub(super) fn set_property(&mut self, property: &str, value: &str) -> Result<(), String> {
+        let prefix = if self.irq_wiring.is_some() { "Acceleration" } else { "MagneticField" };
+        super::twi::set_axis(&mut self.values, prefix, property, value)
+    }
+
     pub(super) fn new(values: [f64; 3], irq_wiring: Option<(u32, [u8; 2])>) -> Self {
         let accel = irq_wiring.is_some();
         Self {

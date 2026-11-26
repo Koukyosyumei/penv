@@ -434,14 +434,16 @@ impl Peripheral {
     pub fn attach_lsm303(
         &mut self,
         address: u32,
+        name: String,
         values: [f64; 3],
         irq: Option<(u32, [u8; 2])>,
     ) -> Result<(), String> {
         let Device::Twi(twi) = &mut self.device else {
             return Err("LSM303DLHC requires TWI".into());
         };
-        twi.attach(
+        twi.attach_named(
             address,
+            name,
             twi::Target::Lsm303(lsm303::Lsm303::new(values, irq)),
         )
     }
@@ -449,14 +451,16 @@ impl Peripheral {
     pub fn attach_lsm330(
         &mut self,
         address: u32,
+        name: String,
         values: [f64; 3],
         gyroscope: bool,
     ) -> Result<(), String> {
         let Device::Twi(twi) = &mut self.device else {
             return Err("LSM330 requires TWI".into());
         };
-        twi.attach(
+        twi.attach_named(
             address,
+            name,
             twi::Target::Lsm330(lsm330::Lsm330::new(values, gyroscope)),
         )
     }
@@ -464,16 +468,27 @@ impl Peripheral {
     pub fn attach_bmp180(
         &mut self,
         address: u32,
+        name: String,
         temperature: f64,
         pressure: u32,
     ) -> Result<(), String> {
         let Device::Twi(twi) = &mut self.device else {
             return Err("BMP180 requires TWI".into());
         };
-        twi.attach(
+        twi.attach_named(
             address,
+            name,
             twi::Target::Bmp180(bmp180::Bmp180::new(temperature, pressure)),
         )
+    }
+
+    pub(crate) fn set_twi_sensor_property(
+        &mut self, name: &str, property: &str, value: &str,
+    ) -> Option<Result<(), String>> {
+        match &mut self.device {
+            Device::Twi(twi) => twi.set_sensor_property(name, property, value),
+            _ => None,
+        }
     }
 
     pub fn attach_lis2ds12(

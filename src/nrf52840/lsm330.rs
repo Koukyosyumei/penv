@@ -8,6 +8,11 @@ pub(super) struct Lsm330 {
 }
 
 impl Lsm330 {
+    pub(super) fn set_property(&mut self, property: &str, value: &str) -> Result<(), String> {
+        let prefix = if self.gyroscope { "AngularRate" } else { "Acceleration" };
+        super::twi::set_axis(&mut self.values, prefix, property, value)
+    }
+
     pub(super) fn new(values: [f64; 3], gyroscope: bool) -> Self {
         Self {
             values,

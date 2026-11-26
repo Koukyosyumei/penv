@@ -5345,6 +5345,10 @@ impl Bus {
     pub(crate) fn set_i2c_sensor_property(&mut self, target: &str, property: &str, value: &str) -> Result<(), String> {
         let path = target.strip_prefix("sysbus.").unwrap_or(target);
         let (bus_name, name) = path.split_once('.').ok_or("expected I²C controller and sensor name")?;
+        if let Some(bus) = self.nrf_peripherals.iter_mut().find(|bus| bus.name == bus_name) {
+            return bus.set_twi_sensor_property(name, property, value)
+                .ok_or_else(|| format!("unknown TWI sensor {target:?}"))?;
+        }
         self.stm32_i2cs.iter_mut()
             .find(|bus| bus.name.as_deref() == Some(bus_name))
             .ok_or_else(|| format!("unknown I²C controller {bus_name:?}"))?
