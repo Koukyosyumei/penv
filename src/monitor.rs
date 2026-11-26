@@ -2979,6 +2979,9 @@ pub fn serve(
                         || error.starts_with("<monitor>:1: unsupported snapshot platform") => {
                         frame(&mut output, "UNSUPPORTED", error.as_bytes())
                     }
+                    Err(error) if let Some((_, url)) = error.split_once("monitor asset unavailable: ") => {
+                        frame(&mut output, "ASSET", url.as_bytes())
+                    }
                     Err(error) => {
                         frame(&mut output, "ERROR", error.as_bytes())
                     }
@@ -2990,6 +2993,9 @@ pub fn serve(
                     Ok(None) => frame(&mut output, "UNSUPPORTED", error.as_bytes()),
                     Err(error) if error.starts_with("KeywordException: ") => {
                         frame(&mut output, "REJECTED", error.as_bytes())
+                    }
+                    Err(error) if let Some(url) = error.strip_prefix("monitor asset unavailable: ") => {
+                        frame(&mut output, "ASSET", url.as_bytes())
                     }
                     Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
