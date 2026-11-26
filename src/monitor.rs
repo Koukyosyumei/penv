@@ -577,6 +577,7 @@ enum Action {
     CpuReset(String),
     CpuPc(String, u32),
     CpuSymbolPc(String, String),
+    CpuSymbolVectorTable(String, String),
     SymbolAddress(String),
     I2cSensorProperty(String, String, String),
     I2cAcceleration(String, usize, i32, bool),
@@ -1331,6 +1332,15 @@ fn run_commands<'a>(
                 writeln!(output.reply(), "0x{address:x}").map_err(|error| error.to_string())?;
                 Ok(None)
             }),
+            Action::CpuSymbolVectorTable(cpu, symbol) => {
+                let address = u32::try_from(machine.monitor_symbol_address(symbol)?)
+                    .map_err(|_| "vector table address exceeds Cortex-M address width")?;
+                machine.set_named_vector_table(cpu, address)?;
+                if machine.elapsed_steps() == 0 {
+                    machine.validate_entry()?;
+                }
+                Ok(None)
+            }
             Action::CpuSymbolPc(cpu, symbol) => machine.set_monitor_symbol_pc(cpu, symbol).map(|()| None),
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
@@ -1531,6 +1541,9 @@ fn run_commands<'a>(
                 let rate = machine.bus.monitor_step_hz();
                 let timeout = duration_cycles(*timeout, CORTEX_M_STEP_HZ, rate)?;
                 let hold = duration_cycles(*hold, CORTEX_M_STEP_HZ, rate)?;
+                if timeout.min(budget) != 0 || hold.min(budget) != 0 {
+                    machine.set_monitor_active(true);
+                }
                 let count = wait_for_led(machine, target, *state, timeout, hold, &mut budget, &mut output)?;
                 if *pause {
                     machine.set_monitor_active(false);
@@ -2316,9 +2329,6 @@ fn wait_for_led(
     if machine.bus.gpio_led(index).state != state {
         let start = machine.elapsed_steps();
         let limit = timeout.min(*budget);
-        if limit != 0 {
-            machine.set_monitor_active(true);
-        }
         let (stop, count) =
             run_until_deadline(machine, limit, output, |bus, _| bus.gpio_led(index).state == state)?;
         *budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -2332,9 +2342,6 @@ fn wait_for_led(
 
     let transitions = machine.bus.gpio_led(index).transitions;
     let limit = hold.min(*budget);
-    if limit != 0 {
-        machine.set_monitor_active(true);
-    }
     let (stop, count) = run_until_deadline(machine, limit, output, |bus, _| {
         bus.gpio_led(index).transitions != transitions
     })?;
@@ -4527,6 +4534,16 @@ fn execute(
         }
         ["sysbus", "GetSymbolAddress", symbol] => {
             Some(Action::SymbolAddress(unquote(resolve(symbol)?).to_owned()))
+        }
+        [target, "VectorTableOffset", expression] if expression.starts_with('`') && expression.ends_with('`') => {
+            let expression = &expression[1..expression.len() - 1];
+            let words = command_words(expression)?;
+            let ["sysbus", "GetSymbolAddress", symbol] = words.as_slice() else {
+                return Err("expected a vector table symbol expression".into());
+            };
+            Some(Action::CpuSymbolVectorTable(
+                resolve(target)?.trim_start_matches("sysbus.").into(), unquote(resolve(symbol)?).into(),
+            ))
         }
         [target, "PC", address] if address.starts_with('`') && address.ends_with('`') => {
             let expression = &address[1..address.len() - 1];
