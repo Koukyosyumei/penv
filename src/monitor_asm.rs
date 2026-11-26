@@ -26,7 +26,18 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<usize, String> {
         .map(|i| u8::from_str_radix(&text[i..i + 2], 16).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let source = String::from_utf8(bytes).map_err(|error| error.to_string())?;
-    assemble_source(machine, cpu, address, requested_triple, &source)
+    let cpu = if *cpu == "-" {
+        if machine.hart_count() != 1 {
+            return Err("multiple CPUs require an explicit CPU index".into());
+        }
+        machine.monitor_assembly_cpu_name(0)?.to_owned()
+    } else if let Some(index) = cpu.strip_prefix("index:") {
+        let index = index.parse().map_err(|_| "invalid assembly CPU index")?;
+        machine.monitor_assembly_cpu_name(index)?.to_owned()
+    } else {
+        (*cpu).to_owned()
+    };
+    assemble_source(machine, &cpu, address, requested_triple, &source)
 }
 
 pub(crate) fn assemble_source(

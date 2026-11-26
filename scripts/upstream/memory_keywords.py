@@ -31,11 +31,28 @@ def current_keyword(endpoint):
 
 
 class MemoryKeywords:
-    memory_keywords = {"Add Symbol": "add_monitor_symbol"}
+    memory_keywords = {"Add Symbol": "add_monitor_symbol",
+                       "Store Assembled Code": "store_assembled_code"}
     memory_keywords.update({"Store " + " ".join(name.replace("Word", " Word").split()):
                             "store_monitor_value" for name in WIDTHS})
     memory_keywords.update({f"{family} {comparison}": "compare_monitor_memory"
                             for family in FAMILIES for comparison in COMPARISONS})
+
+    def store_assembled_code(self, address, assembly, *args):
+        positional = ("triple", "alternateDialect", "machine", "cpu")
+        options = self.log_options(args, set(positional), positional)
+        if self.log_bool(options.get("alternateDialect", "false")):
+            raise Unsupported("alternate assembly dialect is unavailable")
+        triple = options.get("triple") or "default"
+        if triple == "null":
+            triple = "default"
+        if not triple.isascii() or any(not (character.isalnum() or character in "-_.") for character in triple):
+            raise Unsupported(f"invalid assembler triple {triple!r}")
+        if machine := options.get("machine"):
+            self.operation(f"mach set {self.literal(machine)}")
+        cpu = "-" if "cpu" not in options else f"index:{integer(options['cpu'])}"
+        source = assembly.strip("\"'").encode().hex()
+        self.operation(f"AssembleMonitorBlock {cpu} {integer(address):#x} {triple} {source}")
 
     def add_monitor_symbol(self, name, start, size=4, *args):
         if args or not name:

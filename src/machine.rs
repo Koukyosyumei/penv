@@ -848,6 +848,15 @@ impl Machine {
         hart.monitor_integer_register(index as u32, value).map(|value| value.map(u64::from))
     }
 
+    pub(crate) fn monitor_assembly_cpu_name(&self, index: usize) -> Result<&str, String> {
+        if self.cpu_less {
+            return Err("the machine has no CPUs".into());
+        }
+        std::iter::once(&self.primary).chain(&self.secondary).nth(index)
+            .and_then(|hart| hart.name.as_deref())
+            .ok_or_else(|| format!("unknown assembly CPU index {index}"))
+    }
+
     pub(crate) fn monitor_assembly_target(
         &mut self, name: &str,
     ) -> Result<(Option<usize>, &'static str, String), String> {
