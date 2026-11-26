@@ -479,6 +479,7 @@ fn link_instructions(
     let attributes = match triple {
         "thumbv6m-none-eabi" => Some((11, 77, ".thumb")),
         "thumbv7em-none-eabi" => Some((13, 77, ".thumb")),
+        "thumbv8m.main-none-eabi" => Some((17, 77, ".thumb")),
         "thumbv8.1m.main-none-eabi" => Some((21, 77, ".thumb")),
         "armv7a-none-eabi" => Some((10, 65, ".arm")),
         "armv7r-none-eabi" => Some((10, 82, ".arm")),

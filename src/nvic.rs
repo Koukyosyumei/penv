@@ -526,6 +526,10 @@ impl Nvic {
         self.cpacr & (0xf << 20) == 0xf << 20
     }
 
+    pub(crate) fn set_fpu_access(&mut self, enabled: bool) {
+        self.cpacr = if enabled { 0xf << 20 } else { 0 };
+    }
+
     pub fn allows_unaligned_data(&self) -> bool {
         (self.has_fpu() || self.mpu.is_some()) && !self.unaligned_access_traps()
     }

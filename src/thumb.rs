@@ -56,6 +56,7 @@ struct SecurityBank {
 pub struct Thumb {
     vectors: Option<u32>,
     pub(crate) thumb2: bool,
+    pub(crate) cortex_m33: bool,
     pub(crate) cortex_m55: bool,
     pub(crate) trustzone: bool,
     secure: bool,
@@ -204,6 +205,7 @@ impl Thumb {
         *self = Self {
             vectors: self.vectors,
             thumb2: self.thumb2,
+            cortex_m33: self.cortex_m33,
             cortex_m55: self.cortex_m55,
             trustzone: self.trustzone,
             secure: self.trustzone,
@@ -1026,7 +1028,7 @@ impl Thumb {
         if self.fp_active {
             r[14] &= !0x10;
         }
-        if self.cortex_m55 {
+        if self.cortex_m33 || self.cortex_m55 {
             r[14] = (r[14] & !0x41) | (u32::from(origin_secure) << 6) | u32::from(self.trustzone && !nonsecure);
             if has_callee_frame && !nonsecure {
                 r[14] &= !0x20;
@@ -1124,7 +1126,7 @@ impl Thumb {
     fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
         let basic_target = if self.trustzone && target & 0xffffff82 == 0xffffff80 {
             target | 0x71
-        } else if self.cortex_m55 && target & 0xffff_ffa1 == 0xffff_ffa0 {
+        } else if (self.cortex_m33 || self.cortex_m55) && target & 0xffff_ffa1 == 0xffff_ffa0 {
             target | 0x51
         } else if self.thumb2 {
             target | 0x10

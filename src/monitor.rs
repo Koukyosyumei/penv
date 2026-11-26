@@ -746,6 +746,7 @@ enum Action {
     CpuStatus(String, String),
     CpuSecurityState(String, bool),
     CpuPreserveFp(String),
+    CpuFpuEnabled(String, Option<bool>),
     CpuSau(String, String, Option<u32>),
     CpuNonsecureVectorTable(String, u32),
     NvicLockup(String, bool),
@@ -1235,6 +1236,18 @@ fn run_commands<'a>(
                 }.map(|()| None).map_err(|error| error.to_string())
             }
             Action::CpuPreserveFp(cpu) => machine.preserve_cortex_m_fp(cpu).map(|()| None),
+            Action::CpuFpuEnabled(cpu, enabled) => {
+                machine.cortex_m_cpu(cpu)?;
+                let nvic = machine.bus.nvic.as_mut().filter(|nvic| nvic.has_fpu())
+                    .ok_or("CPU has no floating-point unit")?;
+                if let Some(enabled) = enabled {
+                    nvic.set_fpu_access(*enabled);
+                } else {
+                    writeln!(output.reply(), "{}", if nvic.fpu_access() { "True" } else { "False" })
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(None)
+            }
             Action::CpuSecurityState(cpu, secure) => {
                 machine.set_cortex_m_security(cpu, *secure)?;
                 Ok(None)
@@ -5781,6 +5794,10 @@ fn execute(
         [target, "DoLazyFloatingPointStatePreservation"] => Some(Action::CpuPreserveFp(
             resolve(target)?.trim_start_matches("sysbus.").into(),
         )),
+        [target, "FpuEnabled", values @ ..] if values.len() <= 1 => Some(Action::CpuFpuEnabled(
+            resolve(target)?.trim_start_matches("sysbus.").into(),
+            values.first().map(|value| parse_tester_bool(resolve(value)?)).transpose()?,
+        )),
         [target, "SecureState", value] => Some(Action::CpuSecurityState(
             resolve(target)?.trim_start_matches("sysbus.").into(), parse_tester_bool(resolve(value)?)?,
         )),
@@ -5847,7 +5864,7 @@ fn execute(
                         | Action::DisassembleBlock(..) | Action::BusWhatIsAt(..) | Action::ExecutePython(..) | Action::PythonHook(..)
                         | Action::MonitorCreateMachine(..) | Action::MonitorSelectMachine(..) | Action::PlatformFragment(..) | Action::ReadLogLevels
                         | Action::ScopedRamOverlay(..) | Action::PeripheralList | Action::ExportPeripherals(..) | Action::SubobjectTester(..) | Action::LoadScopedHex(..) | Action::LoadMonitorElf(..)
-                        | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
+                        | Action::CpuSecurityState(..) | Action::CpuPreserveFp(..) | Action::CpuFpuEnabled(..) | Action::CpuSau(..) | Action::CpuNonsecureVectorTable(..) | Action::NvicLockup(..)
                         | Action::AssembleBlock(..)
                         | Action::AddStackAccessHook(..) | Action::AddCsrHook(..) | Action::VectorRegisterLength(..)
                         | Action::AssertCpuValue(..)

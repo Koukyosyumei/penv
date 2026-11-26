@@ -1401,12 +1401,13 @@ fn load_platform(
             }
         }
         let cortex_m55 = cpu_type == Some(r#""cortex-m55""#);
-        let cortex_m4f = matches!(cpu_type, Some(r#""cortex-m4""# | r#""cortex-m4f""#)) || cortex_m55;
+        let cortex_m33 = cpu_type == Some(r#""cortex-m33""#);
+        let cortex_m4f = matches!(cpu_type, Some(r#""cortex-m4""# | r#""cortex-m4f""#)) || cortex_m33 || cortex_m55;
         if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) && !cortex_m4f {
-            return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4F or Cortex-M55 cpuType"));
+            return Err(entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4F, Cortex-M33 or Cortex-M55 cpuType"));
         }
-        if trustzone && !cortex_m55 {
-            return Err(entry.error("TrustZone requires a Cortex-M55 CPU"));
+        if trustzone && !(cortex_m33 || cortex_m55) {
+            return Err(entry.error("TrustZone requires a Cortex-M33 or Cortex-M55 CPU"));
         }
         if !cortex_m4f {
             machine.bus.map_stm32f072_flash().map_err(|error| entry.error(&error))?;
@@ -2380,9 +2381,11 @@ fn load_platform(
         machine.primary.configure_cortex_m(vectors, cortex_m4f);
         if cortex_m55 {
             machine.primary.mark_cortex_m55(trustzone)?;
-            if trustzone {
-                machine.bus.nvic.as_mut().unwrap().enable_trustzone();
-            }
+        } else if cortex_m33 {
+            machine.primary.mark_cortex_m33(trustzone)?;
+        }
+        if trustzone {
+            machine.bus.nvic.as_mut().unwrap().enable_trustzone();
         }
         machine.set_cortex_m_cpu_wait(&entry.name, cpu_wait)?;
         return Ok(machine);

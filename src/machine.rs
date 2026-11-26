@@ -935,6 +935,8 @@ impl Machine {
         if let Some(thumb) = &hart.thumb {
             let (triple, features) = if thumb.cortex_m55 {
                 ("thumbv8.1m.main-none-eabi", "+mve.fp")
+            } else if thumb.cortex_m33 {
+                ("thumbv8m.main-none-eabi", "+fp-armv8d16sp")
             } else if thumb.thumb2 {
                 ("thumbv7em-none-eabi", "+vfp4d16sp")
             } else {
@@ -2735,6 +2737,13 @@ impl Hart {
     pub(crate) fn mark_cortex_m55(&mut self, trustzone: bool) -> Result<(), String> {
         let thumb = self.thumb.as_mut().ok_or("Cortex-M55 requires a Cortex-M CPU")?;
         thumb.cortex_m55 = true;
+        thumb.configure_trustzone(trustzone);
+        Ok(())
+    }
+
+    pub(crate) fn mark_cortex_m33(&mut self, trustzone: bool) -> Result<(), String> {
+        let thumb = self.thumb.as_mut().ok_or("Cortex-M33 requires a Cortex-M CPU")?;
+        thumb.cortex_m33 = true;
         thumb.configure_trustzone(trustzone);
         Ok(())
     }
