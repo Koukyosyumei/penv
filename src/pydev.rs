@@ -478,3 +478,16 @@ except SyntaxError as error:
     }
     Err(diagnostic.trim().into())
 }
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn pydev_validation_compiles_without_running_source() {
+        validate_source("raise RuntimeError('construction must not execute the source')").unwrap();
+        let error = validate_source("invalid Python").unwrap_err();
+        assert!(error.starts_with(SYNTAX_ERROR));
+        assert!(error.contains("SyntaxError:"));
+    }
+}
