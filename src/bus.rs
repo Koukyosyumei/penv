@@ -508,6 +508,7 @@ pub struct Bus {
     stm32f4_rcc: Option<Stm32F4Rcc>,
     stm32_flash: Option<Stm32F0Flash>,
     stm32l0_flash: Option<crate::stm32l0_flash::Stm32l0Flash>,
+    stm32l0_rcc: Option<crate::stm32l0_rcc::Stm32l0Rcc>,
     stm32_rtc: Option<Stm32Rtc>,
     iwdgs: Vec<Iwdg>,
     h7_exti: Option<H7Exti>,
@@ -2981,6 +2982,11 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.stm32l0_rcc.as_ref().is_some_and(|rcc| {
+            overlaps_range(start, end, rcc.base, crate::stm32l0_rcc::Stm32l0Rcc::SIZE)
+        }) {
+            return true;
+        }
         if self.stm32l0_flash.as_ref().is_some_and(|flash| {
             overlaps_range(start, end, flash.base, crate::stm32l0_flash::Stm32l0Flash::SIZE)
                 || overlaps_range(start, end, flash.signature.0, flash.signature.1)
@@ -3968,6 +3974,10 @@ impl Bus {
         }
         if let Some(uart) = self.litex_uart.as_mut() {
             *uart = LiteXUart::new(uart.bases.clone(), None);
+        }
+        if let Some(rcc) = self.stm32l0_rcc.as_mut() {
+            rcc.reset();
+            self.refresh_stm32l0_clock();
         }
         if let Some(flash) = self.stm32l0_flash.as_mut() {
             flash.reset();
@@ -5079,6 +5089,25 @@ impl Bus {
         self.stm32_regular_adcs.iter_mut().find(|adc| adc.name == name)
             .ok_or_else(|| format!("unknown STM32 ADC {name:?}"))?
             .feed_sample(value, channel, repeat)
+    }
+
+    pub(crate) fn map_stm32l0_rcc(&mut self, rcc: crate::stm32l0_rcc::Stm32l0Rcc) -> Result<(), String> {
+        let start = u64::from(rcc.base);
+        let end = start + u64::from(crate::stm32l0_rcc::Stm32l0Rcc::SIZE);
+        if rcc.base & 3 != 0 || end > 1 << 32 || self.stm32l0_rcc.is_some() || self.overlaps(start, end) {
+            return Err("invalid or overlapping STM32L0 RCC".into());
+        }
+        self.stm32l0_rcc = Some(rcc);
+        self.refresh_stm32l0_clock();
+        Ok(())
+    }
+
+    pub(crate) fn refresh_stm32l0_clock(&mut self) {
+        if let Some(rcc) = self.stm32l0_rcc.as_ref().filter(|rcc| rcc.systick)
+            && let Some(systick) = self.systick.as_mut()
+        {
+            systick.set_frequency(rcc.systick_frequency());
+        }
     }
 
     pub(crate) fn map_stm32l0_flash(&mut self, flash: crate::stm32l0_flash::Stm32l0Flash) -> Result<(), String> {
@@ -6954,6 +6983,9 @@ impl Bus {
         {
             return Ok(value as u32);
         }
+        if N == 4 && let Some(rcc) = self.stm32l0_rcc.as_ref().filter(|rcc| rcc.contains(address)) {
+            return Ok(rcc.read(address));
+        }
         if N == 4 && let Some(flash) = self.stm32l0_flash.as_ref().filter(|flash| flash.contains(address)) {
             return Ok(flash.read(address));
         }
@@ -7837,6 +7869,14 @@ impl Bus {
                 .access(address.into(), width as u32, Some(value.into()))
                 .map(|_| ())
                 .map_err(BusError::Python);
+        }
+        if width == 4 && let Some(rcc) = self.stm32l0_rcc.as_mut().filter(|rcc| rcc.contains(address)) {
+            let before = rcc.systick_frequency();
+            rcc.write(address, value);
+            if rcc.systick_frequency() != before {
+                self.refresh_stm32l0_clock();
+            }
+            return Ok(());
         }
         if let Some(flash) = self.stm32l0_flash.as_mut() {
             if width == 4 && flash.contains(address) {

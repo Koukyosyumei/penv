@@ -603,6 +603,7 @@ fn load_platform(
     let mut ram = false;
     let mut memory_bases = HashMap::new();
     let mut stm32l0_flash = None;
+    let mut stm32l0_rcc = None;
     let mut flash_controller = None;
     let mut flash_chip = None;
     let mut uart = None;
@@ -904,6 +905,11 @@ fn load_platform(
                     return Err(entry.error("only one STM32 DMA controller is supported"));
                 }
             }
+            "Miscellaneous.STM32L0_RCC" => {
+                if stm32l0_rcc.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32L0 RCC is supported"));
+                }
+            }
             "MTD.STM32L0_FlashController" => {
                 if stm32l0_flash.replace(entry).is_some() {
                     return Err(entry.error("only one STM32L0 flash controller is supported"));
@@ -950,6 +956,31 @@ fn load_platform(
     let extended_nvic = stm32_uarts
         .iter()
         .any(|uart| uart.model == "UART.STM32_UART");
+    if let Some(entry) = stm32l0_rcc {
+        let mut systick = false;
+        let mut hse_frequency = 16_000_000;
+        for (key, value) in keys(entry, &["systick", "rtc", "lptimer", "hseFrequency"])? {
+            match key {
+                "systick" => {
+                    if !nvic.is_some_and(|controller| controller.name == value) {
+                        return Err(entry.error("unknown RCC SysTick target"));
+                    }
+                    systick = true;
+                }
+                "hseFrequency" => {
+                    hse_frequency = number(value).map_err(|error| entry.error(&error))?;
+                    if hse_frequency == 0 {
+                        return Err(entry.error("invalid HSE frequency"));
+                    }
+                }
+                _ if !entries.iter().any(|other| other.name == value) => return Err(entry.error("unknown RCC clock target")),
+                _ => {}
+            }
+        }
+        machine.bus.map_stm32l0_rcc(crate::stm32l0_rcc::Stm32l0Rcc::new(
+            entry.address()?, systick, hse_frequency,
+        )).map_err(|error| entry.error(&error))?;
+    }
     if let Some(entry) = stm32l0_flash {
         let registrations = entry.registration_list().ok_or_else(|| entry.error("missing flash controller registrations"))?;
         let mut registers = None;
@@ -1200,6 +1231,7 @@ fn load_platform(
                 .unwrap()
                 .set_frequency(frequency);
         }
+        machine.bus.refresh_stm32l0_clock();
         let mut uart_irq = None;
         if let Some(uart) = uart {
             if uart.model != "UART.LiteX_UART" {
