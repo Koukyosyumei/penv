@@ -74,6 +74,24 @@ mod tests {
     }
 
     #[test]
+    fn arm_hyp_and_system_modes_share_lr_but_not_sp() {
+        let mut cpu = Cpu::new(Profile::RealTimeV8);
+        let mut registers = [0; 32];
+        registers[13] = 0x100;
+        registers[14] = 0x200;
+        cpu.set_cpsr(0x1f, &mut registers).unwrap();
+        assert_eq!((registers[13], registers[14]), (0, 0x200));
+        registers[13] = 0x300;
+        registers[14] = 0x400;
+        cpu.set_cpsr(0x13, &mut registers).unwrap();
+        assert_eq!((registers[13], registers[14]), (0, 0));
+        cpu.set_cpsr(0x1a, &mut registers).unwrap();
+        assert_eq!((registers[13], registers[14]), (0x100, 0x400));
+        cpu.set_cpsr(0x1f, &mut registers).unwrap();
+        assert_eq!((registers[13], registers[14]), (0x300, 0x400));
+    }
+
+    #[test]
     fn arm_generic_timer_distinguishes_count_offset_compare_and_mask() {
         let mut timer = GenericTimer::new(100_000_000, 100_000_000, [Some(30), Some(27), Some(26)]);
         assert_eq!(timer.read32(0x000e_0000, 0), Some(100_000_000));
@@ -623,14 +641,18 @@ impl Cpu {
         })
     }
 
+    fn link_register_bank(bank: usize) -> usize {
+        if bank == 6 { 0 } else { bank }
+    }
+
     pub(crate) fn set_cpsr(&mut self, value: u32, registers: &mut [u32; 32]) -> Result<(), String> {
         let old = Self::bank_for(self.cpsr).expect("current CPSR has a valid mode");
         let new = Self::bank_for(value).ok_or("invalid AArch32 mode")?;
         if old != new {
             self.banks[old].sp = registers[13];
-            self.banks[old].lr = registers[14];
+            self.banks[Self::link_register_bank(old)].lr = registers[14];
             registers[13] = self.banks[new].sp;
-            registers[14] = self.banks[new].lr;
+            registers[14] = self.banks[Self::link_register_bank(new)].lr;
             if old == 1 {
                 self.fiq_high.copy_from_slice(&registers[8..13]);
                 registers[8..13].copy_from_slice(&self.shared_high);
@@ -796,7 +818,12 @@ impl Cpu {
             31 if current == 6 => (6, 13),
             _ => return None,
         };
-        if bank == current {
+        let current_register_bank = if index == 14 {
+            Self::link_register_bank(current)
+        } else {
+            current
+        };
+        if bank == current_register_bank {
             Some(&mut registers[index])
         } else if index == 13 {
             Some(&mut self.banks[bank].sp)
@@ -810,7 +837,7 @@ impl Cpu {
         match index {
             8..=12 if bank == 1 => &mut self.shared_high[index - 8],
             13 if bank != 0 => &mut self.banks[0].sp,
-            14 if bank != 0 => &mut self.banks[0].lr,
+            14 if Self::link_register_bank(bank) != 0 => &mut self.banks[0].lr,
             _ => &mut registers[index],
         }
     }
