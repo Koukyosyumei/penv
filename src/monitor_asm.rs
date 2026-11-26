@@ -150,6 +150,15 @@ fn lower_andes_instruction(line: &str, triple: &str) -> Result<String, String> {
             | (funct3 << 12) | (andes_register(rd)? << 7) | 0x5b;
         return Ok(format!("{label} .4byte {encoding:#010x}"));
     }
+    if matches!(name, "nds.fcvt.s.bf16" | "nds.fcvt.bf16.s") {
+        let (rd, source) = args.split_once(',')
+            .ok_or_else(|| format!("{name} requires two floating-point registers"))?;
+        let rd = andes_float_register(rd.trim())?;
+        let source = andes_float_register(source.trim())?;
+        let narrow = u32::from(name == "nds.fcvt.bf16.s");
+        let encoding = 0x0001_405b | (narrow << 15) | (source << 20) | (rd << 7);
+        return Ok(format!("{label} .4byte {encoding:#010x}"));
+    }
     let gp = match name {
         "nds.lbgp" => Some((0x0b, 0, 1, false)),
         "nds.addigp" => Some((0x0b, 1, 1, false)),
@@ -224,6 +233,13 @@ fn signed_assembly_immediate(value: &str) -> Result<i64, String> {
     } else {
         crate::parse_address(value).map(i64::from)
     }
+}
+
+fn andes_float_register(register: &str) -> Result<u32, String> {
+    register.strip_prefix('f')
+        .and_then(|index| index.parse::<u32>().ok())
+        .filter(|&index| index < 32)
+        .ok_or_else(|| format!("invalid floating-point register {register}"))
 }
 
 fn andes_register(register: &str) -> Result<u32, String> {

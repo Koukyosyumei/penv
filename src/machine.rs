@@ -745,14 +745,24 @@ impl Machine {
             }
             return Ok(Some(u64::from((*fcsr & mask) >> shift)));
         }
-        if let Some(cpu) = &mut hart.rv64 {
-            if let Some(index) = register.strip_prefix('f').and_then(|index| index.parse::<usize>().ok()) {
+        if let Some(index) = register.strip_prefix('f').and_then(|index| index.parse::<usize>().ok()) {
+            if let Some(cpu) = &mut hart.rv64 {
                 return match value {
                     Some(value) => cpu.initialize_freg(index, value).map(|()| None),
                     None => cpu.monitor_register(&register).map(Some)
                         .ok_or_else(|| format!("unsupported monitor register {register}")),
                 };
             }
+            let target = hart.floating.as_mut().and_then(|registers| registers.get_mut(index))
+                .ok_or_else(|| format!("unsupported monitor register {register}"))?;
+            return if let Some(value) = value {
+                *target = value;
+                Ok(None)
+            } else {
+                Ok(Some(*target))
+            };
+        }
+        if let Some(cpu) = &mut hart.rv64 {
             if register == "vstart" && value.is_none() {
                 return cpu.monitor_register(&register).map(Some)
                     .ok_or_else(|| format!("unsupported monitor register {register}"));
