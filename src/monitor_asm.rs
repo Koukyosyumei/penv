@@ -101,7 +101,7 @@ pub(crate) fn assemble_source(
     }
     let has_data = arm && instructions.iter().any(|line| {
         let instruction = line.split_once(':').map_or(*line, |(_, text)| text.trim_start());
-        matches!(instruction.split_ascii_whitespace().next(), Some(".word" | ".short" | ".byte" | ".align" | ".balign"))
+        matches!(instruction.split_ascii_whitespace().next(), Some(".word" | ".short" | ".byte" | ".asciz" | ".align" | ".balign"))
     });
     // A mode directive at a label applies to the instructions at that
     // address. Mark Thumb entry labels so ARM BLX relocations interwork.
@@ -161,7 +161,7 @@ fn unsupported_assembly_directive(instruction: &str, thumb: bool) -> bool {
     }
     let mut words = instruction.split_ascii_whitespace();
     match words.next() {
-        Some(".word" | ".short" | ".byte") => false,
+        Some(".word" | ".short" | ".byte" | ".asciz") => false,
         Some(".thumb" | ".arm") => words.next().is_some(),
         Some(".align") => !words.next().and_then(|word| word.parse::<u8>().ok())
             .is_some_and(|alignment| alignment <= 12 && words.next().is_none()),

@@ -1478,6 +1478,16 @@ fn load_platform(
             keys(uart, &[])?;
             machine.bus.map_trivial_uart(uart.address()?, &uart.name)
                 .map_err(|error| uart.error(&error))?;
+        } else if let Some(uart) = uart.filter(|uart| uart.model == "UART.NS16550") {
+            let fields = keys(uart, &["wideRegisters"])?;
+            let wide = match fields.as_slice() {
+                [] => false,
+                [("wideRegisters", value)] => boolean_value(value)
+                    .ok_or_else(|| uart.error("invalid NS16550 wideRegisters"))?,
+                _ => return Err(uart.error("invalid Cortex-M NS16550 properties")),
+            };
+            machine.bus.map_named_ns16550(&uart.name, uart.address()?, None, wide)
+                .map_err(|error| uart.error(&error))?;
         } else if let Some(uart) = uart {
             if uart.model != "UART.LiteX_UART" {
                 return Err(uart.error("unsupported Cortex-M UART model"));
