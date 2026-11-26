@@ -258,10 +258,6 @@ impl Stm32Usart {
         }
     }
 
-    pub fn tick_receive(&mut self) {
-        self.tick();
-    }
-
     fn status(&self) -> u32 {
         let flags = TXE
             | (u32::from(self.complete) * TC)

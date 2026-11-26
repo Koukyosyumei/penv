@@ -2489,7 +2489,7 @@ impl Bus {
         let control = self.h7_network_control.as_ref();
         for uart in &mut self.stm32_uarts {
             if usart_clocked(control, uart) {
-                uart.tick_receive();
+                uart.tick();
             }
         }
         if let Some(display) = &mut self.h7_ltdc
@@ -2503,7 +2503,7 @@ impl Bus {
         };
         for timer in &mut self.h7_lptimers {
             if lptim_clocked(control, timer) {
-                timer.tick();
+                timer.tick(rate);
             }
         }
         for timer in &mut self.h7_timers {
@@ -3881,12 +3881,6 @@ impl Bus {
             .ok_or("NVIC Clocked requires a SysTick counter")?
             .set_clocked(clocked);
         Ok(())
-    }
-
-    pub fn tick_stm32_uarts(&mut self) {
-        for uart in &mut self.stm32_uarts {
-            uart.tick();
-        }
     }
 
     pub fn advance_stm32_dma(&mut self, output: &mut impl Write) -> Result<(), BusError> {

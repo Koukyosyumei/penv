@@ -1,4 +1,4 @@
-use crate::{machine::VIRTUAL_STEPS_PER_SECOND, stm32_uart::Stm32Irq};
+use crate::stm32_uart::Stm32Irq;
 
 const CMPM: u32 = 1;
 const ARRM: u32 = 1 << 1;
@@ -139,12 +139,12 @@ impl LpTimer {
         }
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, steps_per_second: u32) {
         let Some(mode) = self.mode else { return };
         if self.reload == 0 || self.config & 1 != 0 {
             return;
         }
-        let divisor = u64::from(VIRTUAL_STEPS_PER_SECOND) << ((self.config >> 9) & 7);
+        let divisor = u64::from(steps_per_second) << ((self.config >> 9) & 7);
         self.phase += u64::from(self.frequency);
         let ticks = (self.phase / divisor) as u32;
         self.phase %= divisor;
@@ -265,11 +265,11 @@ mod tests {
         timer.write(0x14, 2, 3);
         timer.write(0x18, 2, 7);
         timer.write(0x10, 1, 5);
-        timer.tick();
+        timer.tick(1_000_000);
         assert_eq!(timer.read(0x1c), 5);
         assert_eq!(timer.read(0) & (CMPM | ARRM), CMPM);
         timer.write(4, 1, CMPM);
-        timer.tick();
+        timer.tick(1_000_000);
         assert_eq!(timer.read(0x1c), 3);
         assert_eq!(timer.read(0) & (CMPM | ARRM), CMPM | ARRM);
     }

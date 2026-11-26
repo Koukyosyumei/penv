@@ -2785,7 +2785,6 @@ impl Hart {
             return Ok(Step::Trap);
         }
         if let Some(thumb) = self.thumb.as_mut() {
-            bus.tick_stm32_uarts();
             if self.monitor_halted || halted {
                 thumb.sample_interrupts(bus);
                 return Ok(Step::Trap);
