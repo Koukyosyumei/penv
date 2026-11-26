@@ -3546,7 +3546,7 @@ fn execute(
         ["mach" | "machine", "set", selector] if !boot.session.machine_cleared => {
             return validate_machine_selection(selector, variables, boot.session.machine.as_deref(), *machine);
         }
-        ["AttachMonitorLog", capacity] if !*machine && !boot.started && boot.runtime.is_empty() => {
+        ["AttachMonitorLog", capacity] if !boot.started && boot.runtime.is_empty() => {
             boot.initial_log_capacity = Some(crate::monitor_log::parse_capacity(capacity)?);
             return Ok(());
         }

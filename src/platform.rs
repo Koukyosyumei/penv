@@ -2316,7 +2316,9 @@ fn load_platform(
                 return Err(external.error("Smepmp requires internal PMP"));
             }
             hart.attach_external_pmp(format!("{}.{}", entry.name, external.name), *count);
-            eprintln!("{}: Enabling External PMP", entry.name);
+            let message = format!("{}: Enabling External PMP", entry.name);
+            crate::monitor_log::record(1, &message);
+            eprintln!("penv: {message}");
         } else if pmp != 0 {
             hart.enable_pmp(pmp);
             if smepmp {

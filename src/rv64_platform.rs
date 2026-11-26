@@ -130,7 +130,9 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         target.name = Some(entry.name.clone());
         target.rv64 = Some(Box::new(cpu));
         if external_pmps[hart].is_some() {
-            eprintln!("penv: {}: Enabling External PMP", entry.name);
+            let message = format!("{}: Enabling External PMP", entry.name);
+            crate::monitor_log::record(1, &message);
+            eprintln!("penv: {message}");
         }
     }
 
