@@ -417,6 +417,7 @@ pub(crate) struct Cpu {
     sctlr: u32,
     vbar: u32,
     hsctlr: u32,
+    actlr: u32,
     hactlr: u32,
     hvbar: u32,
     hcr: u32,
@@ -459,6 +460,7 @@ impl Cpu {
             sctlr: 0,
             vbar: 0,
             hsctlr: 0,
+            actlr: 0,
             hactlr: 0,
             hvbar: 0,
             hcr: if matches!(profile, Profile::RealTimeV8) { 2 } else { 0 },
@@ -658,6 +660,7 @@ impl Cpu {
             "sctlr" => 0x0001_0000,
             "vbar" => 0x000c_0000,
             "hsctlr" => 0x0081_0000,
+            "actlr" => 0x0001_0020,
             "hactlr" => 0x0081_0020,
             "hvbar" => 0x008c_0000,
             "hcr" => 0x0081_0001,
@@ -769,6 +772,7 @@ impl Cpu {
             }
         }
         let (register, mask) = match key {
+            0x0001_0020 if v8r => (&mut self.actlr, u32::MAX),
             0x0001_0000 => (&mut self.sctlr, u32::MAX),
             0x000c_0000 => (&mut self.vbar, !31),
             0x000d_0040 => (&mut self.thread_ids[0], u32::MAX),
