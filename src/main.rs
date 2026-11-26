@@ -2359,7 +2359,11 @@ fn run() -> Result<ExitCode, String> {
                 return Err(format!("monitor script stopped before completion: {stop:?}"));
             }
         }
-        monitor::serve(&mut machine, io::stdout().lock(), &output, monitor_session, platform_root.as_deref().unwrap_or(std::path::Path::new(".")))?;
+        monitor::serve(
+            &mut machine, io::stdout().lock(), &output, monitor_session,
+            platform_root.as_deref().unwrap_or(std::path::Path::new(".")),
+            asset_dir.as_deref(),
+        )?;
         return Ok(ExitCode::SUCCESS);
     }
     if max_steps == Some(0) && !static_memory_script {

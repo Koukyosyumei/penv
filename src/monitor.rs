@@ -1752,12 +1752,41 @@ fn read_monitor_command(input: &mut impl BufRead) -> Result<Option<String>, Stri
     }
 }
 
+fn live_load_elf(
+    machine: &mut Machine,
+    command: &str,
+    session: &Session,
+    root: &Path,
+    assets: Option<&Path>,
+) -> Option<Result<(), String>> {
+    let mut words = command.split_ascii_whitespace();
+    if words.next() != Some("sysbus") || words.next() != Some("LoadELF") {
+        return None;
+    }
+    Some((|| {
+        let words = command_words(command)?;
+        let ["sysbus", "LoadELF", value, options @ ..] = words.as_slice() else {
+            return Err("expected sysbus LoadELF @file [useVirtualAddress]".into());
+        };
+        let virtual_addresses = load_elf_address_mode(options)?;
+        let value = resolve(&session.variables, value)?;
+        let name = monitor_path_token(value).ok_or("expected @firmware-path")?;
+        let origin = monitor_origin(&session.variables).join("<monitor>");
+        let asset = Asset::new(name, &origin);
+        let path = asset.input_path(root, assets)?;
+        let file = fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        crate::image::load(machine, file, false, Some(virtual_addresses), false)
+            .map_err(|error| format!("{}: {error}", path.display()))
+    })())
+}
+
 pub fn serve(
     machine: &mut Machine,
     mut output: impl Write,
     startup_output: &[u8],
     mut session: Session,
     root: &Path,
+    assets: Option<&Path>,
 ) -> Result<(), String> {
     use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 
@@ -1823,6 +1852,17 @@ pub fn serve(
             continue;
         }
         let text = command.trim();
+        if let Some(result) = live_load_elf(machine, text, &session, root, assets) {
+            let reply = match result {
+                Ok(()) => frame(&mut output, "OK", &[]),
+                Err(error) if error.starts_with("monitor asset unavailable: ") => {
+                    frame(&mut output, "ASSET", error.trim_start_matches("monitor asset unavailable: ").as_bytes())
+                }
+                Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+            };
+            reply.map_err(|error| error.to_string())?;
+            continue;
+        }
         if let Some(result) = builtins.execute(machine, text) {
             let reply = match result {
                 Ok(body) => frame(&mut output, "OK", body.as_bytes()),
@@ -4821,11 +4861,7 @@ fn execute(
         ["sysbus", "LoadELF", value, options @ ..]
             if boot.has_platform() && boot.image.is_none() && options.len() <= 1 =>
         {
-            boot.use_virtual_elf_addresses = match options {
-                [] | ["false" | "False"] => false,
-                ["true" | "True"] => true,
-                _ => return Err("expected a boolean LoadELF address option".into()),
-            };
+            boot.use_virtual_elf_addresses = load_elf_address_mode(options)?;
             let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             boot.image = Some(Asset::new(file, script));
         }
@@ -5528,6 +5564,14 @@ fn platform_file_missing(path: &Path) -> bool {
     match path.metadata() {
         Ok(metadata) => metadata.is_dir(),
         Err(error) => error.kind() == io::ErrorKind::NotFound,
+    }
+}
+
+fn load_elf_address_mode(options: &[&str]) -> Result<bool, String> {
+    match options {
+        [] | ["false" | "False"] => Ok(false),
+        ["true" | "True"] => Ok(true),
+        _ => Err("expected a boolean LoadELF address option".into()),
     }
 }
 

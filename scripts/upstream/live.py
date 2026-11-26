@@ -744,6 +744,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             else:
                 self.proc.stdin.write((command + "\n").encode())
             status, value = self.receive()
+            if self.rust_monitor and status == "ASSET" and PUBLIC_ASSET.fullmatch(value):
+                self.fetch(value)
+                self.send_monitor_frame("PENV-COMMAND", command.encode())
+                status, value = self.receive()
         except (BrokenPipeError, RuntimeError) as exc:
             raise PenvExecutionError(f"penv monitor stopped during {command}: {exc}") from exc
         groups = []
